@@ -1,0 +1,11 @@
+node_modules/
+.DS_Store
+.env
+.env.*
+.firebase/
+firebase-debug.log
+ui-debug.log
+.clasp.json
+.clasprc.json
+Excerpt Gathering & Quote Image Creation Database (Responses)*.xlsx
+google_apps_script_backup_before_duplicates.gs

@@ -1,0 +1,11 @@
+{
+  "dependencies": {
+    "@google/clasp": "^3.3.0"
+  },
+  "scripts": {
+    "clasp": "clasp",
+    "clasp:status": "clasp status",
+    "clasp:push": "clasp push",
+    "clasp:pull": "clasp pull"
+  }
+}

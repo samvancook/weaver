@@ -1,0 +1,7 @@
+node_modules/**
+*.xlsx
+package-lock.json
+README.md
+excerpt_analyzer.py
+google_apps_script.gs
+google_apps_script_backup_before_duplicates.gs

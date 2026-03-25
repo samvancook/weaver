@@ -1,0 +1,14 @@
+{
+  "name": "excerpt-review-functions",
+  "private": true,
+  "engines": {
+    "node": "20"
+  },
+  "type": "module",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "firebase-admin": "^12.6.0",
+    "firebase-functions": "^6.0.0"
+  }
+}
