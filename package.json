@@ -6,6 +6,7 @@
     "clasp": "clasp",
     "clasp:status": "clasp status",
     "clasp:push": "clasp push",
-    "clasp:pull": "clasp pull"
+    "clasp:pull": "clasp pull",
+    "dev": "node dev-server.mjs"
   }
 }

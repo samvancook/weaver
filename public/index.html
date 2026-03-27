@@ -3,60 +3,95 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Excerpt Review Tool</title>
-  <link rel="stylesheet" href="/style.css?v=20260325a" />
+  <title>Weaver</title>
+  <link rel="stylesheet" href="/style.css?v=20260327c" />
 </head>
 <body>
   <div class="shell">
     <header class="hero">
       <p class="eyebrow">Button Internal Tool</p>
-      <h1>Excerpt Review Tool</h1>
+      <h1>Weaver</h1>
       <p class="lede">
-        Intake, duplicate review, winner selection, and export in one place.
+        Select a book, review excerpts, and submit decisions back to the working sheet.
       </p>
     </header>
 
     <main class="grid">
+      <section class="panel panel--wide panel--compact">
+        <details class="connection-panel">
+          <summary class="connection-panel__summary">
+            <span>Connection</span>
+            <span class="badge">Apps Script</span>
+          </summary>
+          <div class="connection-panel__body">
+            <label class="field">
+              <span>Apps Script Web App URL</span>
+              <input id="api-base-url" type="url" placeholder="Paste deployed Apps Script web app URL" />
+            </label>
+            <div class="toolbar">
+              <button id="save-api-url" class="button button--secondary">Save URL</button>
+              <button id="load-books" class="button">Load Books</button>
+            </div>
+            <p class="hint">
+              Weaver uses your spreadsheet Apps Script as the live backend for books, excerpts, and submit.
+            </p>
+          </div>
+        </details>
+      </section>
+
       <section class="panel panel--wide">
         <div class="panel__header">
-          <h2>Current Direction</h2>
-          <span class="badge">MVP</span>
+          <h2>Book Selection</h2>
+          <span class="badge badge--muted" id="book-count-badge">0 Books</span>
         </div>
-        <p>
-          This app will replace spreadsheet review with a queue-based workflow built for excerpt moderation.
-        </p>
+        <div class="book-picker">
+          <label class="field field--grow">
+            <span>Book Title</span>
+            <select id="book-select">
+              <option value="">Load books first</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Queue Mode</span>
+            <select id="review-filter">
+              <option value="all">All pending</option>
+              <option value="likely_correction">Likely need correction</option>
+            </select>
+          </label>
+          <button id="scan-corrections" class="button button--secondary" disabled>Scan Correction Signals</button>
+          <button id="load-excerpts" class="button">Load Excerpts</button>
+        </div>
+        <div class="book-selection-meta">
+          <p class="hint" id="book-selection-hint">
+            Use `Queue Mode` to narrow the selected book to likely correction cases when needed.
+          </p>
+          <p class="scan-status" id="correction-scan-status">Correction scan idle.</p>
+        </div>
       </section>
 
-      <section class="panel">
-        <h3>Intake Queue</h3>
-        <p>Review fresh submissions coming from the form.</p>
-      </section>
-
-      <section class="panel">
-        <h3>Duplicate Review</h3>
-        <p>Compare exact duplicates, keep one, and exclude the rest.</p>
-      </section>
-
-      <section class="panel">
-        <h3>Approved Excerpts</h3>
-        <p>Sort by length, quality, and downstream readiness.</p>
-      </section>
-
-      <section class="panel">
-        <h3>Export Queue</h3>
-        <p>Prepare excerpts for graphics and primary database output.</p>
-      </section>
-
-      <section class="panel panel--wide" id="bootstrap-panel">
+      <section class="panel panel--wide">
         <div class="panel__header">
-          <h2>Bootstrap Status</h2>
+          <h2>Review Queue</h2>
+          <span class="badge badge--muted" id="excerpt-count-badge">0 Excerpts</span>
+        </div>
+        <div class="toolbar">
+          <button id="submit-review" class="button button--accent">Submit Decisions</button>
+        </div>
+        <div id="excerpt-list" class="excerpt-list">
+          <p class="empty-state">Load a book to start reviewing excerpts.</p>
+        </div>
+      </section>
+
+      <section class="panel panel--wide">
+        <div class="panel__header">
+          <h2>Status</h2>
           <span class="badge badge--muted">Dev</span>
         </div>
-        <pre id="bootstrap-output">Loading...</pre>
+        <pre id="status-output">Ready.</pre>
       </section>
     </main>
   </div>
 
-  <script src="/app.js?v=20260325a"></script>
+  <script src="/app.js?v=20260327c"></script>
 </body>
 </html>

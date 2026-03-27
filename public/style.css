@@ -1,11 +1,12 @@
 :root {
   --bg: #f4efe6;
-  --paper: rgba(255, 252, 247, 0.9);
+  --paper: rgba(255, 252, 247, 0.92);
   --ink: #1d1a17;
   --muted: #665e56;
   --line: rgba(29, 26, 23, 0.12);
   --accent: #b84f2d;
   --accent-soft: #f2d4c7;
+  --support: #2f5d62;
   --shadow: 0 24px 60px rgba(62, 39, 27, 0.12);
 }
 
@@ -25,7 +26,7 @@ body {
 }
 
 .shell {
-  width: min(1100px, calc(100% - 32px));
+  width: min(1200px, calc(100% - 32px));
   margin: 0 auto;
   padding: 40px 0 64px;
 }
@@ -49,7 +50,7 @@ body {
 }
 
 .lede {
-  width: min(680px, 100%);
+  width: min(700px, 100%);
   margin: 16px 0 0;
   font-size: 1.15rem;
   line-height: 1.55;
@@ -64,7 +65,7 @@ body {
 }
 
 .panel {
-  grid-column: span 6;
+  grid-column: 1 / -1;
   background: var(--paper);
   border: 1px solid var(--line);
   border-radius: 22px;
@@ -73,8 +74,9 @@ body {
   backdrop-filter: blur(12px);
 }
 
-.panel--wide {
-  grid-column: 1 / -1;
+.panel--compact {
+  padding-top: 14px;
+  padding-bottom: 14px;
 }
 
 .panel__header {
@@ -82,17 +84,47 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  margin-bottom: 14px;
+}
+
+.connection-panel[open] .connection-panel__summary {
+  margin-bottom: 16px;
+}
+
+.connection-panel__summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  list-style: none;
+  font-weight: 700;
+}
+
+.connection-panel__summary::-webkit-details-marker {
+  display: none;
+}
+
+.connection-panel__summary::after {
+  content: "Show";
+  color: var(--muted);
+  font: 700 11px/1 "Helvetica Neue", Arial, sans-serif;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+.connection-panel[open] .connection-panel__summary::after {
+  content: "Hide";
+}
+
+.connection-panel__body {
+  display: grid;
+  gap: 12px;
 }
 
 .panel h2,
 .panel h3 {
-  margin: 0 0 8px;
-}
-
-.panel p {
   margin: 0;
-  color: var(--muted);
-  line-height: 1.55;
 }
 
 .badge {
@@ -113,20 +145,221 @@ body {
   color: var(--muted);
 }
 
-#bootstrap-output {
-  margin: 12px 0 0;
-  white-space: pre-wrap;
-  word-break: break-word;
-  font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace;
+.badge--count {
+  background: rgba(47, 93, 98, 0.14);
+  color: var(--support);
+}
+
+.badge--signal {
+  background: rgba(184, 79, 45, 0.14);
+  color: var(--accent);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.field--grow {
+  flex: 1;
+  min-width: 280px;
+}
+
+.field span {
+  font: 700 12px/1.2 "Helvetica Neue", Arial, sans-serif;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+input,
+textarea,
+select,
+button {
+  font: inherit;
+}
+
+input,
+textarea,
+select {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 13px 14px;
+  background: rgba(255, 255, 255, 0.8);
+}
+
+textarea {
+  resize: vertical;
+  min-height: 88px;
+}
+
+.toolbar,
+.book-picker {
+  display: flex;
+  gap: 12px;
+  align-items: end;
+  flex-wrap: wrap;
+}
+
+.button {
+  border: 0;
+  border-radius: 14px;
+  padding: 13px 18px;
+  font: 700 14px/1 "Helvetica Neue", Arial, sans-serif;
+  letter-spacing: 0.02em;
+  background: var(--support);
+  color: white;
+  cursor: pointer;
+}
+
+.button--secondary {
+  background: rgba(29, 26, 23, 0.12);
   color: var(--ink);
 }
 
-@media (max-width: 800px) {
-  .panel,
-  .panel--wide {
-    grid-column: 1 / -1;
-  }
+.button--accent {
+  background: var(--accent);
+}
 
+.hint {
+  margin: 12px 0 0;
+  color: var(--muted);
+}
+
+.book-selection-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.scan-status {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font: 700 12px/1.2 "Helvetica Neue", Arial, sans-serif;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.excerpt-list {
+  display: grid;
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.poem-group {
+  display: grid;
+  gap: 12px;
+}
+
+.poem-group__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 2px 4px;
+}
+
+.poem-group__header h3 {
+  margin: 0;
+  font-size: 1.25rem;
+}
+
+.excerpt-card {
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 18px;
+  background: rgba(255, 255, 255, 0.76);
+}
+
+.excerpt-card__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.excerpt-card__title {
+  font-weight: 700;
+}
+
+.excerpt-card__author {
+  color: var(--muted);
+}
+
+.excerpt-card__quote {
+  margin: 16px 0;
+  padding-left: 14px;
+  border-left: 3px solid var(--accent-soft);
+  white-space: pre-wrap;
+  line-height: 1.6;
+}
+
+.validation {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  font-size: 0.95rem;
+  line-height: 1.45;
+}
+
+.validation--good {
+  background: rgba(47, 93, 98, 0.1);
+  color: var(--support);
+}
+
+.validation--warn {
+  background: rgba(184, 79, 45, 0.12);
+  color: var(--accent);
+}
+
+.decision-group,
+.decision-flags {
+  display: flex;
+  gap: 18px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+.decision-group label,
+.decision-flags label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink);
+}
+
+.correction-block {
+  display: none;
+  margin-top: 14px;
+}
+
+.correction-block--active {
+  display: block;
+}
+
+.empty-state {
+  margin: 0;
+  color: var(--muted);
+  padding: 8px 2px;
+}
+
+#status-output {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.button:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+@media (max-width: 800px) {
   .shell {
     width: min(100%, calc(100% - 20px));
     padding-top: 24px;
