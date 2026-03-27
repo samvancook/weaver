@@ -1,4 +1,5 @@
 import http from "node:http";
+import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,6 +23,51 @@ const contentTypes = {
 function sendJson(res, statusCode, body) {
   res.writeHead(statusCode, { "Content-Type": "application/json; charset=utf-8" });
   res.end(JSON.stringify(body, null, 2));
+}
+
+function readRequestBody(req) {
+  return new Promise((resolve, reject) => {
+    let body = "";
+    req.on("data", chunk => {
+      body += chunk.toString();
+    });
+    req.on("end", () => resolve(body));
+    req.on("error", reject);
+  });
+}
+
+function runCatalogValidation(records) {
+  return new Promise((resolve, reject) => {
+    const child = spawn("python3", [path.join(__dirname, "catalog_validate.py")], {
+      env: {
+        ...process.env
+      }
+    });
+    let stdout = "";
+    let stderr = "";
+
+    child.stdout.on("data", chunk => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on("data", chunk => {
+      stderr += chunk.toString();
+    });
+    child.on("error", reject);
+    child.on("close", code => {
+      if (code !== 0) {
+        reject(new Error(stderr || `catalog_validate.py exited with code ${code}`));
+        return;
+      }
+      try {
+        resolve(JSON.parse(stdout));
+      } catch (error) {
+        reject(error);
+      }
+    });
+
+    child.stdin.write(JSON.stringify({ records }));
+    child.stdin.end();
+  });
 }
 
 async function serveFile(res, filePath) {
@@ -64,10 +110,18 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (url.pathname === "/api/catalog/validate" && req.method === "POST") {
-    return sendJson(res, 501, {
-      ok: false,
-      error: "Live catalog validation is not available in the hosted service yet. Use persisted sheet-backed validation or the local dev environment for live catalog checks."
-    });
+    try {
+      const body = await readRequestBody(req);
+      const parsed = JSON.parse(body || "{}");
+      const records = Array.isArray(parsed.records) ? parsed.records : [];
+      const result = await runCatalogValidation(records);
+      return sendJson(res, 200, result);
+    } catch (error) {
+      return sendJson(res, 500, {
+        ok: false,
+        error: error.message
+      });
+    }
   }
 
   const requestedPath = url.pathname === "/" ? "/index.html" : url.pathname;

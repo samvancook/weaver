@@ -8,7 +8,9 @@ import sys
 from functools import lru_cache
 from pathlib import Path
 
-DB_PATH = Path("/Users/buttonpublishingone/Desktop/CODEX/Social Media Dev/poetry_catalog/formal_catalog.db")
+DEFAULT_DB_PATH = Path(__file__).resolve().parent / "data" / "formal_catalog.db"
+LEGACY_DB_PATH = Path("/Users/buttonpublishingone/Desktop/CODEX/Social Media Dev/poetry_catalog/formal_catalog.db")
+DB_PATH = DEFAULT_DB_PATH if DEFAULT_DB_PATH.exists() else LEGACY_DB_PATH
 
 
 def normalize(text: str | None) -> str:
