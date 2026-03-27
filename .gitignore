@@ -7,6 +7,7 @@ firebase-debug.log
 ui-debug.log
 .clasp.json
 .clasprc.json
+__pycache__/
 Excerpt Gathering & Quote Image Creation Database (Responses)*.xlsx
 google_apps_script_backup_before_duplicates.gs
 backups/

@@ -26,4 +26,11 @@ app.get("/bootstrap", (_req, res) => {
   });
 });
 
+app.post("/catalog/validate", (_req, res) => {
+  res.status(501).json({
+    ok: false,
+    error: "Catalog validation is not available on the hosted site yet. Use persisted sheet-backed validation or the local dev environment for live catalog checks."
+  });
+});
+
 export const api = onRequest(app);

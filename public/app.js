@@ -3,26 +3,34 @@ const storageKey = "weaver.appsScriptUrl";
 const elements = {
   apiBaseUrl: document.getElementById("api-base-url"),
   saveApiUrl: document.getElementById("save-api-url"),
+  showReviewModule: document.getElementById("show-review-module"),
+  showCorrectionsModule: document.getElementById("show-corrections-module"),
+  reviewModule: document.getElementById("review-module"),
+  reviewQueuePanel: document.getElementById("review-queue-panel"),
+  correctionsModule: document.getElementById("corrections-module"),
   loadBooks: document.getElementById("load-books"),
   bookSelect: document.getElementById("book-select"),
   reviewFilter: document.getElementById("review-filter"),
-  scanCorrections: document.getElementById("scan-corrections"),
   loadExcerpts: document.getElementById("load-excerpts"),
   submitReview: document.getElementById("submit-review"),
   excerptList: document.getElementById("excerpt-list"),
+  loadCorrectionBooks: document.getElementById("load-correction-books"),
+  correctionBookSelect: document.getElementById("correction-book-select"),
+  loadCorrections: document.getElementById("load-corrections"),
+  submitCorrections: document.getElementById("submit-corrections"),
+  correctionList: document.getElementById("correction-list"),
   statusOutput: document.getElementById("status-output"),
   bookCountBadge: document.getElementById("book-count-badge"),
   excerptCountBadge: document.getElementById("excerpt-count-badge"),
-  correctionScanStatus: document.getElementById("correction-scan-status")
+  correctionBookCountBadge: document.getElementById("correction-book-count-badge"),
+  correctionExcerptCountBadge: document.getElementById("correction-excerpt-count-badge")
 };
 
 let currentExcerpts = [];
+let currentCorrectionExcerpts = [];
 let isSaving = false;
 let currentValidationByRecordId = new Map();
-let correctionCountsByBook = new Map();
-let pendingCountsByBook = new Map();
-let correctionScanState = "idle";
-let loadedBooks = [];
+let currentModule = "review";
 
 function setStatus(message, details) {
   elements.statusOutput.textContent = details
@@ -33,32 +41,12 @@ function setStatus(message, details) {
 function setSubmitState(isBusy, label) {
   isSaving = isBusy;
   elements.submitReview.disabled = isBusy;
+  if (elements.submitCorrections) {
+    elements.submitCorrections.disabled = isBusy;
+  }
   elements.submitReview.textContent = label || (isBusy ? "Saving..." : "Submit Decisions");
-}
-
-function updateCorrectionScanUi() {
-  const mode = getSelectedReviewFilter();
-  const button = elements.scanCorrections;
-  const status = elements.correctionScanStatus;
-  if (!button || !status) return;
-
-  button.disabled = mode !== "likely_correction" || !loadedBooks.length || correctionScanState === "scanning";
-  button.textContent = correctionScanState === "scanning"
-    ? "Scanning..."
-    : correctionScanState === "ready"
-      ? "Rescan Correction Signals"
-      : "Scan Correction Signals";
-
-  if (mode !== "likely_correction") {
-    status.textContent = "Switch Queue Mode to 'Likely need correction' to scan correction signals.";
-  } else if (correctionScanState === "scanning") {
-    status.textContent = "Scanning correction signals across loaded books...";
-  } else if (correctionScanState === "ready") {
-    status.textContent = "Correction scan ready.";
-  } else if (correctionScanState === "failed") {
-    status.textContent = "Correction scan failed. You can try again.";
-  } else {
-    status.textContent = "Correction scan not run yet.";
+  if (elements.submitCorrections) {
+    elements.submitCorrections.textContent = label || (isBusy ? "Saving..." : "Save Corrections");
   }
 }
 
@@ -78,6 +66,15 @@ function saveApiBaseUrl() {
 function restoreApiBaseUrl() {
   const saved = localStorage.getItem(storageKey) || "";
   elements.apiBaseUrl.value = saved;
+}
+
+function setActiveModule(moduleName) {
+  currentModule = moduleName === "corrections" ? "corrections" : "review";
+  elements.reviewModule?.classList.toggle("module-panel--active", currentModule === "review");
+  elements.reviewQueuePanel?.classList.toggle("module-panel--active", currentModule === "review");
+  elements.correctionsModule?.classList.toggle("module-panel--active", currentModule === "corrections");
+  elements.showReviewModule?.classList.toggle("hero-pill--active", currentModule === "review");
+  elements.showCorrectionsModule?.classList.toggle("hero-pill--active", currentModule === "corrections");
 }
 
 function buildJsonpUrl(action, extraParams = {}) {
@@ -131,7 +128,10 @@ function requestJsonp(action, params = {}) {
   });
 }
 
-async function loadBooks() {
+async function loadBooks(options = {}) {
+  const preserveSelection = options.preserveSelection !== false;
+  const previousSelection = preserveSelection ? elements.bookSelect.value : "";
+
   try {
     setStatus("Loading book titles...");
     const data = await requestJsonp("books");
@@ -145,23 +145,22 @@ async function loadBooks() {
     placeholder.textContent = "Choose a book";
     elements.bookSelect.appendChild(placeholder);
 
-    pendingCountsByBook = new Map();
-    correctionCountsByBook = new Map();
-    correctionScanState = "idle";
-    loadedBooks = data.books.slice();
-
     data.books.forEach(book => {
-      pendingCountsByBook.set(book.title, Number(book.count) || 0);
       const option = document.createElement("option");
       option.value = book.title;
-      option.textContent = buildBookOptionLabel(book.title);
+      option.textContent = `${book.title} (${book.count})`;
       elements.bookSelect.appendChild(option);
     });
 
+    if (previousSelection) {
+      const hasPreviousSelection = data.books.some(book => book.title === previousSelection);
+      if (hasPreviousSelection) {
+        elements.bookSelect.value = previousSelection;
+      }
+    }
+
     elements.bookCountBadge.textContent = `${data.books.length} Books`;
     setStatus(`Loaded ${data.books.length} books. Backend ${data.version || "unknown"}.`, data.books.slice(0, 10));
-    refreshBookOptionLabels();
-    updateCorrectionScanUi();
   } catch (error) {
     setStatus(`Book load failed: ${error.message}`);
   }
@@ -190,9 +189,89 @@ async function loadExcerpts() {
   }
 }
 
+async function loadCorrectionBooks() {
+  const previousSelection = elements.correctionBookSelect?.value || "";
+
+  try {
+    setStatus("Loading correction books...");
+    const data = await requestJsonp("correctionBooks");
+    if (!data.ok) {
+      throw new Error(data.error || "Correction book load failed.");
+    }
+
+    elements.correctionBookSelect.innerHTML = "";
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = "Choose a correction book";
+    elements.correctionBookSelect.appendChild(placeholder);
+
+    data.books.forEach(book => {
+      const option = document.createElement("option");
+      option.value = book.title;
+      option.textContent = `${book.title} (${book.count})`;
+      elements.correctionBookSelect.appendChild(option);
+    });
+
+    if (previousSelection) {
+      const hasPreviousSelection = data.books.some(book => book.title === previousSelection);
+      if (hasPreviousSelection) {
+        elements.correctionBookSelect.value = previousSelection;
+      }
+    }
+
+    elements.correctionBookCountBadge.textContent = `${data.books.length} Books`;
+    setStatus(`Loaded ${data.books.length} correction books. Backend ${data.version || "unknown"}.`, data.books.slice(0, 10));
+  } catch (error) {
+    setStatus(`Correction book load failed: ${error.message}`);
+  }
+}
+
+async function loadCorrections() {
+  const bookTitle = elements.correctionBookSelect?.value;
+  if (!bookTitle) {
+    setStatus("Choose a correction book title first.");
+    return;
+  }
+
+  try {
+    setStatus(`Loading corrections for "${bookTitle}"...`);
+    const data = await requestJsonp("corrections", { bookTitle });
+    if (!data.ok) {
+      throw new Error(data.error || "Correction load failed.");
+    }
+
+    currentCorrectionExcerpts = data.excerpts;
+    await loadCatalogValidation(data.excerpts);
+    renderCorrectionExcerpts(data.excerpts);
+    setStatus(`Loaded ${data.excerpts.length} correction records for "${bookTitle}". Backend ${data.version || "unknown"}.`);
+  } catch (error) {
+    setStatus(`Correction load failed: ${error.message}`);
+  }
+}
+
 async function loadCatalogValidation(excerpts) {
   currentValidationByRecordId = new Map();
   if (!excerpts.length) return;
+
+  const recordsNeedingLiveValidation = [];
+
+  excerpts.forEach(excerpt => {
+    const key = excerpt.recordId || String(excerpt.sourceRow);
+    if (excerpt.catalogValidation && excerpt.catalogValidation.status) {
+      currentValidationByRecordId.set(key, excerpt.catalogValidation);
+    } else {
+      recordsNeedingLiveValidation.push({
+        sourceRow: excerpt.sourceRow,
+        recordId: excerpt.recordId,
+        author: excerpt.author,
+        title: excerpt.title,
+        bookTitle: excerpt.bookTitle,
+        excerptText: excerpt.excerptText
+      });
+    }
+  });
+
+  if (!recordsNeedingLiveValidation.length) return;
 
   try {
     const response = await fetch("/api/catalog/validate", {
@@ -201,14 +280,7 @@ async function loadCatalogValidation(excerpts) {
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
-        records: excerpts.map(excerpt => ({
-          sourceRow: excerpt.sourceRow,
-          recordId: excerpt.recordId,
-          author: excerpt.author,
-          title: excerpt.title,
-          bookTitle: excerpt.bookTitle,
-          excerptText: excerpt.excerptText
-        }))
+        records: recordsNeedingLiveValidation
       })
     });
     const data = await response.json();
@@ -222,14 +294,27 @@ async function loadCatalogValidation(excerpts) {
 }
 
 function renderExcerpts(excerpts) {
-  elements.excerptList.innerHTML = "";
-  elements.excerptCountBadge.textContent = `${excerpts.length} Excerpts`;
+  renderExcerptCollection(excerpts, elements.excerptList, elements.excerptCountBadge, getEmptyStateMessage());
+}
+
+function renderCorrectionExcerpts(excerpts) {
+  renderExcerptCollection(
+    excerpts,
+    elements.correctionList,
+    elements.correctionExcerptCountBadge,
+    "No correction records remain for this book."
+  );
+}
+
+function renderExcerptCollection(excerpts, container, countBadge, emptyMessage) {
+  container.innerHTML = "";
+  countBadge.textContent = `${excerpts.length} Excerpts`;
 
   if (!excerpts.length) {
     const empty = document.createElement("p");
     empty.className = "empty-state";
-    empty.textContent = getEmptyStateMessage();
-    elements.excerptList.appendChild(empty);
+    empty.textContent = emptyMessage;
+    container.appendChild(empty);
     return;
   }
 
@@ -251,7 +336,7 @@ function renderExcerpts(excerpts) {
       section.appendChild(buildExcerptCard(excerpt, `${slugify(group.title)}-${index}`));
     });
 
-    elements.excerptList.appendChild(section);
+    container.appendChild(section);
   });
 }
 
@@ -259,112 +344,19 @@ function renderCurrentExcerpts() {
   renderExcerpts(applyReviewFilter(currentExcerpts));
 }
 
-function buildBookOptionLabel(title) {
-  const pendingCount = pendingCountsByBook.get(title) || 0;
-  const hasCorrectionCount = correctionCountsByBook.has(title);
-  const correctionCount = correctionCountsByBook.get(title) || 0;
-
-  if (getSelectedReviewFilter() === "likely_correction") {
-    if (correctionScanState !== "ready") {
-      return `${title} (${pendingCount})`;
-    }
-    return `${title} (${hasCorrectionCount ? correctionCount : 0})`;
-  }
-
-  if (correctionScanState === "ready" && correctionCount > 0) {
-    return `${title} (${pendingCount}) • ${correctionCount} likely correction${correctionCount === 1 ? "" : "s"}`;
-  }
-
-  return `${title} (${pendingCount})`;
-}
-
-function refreshBookOptionLabels() {
-  Array.from(elements.bookSelect.options).forEach(option => {
-    if (!option.value) return;
-    option.textContent = buildBookOptionLabel(option.value);
-  });
-}
-
-async function scanLikelyCorrectionsByBook(books = []) {
-  if (!Array.isArray(books) || !books.length) {
-    correctionCountsByBook = new Map();
-    refreshBookOptionLabels();
-    updateCorrectionScanUi();
-    return;
-  }
-
-  const nextCounts = new Map();
-
-  for (const book of books) {
-    const excerptData = await requestJsonp("excerpts", { bookTitle: book.title });
-    if (!excerptData.ok || !Array.isArray(excerptData.excerpts) || !excerptData.excerpts.length) {
-      continue;
-    }
-
-    const response = await fetch("/api/catalog/validate", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        records: excerptData.excerpts.map(excerpt => ({
-          sourceRow: excerpt.sourceRow,
-          recordId: excerpt.recordId,
-          author: excerpt.author,
-          title: excerpt.title,
-          bookTitle: excerpt.bookTitle,
-          excerptText: excerpt.excerptText
-        }))
-      })
-    });
-    const validationData = await response.json();
-    if (!validationData.ok || !Array.isArray(validationData.results)) {
-      continue;
-    }
-
-    const correctionCount = validationData.results.filter(result =>
-      isLikelyCorrectionStatus(result.status)
-    ).length;
-
-    if (correctionCount > 0) {
-      nextCounts.set(book.title, correctionCount);
-    }
-  }
-
-  correctionCountsByBook = nextCounts;
-  refreshBookOptionLabels();
-  updateCorrectionScanUi();
-}
-
-async function runCorrectionScan() {
-  if (!loadedBooks.length || correctionScanState === "scanning") return;
-
-  try {
-    correctionScanState = "scanning";
-    correctionCountsByBook = new Map();
-    refreshBookOptionLabels();
-    updateCorrectionScanUi();
-    await scanLikelyCorrectionsByBook(loadedBooks);
-    correctionScanState = "ready";
-    refreshBookOptionLabels();
-    updateCorrectionScanUi();
-  } catch (_error) {
-    correctionScanState = "failed";
-    refreshBookOptionLabels();
-    updateCorrectionScanUi();
-  }
-}
-
 function getSelectedReviewFilter() {
   return elements.reviewFilter?.value || "all";
 }
 
 function applyReviewFilter(excerpts) {
-  if (getSelectedReviewFilter() !== "likely_correction") {
-    return excerpts;
+  const mode = getSelectedReviewFilter();
+  if (mode === "likely_correction") {
+    return excerpts.filter(excerpt => isLikelyCorrectionExcerpt(excerpt));
   }
-
-  return excerpts.filter(excerpt => isLikelyCorrectionExcerpt(excerpt));
+  if (mode === "good_only") {
+    return excerpts.filter(excerpt => isGoodContentExcerpt(excerpt));
+  }
+  return excerpts;
 }
 
 function isLikelyCorrectionExcerpt(excerpt) {
@@ -377,15 +369,27 @@ function isLikelyCorrectionExcerpt(excerpt) {
 function isLikelyCorrectionStatus(status) {
   return [
     "author_mismatch",
+    "title_mismatch",
     "poem_title_match_only",
     "excerpt_not_found_in_book",
-    "book_not_found"
+    "book_not_found",
+    "epub_not_present"
   ].includes(status);
+}
+
+function isGoodContentExcerpt(excerpt) {
+  const validation =
+    currentValidationByRecordId.get(excerpt.recordId || String(excerpt.sourceRow)) || null;
+
+  return Boolean(validation && validation.status === "catalog_match");
 }
 
 function getEmptyStateMessage() {
   if (getSelectedReviewFilter() === "likely_correction") {
     return "No pending excerpts in this book are currently flagged as likely needing correction.";
+  }
+  if (getSelectedReviewFilter() === "good_only") {
+    return "No pending excerpts in this book are currently flagged as catalog-matched good content.";
   }
 
   return "No pending excerpts remain for this book.";
@@ -395,17 +399,18 @@ function groupExcerptsByTitle(excerpts) {
   const groups = new Map();
 
   excerpts.forEach(excerpt => {
-    const key = excerpt.title || "Untitled poem";
+    const title = (excerpt.title || "Untitled poem").trim();
+    const key = title.toLowerCase();
     if (!groups.has(key)) {
-      groups.set(key, []);
+      groups.set(key, {
+        title,
+        excerpts: []
+      });
     }
-    groups.get(key).push(excerpt);
+    groups.get(key).excerpts.push(excerpt);
   });
 
-  return Array.from(groups.entries()).map(([title, groupExcerpts]) => ({
-    title,
-    excerpts: groupExcerpts
-  }));
+  return Array.from(groups.values());
 }
 
 function buildExcerptCard(excerpt, uniqueKey) {
@@ -426,28 +431,54 @@ function buildExcerptCard(excerpt, uniqueKey) {
       : "";
 
   const validationMarkup = buildValidationMarkup(validation);
+  const reviewDecision = normalizeDecision(excerpt.excerptReviewDecision);
+  const useForQi = Boolean(excerpt.useForQi ?? excerpt.useForGraphicsQi);
+  const useForInt = Boolean(excerpt.useForInt ?? excerpt.useForPhotos);
+  const hasOverrides = Boolean(
+    normalizeCorrectionNote(excerpt.correctedAuthor) ||
+    normalizeCorrectionNote(excerpt.correctedTitle) ||
+    normalizeCorrectionNote(excerpt.correctedBookTitle) ||
+    normalizeCorrectionNote(excerpt.correctedExcerpt)
+  );
 
-  const currentDecision = excerpt.statusIndicator === "NEEDS_CORRECTION"
-    ? "needs_correction"
-    : excerpt.approved === "Y"
-      ? "accept"
-      : excerpt.approved === "N"
-        ? "reject"
+  const decisionBadge = reviewDecision === "accept"
+    ? `<span class="badge badge--signal">Accepted excerpt</span>`
+    : reviewDecision === "reject"
+      ? `<span class="badge badge--muted">Rejected excerpt</span>`
+      : reviewDecision === "needs_correction"
+        ? `<span class="badge badge--warn">Needs correction</span>`
         : "";
+  const qiBadge = useForQi
+    ? `<span class="badge badge--signal">Use for QI</span>`
+    : "";
+  const overrideBadge = hasOverrides
+    ? `<span class="badge badge--warn">Source override</span>`
+    : "";
+  const qcBadge = excerpt.quoteCreatedQc === "Y"
+    ? `<span class="badge badge--signal">Made + QCed</span>`
+    : "";
+  const currentDecision = reviewDecision;
   const wordCount = resolveWordCount(excerpt);
+  const wordCountBadgeClass = getWordCountBadgeClass(wordCount);
+  const wordCountTooltip = '10-25 words is often the sweet spot for readability. Longer excerpts should still be considered and can work as EXC, INT or QI in some cases.';
   card.innerHTML = `
       <div class="excerpt-card__meta">
         <span class="badge badge--muted">Row ${excerpt.sourceRow}</span>
         <span class="badge badge--muted">ID ${escapeHtml(excerpt.recordId || "none")}</span>
         <span class="badge badge--muted">Book ${escapeHtml(excerpt.bookTitle || "(blank)")}</span>
-        <span class="badge badge--count">Words ${wordCount}</span>
+        <span class="badge ${wordCountBadgeClass}" title="${escapeHtml(wordCountTooltip)}">Words ${wordCount}</span>
         ${pullBadge}
         ${overlapBadge}
+        ${decisionBadge}
+        ${qiBadge}
+        ${overrideBadge}
+        ${qcBadge}
         <span class="excerpt-card__title">${escapeHtml(excerpt.title || "Untitled poem")}</span>
       <span class="excerpt-card__author">${escapeHtml(excerpt.author || "Unknown author")}</span>
     </div>
     ${validationMarkup}
     <blockquote class="excerpt-card__quote">${escapeHtml(excerpt.excerptText)}</blockquote>
+    <p class="hint excerpt-card__hint">Accept/Reject/Needs correction controls excerpt review. Use for QI preserves the existing quote-image tool linkage. Made + QCed is downstream status only.</p>
     <div class="decision-group">
       <label><input type="radio" name="approval-${uniqueKey}" value="accept" ${currentDecision === "accept" ? "checked" : ""}> Accept</label>
       <label><input type="radio" name="approval-${uniqueKey}" value="reject" ${currentDecision === "reject" ? "checked" : ""}> Reject</label>
@@ -459,10 +490,29 @@ function buildExcerptCard(excerpt, uniqueKey) {
         <span>Correction note</span>
         <textarea class="correction-note" rows="3" placeholder="Describe what is wrong and how it should be corrected.">${escapeHtml(excerpt.correctionNote || "")}</textarea>
       </label>
+      <div class="correction-grid">
+        <label class="field">
+          <span>Reassign author</span>
+          <input class="corrected-author" type="text" value="${escapeHtml(excerpt.correctedAuthor || excerpt.author || "")}" placeholder="Correct author" />
+        </label>
+        <label class="field">
+          <span>Reassign poem title</span>
+          <input class="corrected-title" type="text" value="${escapeHtml(excerpt.correctedTitle || excerpt.title || "")}" placeholder="Correct poem title" />
+        </label>
+        <label class="field">
+          <span>Reassign book</span>
+          <input class="corrected-book-title" type="text" value="${escapeHtml(excerpt.correctedBookTitle || excerpt.bookTitle || "")}" placeholder="Correct book title" />
+        </label>
+      </div>
+      <label class="field">
+        <span>Correct excerpt text</span>
+        <textarea class="corrected-excerpt" rows="5" placeholder="Correct or replace the excerpt text.">${escapeHtml(excerpt.correctedExcerpt || excerpt.excerptText || "")}</textarea>
+      </label>
+      <p class="hint correction-block__hint">These edits save as durable source overrides so the original extracted values remain preserved for reference.</p>
     </div>
     <div class="decision-flags">
-      <label><input type="checkbox" class="graphics-qi" ${excerpt.useForGraphicsQi ? "checked" : ""}> Use for Graphics QI</label>
-      <label><input type="checkbox" class="photos" ${excerpt.useForPhotos ? "checked" : ""}> Use for Photos</label>
+      <label><input type="checkbox" class="graphics-qi" ${useForQi ? "checked" : ""}> Use for QI</label>
+      <label><input type="checkbox" class="use-for-int" ${useForInt ? "checked" : ""}> Use for INT</label>
     </div>
   `;
 
@@ -483,6 +533,7 @@ function buildExcerptCard(excerpt, uniqueKey) {
       const badge = card.querySelector(".badge--count");
       if (badge) {
         badge.textContent = `Words ${resolvedFromRenderedText}`;
+        badge.className = `badge ${getWordCountBadgeClass(resolvedFromRenderedText)}`;
       }
     }
   }
@@ -491,7 +542,9 @@ function buildExcerptCard(excerpt, uniqueKey) {
 }
 
 function buildValidationMarkup(validation) {
-  if (!validation) return "";
+  if (!validation) {
+    return `<p class="validation validation--pending">Catalog validation unavailable for this excerpt.</p>`;
+  }
 
   const canonical = [
     validation.bookCanonicalTitle,
@@ -506,8 +559,16 @@ function buildValidationMarkup(validation) {
     return `<p class="validation validation--warn">Author mismatch. Catalog says ${escapeHtml(canonical || "different author")}.</p>`;
   }
 
+  if (validation.status === "title_mismatch") {
+    return `<p class="validation validation--warn">Excerpt matches the catalog, but the poem title appears wrong. Catalog match: ${escapeHtml(validation.matchedPoemTitle || "different title")}.</p>`;
+  }
+
   if (validation.status === "poem_title_match_only") {
     return `<p class="validation validation--warn">Poem title matches this book, but the excerpt text did not match the catalog text.</p>`;
+  }
+
+  if (validation.status === "epub_not_present") {
+    return `<p class="validation validation--warn">This title appears to be intentionally absent from EPUB/catalog coverage, not simply mismatched.</p>`;
   }
 
   if (validation.status === "excerpt_not_found_in_book" && validation.globalExcerptMatch) {
@@ -536,15 +597,27 @@ function escapeHtml(text) {
 }
 
 function collectUpdates() {
-  return Array.from(elements.excerptList.querySelectorAll(".excerpt-card")).map(card => {
-    const approval = card.querySelector('input[type="radio"]:checked')?.value || "";
+  return collectUpdatesFromContainer(elements.excerptList);
+}
+
+function collectCorrectionUpdates() {
+  return collectUpdatesFromContainer(elements.correctionList);
+}
+
+function collectUpdatesFromContainer(container) {
+  return Array.from(container.querySelectorAll(".excerpt-card")).map(card => {
+    const reviewDecision = card.querySelector('input[type="radio"]:checked')?.value || "";
     return {
       sourceRow: Number(card.dataset.sourceRow),
       recordId: card.dataset.recordId || "",
-      approval,
+      reviewDecision,
       correctionNote: card.querySelector(".correction-note")?.value || "",
-      useForGraphicsQi: card.querySelector(".graphics-qi")?.checked || false,
-      useForPhotos: card.querySelector(".photos")?.checked || false
+      correctedAuthor: card.querySelector(".corrected-author")?.value || "",
+      correctedTitle: card.querySelector(".corrected-title")?.value || "",
+      correctedBookTitle: card.querySelector(".corrected-book-title")?.value || "",
+      correctedExcerpt: card.querySelector(".corrected-excerpt")?.value || "",
+      useForQi: card.querySelector(".graphics-qi")?.checked || false,
+      useForInt: card.querySelector(".use-for-int")?.checked || false
     };
   });
 }
@@ -559,11 +632,14 @@ function filterChangedUpdates(updates, excerpts) {
     if (!current) return true;
 
     return (
-      normalizeApprovalForCompare(update.approval) !== normalizeApprovalForCompare(current.approved) ||
-      normalizeDecision(update.approval) !== normalizeDecision(current.statusIndicator === "NEEDS_CORRECTION" ? "needs_correction" : current.approved === "Y" ? "accept" : current.approved === "N" ? "reject" : "") ||
+      normalizeDecision(update.reviewDecision) !== normalizeDecision(current.excerptReviewDecision) ||
       normalizeCorrectionNote(update.correctionNote) !== normalizeCorrectionNote(current.correctionNote) ||
-      Boolean(update.useForGraphicsQi) !== Boolean(current.useForGraphicsQi) ||
-      Boolean(update.useForPhotos) !== Boolean(current.useForPhotos)
+      normalizeCorrectionNote(update.correctedAuthor) !== normalizeCorrectionNote(current.correctedAuthor) ||
+      normalizeCorrectionNote(update.correctedTitle) !== normalizeCorrectionNote(current.correctedTitle) ||
+      normalizeCorrectionNote(update.correctedBookTitle) !== normalizeCorrectionNote(current.correctedBookTitle) ||
+      normalizeCorrectionNote(update.correctedExcerpt) !== normalizeCorrectionNote(current.correctedExcerpt) ||
+      Boolean(update.useForQi) !== Boolean(current.useForQi ?? current.useForGraphicsQi) ||
+      Boolean(update.useForInt) !== Boolean(current.useForInt ?? current.useForPhotos)
     );
   });
 }
@@ -600,15 +676,22 @@ function compareUpdatesToExcerpts(updates, excerpts) {
     const saved = bySourceRow.get(Number(update.sourceRow));
     if (!saved) return;
 
-    const approvalMatches =
-      normalizeApprovalForCompare(update.approval) ===
-      normalizeApprovalForCompare(saved.approved);
-    const graphicsMatches =
-      Boolean(update.useForGraphicsQi) === Boolean(saved.useForGraphicsQi);
-    const photosMatches =
-      Boolean(update.useForPhotos) === Boolean(saved.useForPhotos);
+    const decisionMatches =
+      normalizeDecision(update.reviewDecision) === normalizeDecision(saved.excerptReviewDecision);
+    const authorMatches =
+      normalizeCorrectionNote(update.correctedAuthor) === normalizeCorrectionNote(saved.correctedAuthor);
+    const titleMatches =
+      normalizeCorrectionNote(update.correctedTitle) === normalizeCorrectionNote(saved.correctedTitle);
+    const bookMatches =
+      normalizeCorrectionNote(update.correctedBookTitle) === normalizeCorrectionNote(saved.correctedBookTitle);
+    const excerptMatches =
+      normalizeCorrectionNote(update.correctedExcerpt) === normalizeCorrectionNote(saved.correctedExcerpt);
+    const qiMatches =
+      Boolean(update.useForQi) === Boolean(saved.useForQi ?? saved.useForGraphicsQi);
+    const intMatches =
+      Boolean(update.useForInt) === Boolean(saved.useForInt ?? saved.useForPhotos);
 
-    if (approvalMatches && graphicsMatches && photosMatches) {
+    if (decisionMatches && authorMatches && titleMatches && bookMatches && excerptMatches && qiMatches && intMatches) {
       matched += 1;
     }
   });
@@ -662,9 +745,62 @@ function resolveWordCount(excerpt) {
   return 0;
 }
 
+function getWordCountBadgeClass(wordCount) {
+  if (wordCount <= 0) return "badge--count";
+  if (wordCount <= 25) return "badge--count";
+  if (wordCount <= 35) return "badge--count badge--count-caution";
+  if (wordCount <= 50) return "badge--count badge--count-warning";
+  return "badge--count badge--count-danger";
+}
+
 async function submitReview() {
-  if (!currentExcerpts.length) {
-    setStatus("Load excerpts before submitting.");
+  return submitExcerptSet({
+    sourceExcerpts: currentExcerpts,
+    collectUpdates: collectUpdates,
+    bookTitle: elements.bookSelect.value,
+    reloadAction: "excerpts",
+    afterReload: async refreshed => {
+      currentExcerpts = refreshed.excerpts;
+      await loadCatalogValidation(refreshed.excerpts);
+      renderCurrentExcerpts();
+      loadBooks({ preserveSelection: true }).catch(() => {});
+    },
+    emptyMessage: "Load excerpts before submitting.",
+    idleLabel: "Submit Decisions",
+    progressLabel: "Submitting"
+  });
+}
+
+async function submitCorrections() {
+  return submitExcerptSet({
+    sourceExcerpts: currentCorrectionExcerpts,
+    collectUpdates: collectCorrectionUpdates,
+    bookTitle: elements.correctionBookSelect.value,
+    reloadAction: "corrections",
+    afterReload: async refreshed => {
+      currentCorrectionExcerpts = refreshed.excerpts;
+      await loadCatalogValidation(refreshed.excerpts);
+      renderCorrectionExcerpts(refreshed.excerpts);
+      loadCorrectionBooks().catch(() => {});
+    },
+    emptyMessage: "Load correction records before saving.",
+    idleLabel: "Save Corrections",
+    progressLabel: "Saving"
+  });
+}
+
+async function submitExcerptSet({
+  sourceExcerpts,
+  collectUpdates,
+  bookTitle,
+  reloadAction,
+  afterReload,
+  emptyMessage,
+  idleLabel,
+  progressLabel
+}) {
+  if (!sourceExcerpts.length) {
+    setStatus(emptyMessage);
     return;
   }
 
@@ -675,8 +811,7 @@ async function submitReview() {
   }
 
   const updates = collectUpdates();
-  const changedUpdates = filterChangedUpdates(updates, currentExcerpts);
-  const bookTitle = elements.bookSelect.value;
+  const changedUpdates = filterChangedUpdates(updates, sourceExcerpts);
 
   if (!changedUpdates.length) {
     setStatus("No changed decisions to submit.");
@@ -684,7 +819,7 @@ async function submitReview() {
   }
 
   const correctionWithoutNote = changedUpdates.find(update => (
-    update.approval === "needs_correction" && !normalizeCorrectionNote(update.correctionNote)
+    update.reviewDecision === "needs_correction" && !normalizeCorrectionNote(update.correctionNote)
   ));
   if (correctionWithoutNote) {
     setStatus("Add a correction note before submitting a 'Needs correction' decision.");
@@ -693,16 +828,23 @@ async function submitReview() {
 
   try {
     setSubmitState(true, `Saving ${changedUpdates.length}...`);
-    setStatus(`Submitting ${changedUpdates.length} changed review decisions...`);
+    setStatus(`${progressLabel} ${changedUpdates.length} changed records...`);
 
     for (const update of changedUpdates) {
       const response = await requestJsonp("saveReview", {
         sourceRow: update.sourceRow,
         recordId: update.recordId,
-        approval: update.approval,
+        approval: update.reviewDecision,
+        reviewDecision: update.reviewDecision,
         correctionNote: update.correctionNote,
-        graphicsQi: update.useForGraphicsQi ? "1" : "0",
-        photos: update.useForPhotos ? "1" : "0"
+        correctedAuthor: update.correctedAuthor,
+        correctedTitle: update.correctedTitle,
+        correctedBookTitle: update.correctedBookTitle,
+        correctedExcerpt: update.correctedExcerpt,
+        graphicsQi: update.useForQi ? "1" : "0",
+        useForQi: update.useForQi ? "1" : "0",
+        photos: update.useForInt ? "1" : "0",
+        useForInt: update.useForInt ? "1" : "0"
       });
 
       if (!response.ok) {
@@ -713,16 +855,12 @@ async function submitReview() {
     setStatus(`Submitted ${changedUpdates.length} changed decisions. Verifying saved values...`);
     await sleep(750);
 
-    const refreshed = await requestJsonp("excerpts", { bookTitle });
+    const refreshed = await requestJsonp(reloadAction, { bookTitle });
     if (!refreshed.ok) {
       throw new Error(refreshed.error || "Verification reload failed.");
     }
 
-    currentExcerpts = refreshed.excerpts;
-    await loadCatalogValidation(refreshed.excerpts);
-    renderCurrentExcerpts();
-    await loadBooks();
-
+    await afterReload(refreshed);
     const remainingUpdatedRows = countRemainingUpdatedRows(changedUpdates, refreshed.excerpts);
     const droppedFromQueue = changedUpdates.length - remainingUpdatedRows;
 
@@ -739,7 +877,7 @@ async function submitReview() {
   } catch (error) {
     setStatus(`Submit failed: ${error.message}`);
   } finally {
-    setSubmitState(false, "Submit Decisions");
+    setSubmitState(false, idleLabel);
   }
 }
 
@@ -747,22 +885,27 @@ elements.saveApiUrl.addEventListener("click", saveApiBaseUrl);
 elements.loadBooks.addEventListener("click", loadBooks);
 elements.loadExcerpts.addEventListener("click", loadExcerpts);
 elements.submitReview.addEventListener("click", submitReview);
+elements.loadCorrectionBooks?.addEventListener("click", loadCorrectionBooks);
+elements.loadCorrections?.addEventListener("click", loadCorrections);
+elements.submitCorrections?.addEventListener("click", submitCorrections);
+elements.showReviewModule?.addEventListener("click", () => setActiveModule("review"));
+elements.showCorrectionsModule?.addEventListener("click", () => {
+  setActiveModule("corrections");
+  if (getApiBaseUrl() && elements.correctionBookSelect?.options.length <= 1) {
+    loadCorrectionBooks();
+  }
+});
 if (elements.reviewFilter) {
   elements.reviewFilter.addEventListener("change", () => {
-    refreshBookOptionLabels();
     renderCurrentExcerpts();
-    updateCorrectionScanUi();
   });
-}
-if (elements.scanCorrections) {
-  elements.scanCorrections.addEventListener("click", runCorrectionScan);
 }
 
 restoreApiBaseUrl();
+setActiveModule("review");
 if (getApiBaseUrl()) {
   setStatus("Ready. Loading books...");
   loadBooks();
 } else {
   setStatus("Ready. Save the Apps Script URL, then books will load automatically.");
 }
-updateCorrectionScanUi();

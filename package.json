@@ -7,6 +7,7 @@
     "clasp:status": "clasp status",
     "clasp:push": "clasp push",
     "clasp:pull": "clasp pull",
-    "dev": "node dev-server.mjs"
+    "dev": "node dev-server.mjs",
+    "sync:validation": "python3 sync_catalog_validation.py"
   }
 }

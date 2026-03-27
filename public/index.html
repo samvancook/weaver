@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Weaver</title>
-  <link rel="stylesheet" href="/style.css?v=20260327c" />
+  <link rel="stylesheet" href="/style.css?v=20260327d" />
 </head>
 <body>
   <div class="shell">
@@ -14,6 +14,16 @@
       <p class="lede">
         Select a book, review excerpts, and submit decisions back to the working sheet.
       </p>
+      <div class="hero-links">
+        <button class="hero-pill hero-pill--active" id="show-review-module" type="button">Review queue</button>
+        <button class="hero-pill" id="show-corrections-module" type="button">Needs correction</button>
+        <a
+          class="hero-pill hero-pill--graphics"
+          href="https://lookerstudio.google.com/u/0/reporting/32c193c7-c96f-4e0a-8da0-7d3c15ffa027/page/p_ugcvx85wkd"
+          target="_blank"
+          rel="noreferrer"
+        >Graphics queue</a>
+      </div>
     </header>
 
     <main class="grid">
@@ -39,7 +49,7 @@
         </details>
       </section>
 
-      <section class="panel panel--wide">
+      <section class="panel panel--wide module-panel module-panel--active" id="review-module">
         <div class="panel__header">
           <h2>Book Selection</h2>
           <span class="badge badge--muted" id="book-count-badge">0 Books</span>
@@ -56,20 +66,17 @@
             <select id="review-filter">
               <option value="all">All pending</option>
               <option value="likely_correction">Likely need correction</option>
+              <option value="good_only">Good content only</option>
             </select>
           </label>
-          <button id="scan-corrections" class="button button--secondary" disabled>Scan Correction Signals</button>
           <button id="load-excerpts" class="button">Load Excerpts</button>
         </div>
-        <div class="book-selection-meta">
-          <p class="hint" id="book-selection-hint">
-            Use `Queue Mode` to narrow the selected book to likely correction cases when needed.
-          </p>
-          <p class="scan-status" id="correction-scan-status">Correction scan idle.</p>
-        </div>
+        <p class="hint" id="book-selection-hint">
+          `Likely need correction` now filters only the currently loaded book, so review stays fast.
+        </p>
       </section>
 
-      <section class="panel panel--wide">
+      <section class="panel panel--wide module-panel module-panel--active" id="review-queue-panel">
         <div class="panel__header">
           <h2>Review Queue</h2>
           <span class="badge badge--muted" id="excerpt-count-badge">0 Excerpts</span>
@@ -79,6 +86,36 @@
         </div>
         <div id="excerpt-list" class="excerpt-list">
           <p class="empty-state">Load a book to start reviewing excerpts.</p>
+        </div>
+      </section>
+
+      <section class="panel panel--wide module-panel" id="corrections-module">
+        <div class="panel__header">
+          <h2>Needs Correction</h2>
+          <span class="badge badge--muted" id="correction-book-count-badge">0 Books</span>
+        </div>
+        <div class="book-picker">
+          <label class="field field--grow">
+            <span>Correction Book</span>
+            <select id="correction-book-select">
+              <option value="">Load correction books first</option>
+            </select>
+          </label>
+          <button id="load-correction-books" class="button button--secondary">Load Correction Books</button>
+          <button id="load-corrections" class="button">Load Corrections</button>
+        </div>
+        <p class="hint">
+          Review records already marked <code>Needs correction</code>, reassign them, and save durable source overrides.
+        </p>
+        <div class="panel__header module-panel__subheader">
+          <h3>Correction Queue</h3>
+          <span class="badge badge--muted" id="correction-excerpt-count-badge">0 Excerpts</span>
+        </div>
+        <div class="toolbar">
+          <button id="submit-corrections" class="button button--accent">Save Corrections</button>
+        </div>
+        <div id="correction-list" class="excerpt-list">
+          <p class="empty-state">Load a correction book to start working through flagged excerpts.</p>
         </div>
       </section>
 
@@ -92,6 +129,6 @@
     </main>
   </div>
 
-  <script src="/app.js?v=20260327c"></script>
+  <script src="/app.js?v=20260327d"></script>
 </body>
 </html>

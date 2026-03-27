@@ -1,5 +1,6 @@
 {
   "hosting": {
+    "site": "button-weaver",
     "public": "public",
     "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
     "headers": [
@@ -23,11 +24,7 @@
       }
     ],
     "rewrites": [
-      { "source": "/api/**", "function": { "functionId": "api" } },
       { "source": "**", "destination": "/index.html" }
     ]
-  },
-  "functions": {
-    "source": "functions"
   }
 }

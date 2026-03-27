@@ -5,6 +5,7 @@ import json
 import re
 import sqlite3
 import sys
+from functools import lru_cache
 from pathlib import Path
 
 DB_PATH = Path("/Users/buttonpublishingone/Desktop/CODEX/Social Media Dev/poetry_catalog/formal_catalog.db")
@@ -15,8 +16,36 @@ def normalize(text: str | None) -> str:
         return ""
     text = text.lower()
     text = text.replace("—", " ").replace("–", " ")
+    text = text.replace("&", " and ")
+    text = text.replace("’", "'").replace("‘", "'")
     text = re.sub(r"\s+", " ", text)
     return text.strip()
+
+
+def normalize_title(text: str | None) -> str:
+    normalized = normalize(text)
+    normalized = re.sub(r"[^a-z0-9\s]", " ", normalized)
+    normalized = re.sub(r"\s+", " ", normalized)
+    return normalized.strip()
+
+
+def title_aliases(text: str | None) -> set[str]:
+    raw = (text or "").strip()
+    if not raw:
+        return set()
+
+    aliases = {normalize(raw), normalize_title(raw)}
+
+    pieces = re.split(r"\s*[:\-]\s*", raw, maxsplit=1)
+    if pieces:
+        aliases.add(normalize(pieces[0]))
+        aliases.add(normalize_title(pieces[0]))
+
+    simplified = raw.replace("&", "and")
+    aliases.add(normalize(simplified))
+    aliases.add(normalize_title(simplified))
+
+    return {alias for alias in aliases if alias}
 
 
 def candidate_snippets(text: str | None) -> list[str]:
@@ -37,17 +66,43 @@ def candidate_snippets(text: str | None) -> list[str]:
     return snippets
 
 
-def fetch_book_status(cursor: sqlite3.Cursor, book_title: str) -> dict | None:
-    return cursor.execute(
-        """
-        SELECT canonical_book_id, title, author, book_shortener, effective_status
-        FROM book_status
-        WHERE lower(title) = lower(?)
-           OR lower(book_shortener) = lower(?)
-        LIMIT 1
-        """,
-        (book_title, book_title),
-    ).fetchone()
+@lru_cache(maxsize=1)
+def load_book_status_rows() -> list[dict]:
+    connection = sqlite3.connect(DB_PATH)
+    connection.row_factory = sqlite3.Row
+    try:
+        rows = connection.execute(
+            """
+            SELECT canonical_book_id, title, author, book_shortener, effective_status
+            FROM book_status
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        connection.close()
+
+
+def fetch_book_status(_cursor: sqlite3.Cursor, book_title: str) -> dict | None:
+    query_aliases = title_aliases(book_title)
+    if not query_aliases:
+        return None
+
+    best_match: dict | None = None
+    best_score = -1
+
+    for row in load_book_status_rows():
+        candidate_aliases = title_aliases(row["title"])
+        if row.get("book_shortener"):
+            candidate_aliases.update(title_aliases(row["book_shortener"]))
+
+        if query_aliases & candidate_aliases:
+            # Prefer exact normalized title matches over looser alias/prefix matches.
+            score = 2 if normalize(book_title) == normalize(row["title"]) else 1
+            if score > best_score:
+                best_score = score
+                best_match = row
+
+    return best_match
 
 
 def fetch_poems_for_book(cursor: sqlite3.Cursor, canonical_book_id: int) -> list[dict]:
@@ -92,6 +147,7 @@ def validate_record(cursor: sqlite3.Cursor, record: dict) -> dict:
         "recordId": record.get("recordId"),
         "sourceRow": record.get("sourceRow"),
         "bookFound": bool(book_status),
+        "bookEffectiveStatus": None,
         "bookCanonicalTitle": None,
         "bookCanonicalAuthor": None,
         "authorMatchesBook": None,
@@ -107,9 +163,14 @@ def validate_record(cursor: sqlite3.Cursor, record: dict) -> dict:
         result["status"] = "book_not_found"
         return result
 
+    result["bookEffectiveStatus"] = book_status["effective_status"]
     result["bookCanonicalTitle"] = book_status["title"]
     result["bookCanonicalAuthor"] = book_status["author"]
     result["authorMatchesBook"] = normalize(author) == normalize(book_status["author"])
+
+    if book_status["effective_status"] == "skip_epub":
+        result["status"] = "epub_not_present"
+        return result
 
     poems = fetch_poems_for_book(cursor, int(book_status["canonical_book_id"]))
     normalized_poem_title = normalize(poem_title)
@@ -124,7 +185,13 @@ def validate_record(cursor: sqlite3.Cursor, record: dict) -> dict:
             break
 
     if result["excerptMatchesInBook"]:
-        result["status"] = "catalog_match" if result["authorMatchesBook"] else "author_mismatch"
+        title_matches_excerpt = normalize(result["matchedPoemTitle"]) == normalized_poem_title
+        if not result["authorMatchesBook"]:
+            result["status"] = "author_mismatch"
+        elif title_matches_excerpt:
+            result["status"] = "catalog_match"
+        else:
+            result["status"] = "title_mismatch"
     elif result["poemTitleMatchesInBook"]:
         result["status"] = "poem_title_match_only"
     else:
