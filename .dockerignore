@@ -1,0 +1,10 @@
+node_modules
+.git
+.firebase
+functions
+weaver-apps-script
+backups
+CURRENT_LIVE_SCRIPT_BACKUP_*
+firebase-debug.log
+*.pyc
+__pycache__

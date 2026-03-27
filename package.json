@@ -1,4 +1,7 @@
 {
+  "name": "weaver",
+  "private": true,
+  "type": "module",
   "dependencies": {
     "@google/clasp": "^3.3.0"
   },
@@ -8,6 +11,7 @@
     "clasp:push": "clasp push",
     "clasp:pull": "clasp pull",
     "dev": "node dev-server.mjs",
+    "start": "node server.mjs",
     "sync:validation": "python3 sync_catalog_validation.py"
   }
 }
