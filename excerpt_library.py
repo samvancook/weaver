@@ -82,6 +82,13 @@ def preserve_excerpt_text(text: str | None) -> str:
     return "\n".join(lines).strip()
 
 
+def line_break_signature(text: str | None) -> tuple[int, ...]:
+    preserved = preserve_excerpt_text(text)
+    if not preserved:
+        return ()
+    return tuple(len(line) for line in preserved.split("\n"))
+
+
 def normalize_text(text: str | None) -> str:
     if not text:
         return ""
@@ -348,6 +355,7 @@ def find_library_excerpt_match(
     threshold: float = 0.72,
 ) -> dict | None:
     cleaned_excerpt = clean_whitespace(excerpt_text)
+    preserved_excerpt = preserve_excerpt_text(excerpt_text)
     if not cleaned_excerpt:
         return None
 
@@ -356,6 +364,7 @@ def find_library_excerpt_match(
     book_alias = normalize_lookup_text(book_title)
     author_alias = normalize_lookup_text(author)
     excerpt_len = len(cleaned_excerpt)
+    query_line_break_signature = line_break_signature(preserved_excerpt)
 
     exact_row = connection.execute(
         """
@@ -367,6 +376,8 @@ def find_library_excerpt_match(
         (excerpt_hash,),
     ).fetchone()
     if exact_row:
+        candidate_excerpt = exact_row[5] or ""
+        candidate_line_break_signature = line_break_signature(candidate_excerpt)
         return {
             "matchType": "exact",
             "score": 1.0,
@@ -375,7 +386,11 @@ def find_library_excerpt_match(
             "author": exact_row[2],
             "bookTitle": exact_row[3],
             "poemTitle": exact_row[4],
-            "excerptPreview": exact_row[5][:180],
+            "excerptPreview": candidate_excerpt[:180],
+            "formattingMatch": preserve_excerpt_text(candidate_excerpt) == preserved_excerpt,
+            "lineBreaksMatch": candidate_line_break_signature == query_line_break_signature,
+            "queryLineCount": len(query_line_break_signature),
+            "matchedLineCount": len(candidate_line_break_signature),
         }
 
     candidate_rows = connection.execute(
@@ -426,6 +441,8 @@ def find_library_excerpt_match(
             "bookTitle": row[4],
             "poemTitle": row[6],
             "excerptPreview": candidate_text[:180],
+            "formattingMatch": False,
+            "lineBreaksMatch": False,
         }
 
     return best_match

@@ -522,8 +522,9 @@ function buildExcerptCard(excerpt, uniqueKey) {
       ? `<span class="badge badge--signal">Group ${escapeHtml(excerpt.duplicateGroupId)}</span>`
       : "";
   const libraryMatch = validation?.libraryExcerptMatch || null;
+  const libraryBadgeLabel = getLibraryBadgeLabel(libraryMatch);
   const libraryBadge = libraryMatch
-    ? `<span class="badge badge--warn">${libraryMatch.matchType === "exact" ? "Exact library match" : "Possible library match"}</span>`
+    ? `<span class="badge badge--warn">${escapeHtml(libraryBadgeLabel)}</span>`
     : "";
 
   const validationMarkup = buildValidationMarkup(validation, excerpt);
@@ -734,11 +735,7 @@ function buildLibraryMatchMarkup(match) {
     return "";
   }
 
-  const label = match.matchType === "exact"
-    ? "Already exists in excerpt library."
-    : match.matchType === "substring"
-      ? `Possible existing excerpt in library (${match.matchType}, score ${match.score}).`
-      : `Possible near-duplicate in library (score ${match.score}).`;
+  const label = getLibraryMatchSentence(match);
   const meta = [
     match.bookTitle,
     match.poemTitle,
@@ -746,6 +743,37 @@ function buildLibraryMatchMarkup(match) {
   ].filter(Boolean).join(" / ");
   const excerptLink = buildLibraryExcerptLink(match);
   return `<p class="validation validation--warn">${escapeHtml(label)} ${escapeHtml(meta || "Existing source row")}${match.sourceRow ? `, row ${escapeHtml(String(match.sourceRow))}` : ""}. ${excerptLink}</p>`;
+}
+
+function getLibraryBadgeLabel(match) {
+  if (!match) {
+    return "";
+  }
+  if (match.matchType === "exact") {
+    return match.lineBreaksMatch === false
+      ? "Text match, line breaks differ"
+      : "Exact library match";
+  }
+  return "Possible library match";
+}
+
+function getLibraryMatchSentence(match) {
+  if (!match) {
+    return "";
+  }
+
+  if (match.matchType === "exact") {
+    if (match.lineBreaksMatch === false) {
+      return "Same excerpt text exists in the excerpt library, but the line breaks differ.";
+    }
+    return "Exact text and formatting match already exists in the excerpt library.";
+  }
+
+  if (match.matchType === "substring") {
+    return `Possible existing excerpt in library (${match.matchType}, score ${match.score}).`;
+  }
+
+  return `Possible near-duplicate in library (score ${match.score}).`;
 }
 
 function buildLibraryExcerptLink(match) {
