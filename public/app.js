@@ -580,6 +580,9 @@ function buildExcerptCard(excerpt, uniqueKey) {
   const libraryBadge = libraryMatch
     ? `<span class="badge badge--warn">${escapeHtml(libraryBadgeLabel)}</span>`
     : "";
+  const libraryRecommendation = libraryMatch?.matchType === "exact"
+    ? `<span class="badge badge--muted">Suggested: Reject</span>`
+    : "";
 
   const validationMarkup = buildValidationMarkup(validation, excerpt);
   const reviewDecision = normalizeDecision(excerpt.excerptReviewDecision);
@@ -608,7 +611,7 @@ function buildExcerptCard(excerpt, uniqueKey) {
   const qcBadge = excerpt.quoteCreatedQc === "Y"
     ? `<span class="badge badge--signal">Made + QCed</span>`
     : "";
-  const currentDecision = reviewDecision || (libraryMatch?.matchType === "exact" ? "reject" : "");
+  const currentDecision = reviewDecision || "";
   const wordCount = resolveWordCount(excerpt);
   const wordCountBadgeClass = getWordCountBadgeClass(wordCount);
   const wordCountTooltip = '10-25 words is often the sweet spot for readability. Longer excerpts should still be considered and can work as EXC, INT or QI in some cases.';
@@ -621,6 +624,7 @@ function buildExcerptCard(excerpt, uniqueKey) {
         ${pullBadge}
         ${overlapBadge}
         ${libraryBadge}
+        ${libraryRecommendation}
         ${decisionBadge}
         ${qiBadge}
         ${overrideBadge}
