@@ -156,6 +156,40 @@ function requestJsonp(action, params = {}) {
   });
 }
 
+function openComparisonWindow(href, windowName) {
+  const width = 820;
+  const height = Math.max(720, Math.min(960, (window.screen?.availHeight || window.outerHeight || 960) - 80));
+  const screenLeft = typeof window.screenX === "number" ? window.screenX : 0;
+  const screenTop = typeof window.screenY === "number" ? window.screenY : 0;
+  const outerWidth = window.outerWidth || window.innerWidth || width;
+  const availWidth = window.screen?.availWidth || screenLeft + outerWidth + width + 40;
+  const rightSideLeft = screenLeft + outerWidth + 20;
+  const leftSideLeft = screenLeft - width - 20;
+  let left = rightSideLeft;
+
+  if (rightSideLeft + width > availWidth - 20) {
+    left = leftSideLeft >= 20 ? leftSideLeft : Math.max(20, availWidth - width - 20);
+  }
+
+  const top = Math.max(20, screenTop + 40);
+  const features = [
+    "popup=yes",
+    `width=${width}`,
+    `height=${height}`,
+    `left=${Math.round(left)}`,
+    `top=${Math.round(top)}`,
+    "scrollbars=yes",
+    "resizable=yes"
+  ].join(",");
+  const popup = window.open(href, windowName, features);
+
+  if (popup) {
+    popup.focus();
+  } else {
+    window.open(href, "_blank", "noreferrer");
+  }
+}
+
 function buildReviewSavePayload(update) {
   return {
     sourceRow: update.sourceRow,
@@ -701,11 +735,7 @@ function buildExcerptCard(excerpt, uniqueKey) {
       if (!href) {
         return;
       }
-      window.open(
-        href,
-        "weaverCatalogPoem",
-        "popup=yes,width=760,height=860,scrollbars=yes,resizable=yes"
-      );
+      openComparisonWindow(href, "weaverCatalogPoem");
     });
   });
   card.querySelectorAll(".library-excerpt-link").forEach(link => {
@@ -715,11 +745,7 @@ function buildExcerptCard(excerpt, uniqueKey) {
       if (!href) {
         return;
       }
-      window.open(
-        href,
-        "weaverLibraryExcerpt",
-        "popup=yes,width=760,height=860,scrollbars=yes,resizable=yes"
-      );
+      openComparisonWindow(href, "weaverLibraryExcerpt");
     });
   });
 
