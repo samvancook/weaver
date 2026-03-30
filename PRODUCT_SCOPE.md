@@ -135,8 +135,76 @@ Use the same shape as the current Poetry Please apps:
 ## Near-Term Weaver Review UX
 
 - split excerpt-library review into `Exact library matches` and `Possible library matches`
-- default exact library matches to `Reject` so duplicate cleanup is faster and safer for interns
+- keep exact library matches recommendation-only, not auto-selected
 - keep bulk actions out of the current flow for now, but revisit them once the exact-match lane feels reliable
+
+## Current Workflow Direction
+
+- Weaver remains the review and correction layer
+- the excerpt library database becomes the canonical approved excerpt layer
+- Poetry Please should eventually read from that canonical excerpt layer instead of from ad hoc sheet state
+
+## Accepted Excerpt Bridge
+
+### Immediate Goal
+
+Make sure accepted excerpts can move cleanly from:
+
+1. the old tool
+2. Weaver
+3. into the excerpt library database
+4. and then on to Poetry Please
+
+### Forward Path
+
+- accepted excerpts in Weaver should be eligible for sync into the excerpt library database
+- the sync should check whether the accepted excerpt already exists in the library
+- exact-existing excerpts should be marked as already captured
+- only new candidates should be prepared for import downstream
+
+### Catch-Up Path
+
+Once the tool is tested and catch-up review is done:
+
+- gather historical accepted excerpts from the old tool
+- gather historical accepted excerpts from Weaver
+- compare both sets against the excerpt library
+- import any accepted excerpts that are still missing
+
+### First Tooling Step
+
+- build a bridge report from accepted sheet rows into the excerpt library
+- classify each accepted row as:
+  - `already_in_library`
+  - `new_candidate`
+- use that report to drive the first backfill into the excerpt library
+
+## Roadmap
+
+### Now
+
+- stabilize hosted Weaver review behavior
+- keep duplicate review intern-safe without hidden defaults
+- keep the excerpt library match visible and understandable
+- make comparison popups easy to use during review
+
+### Next
+
+- generate accepted-excerpt bridge reports from sheet exports
+- define the rule for when an accepted Weaver excerpt is ready to enter the excerpt library
+- produce a clean list of net-new accepted excerpts for import
+
+### After Catch-Up
+
+- sync accepted Weaver excerpts into the excerpt library on an ongoing basis
+- expose excerpt-library presence and production status more clearly in Weaver
+- validate whether accepted excerpts also exist as quote images / downstream content
+
+### Later
+
+- move the backend off Apps Script if the review workflow keeps expanding
+- use the excerpt library as the cleaner canonical source for Poetry Please
+- replace legacy sheet/tool dependencies with clearer database-backed flows
 
 ## Non-Goals For MVP
 

@@ -41,6 +41,32 @@ Or with CSV input:
 python3 match_excerpt_candidates.py /path/to/candidates.csv --output-csv /tmp/match_results.csv
 ```
 
+### 2a. Accepted Excerpt Bridge
+
+Use this when you want to turn accepted rows from the old tool or Weaver into a clean report of:
+
+- already in the excerpt library
+- new candidates to add to the excerpt library
+
+It supports both:
+
+- explicit Weaver accepts: `excerpt_review_decision = ACCEPT`
+- legacy accepts: `approved_for_quote = Y` when no explicit decision exists
+
+Example:
+
+```bash
+python3 accepted_excerpt_bridge.py /path/to/excerpt-tool-export.csv \
+  --output-csv /tmp/accepted_excerpt_bridge.csv \
+  --new-candidates-csv /tmp/new_excerpt_candidates.csv
+```
+
+This gives you a catch-up bridge between:
+
+- accepted excerpts in the working sheet
+- the local excerpt library database
+- the future Poetry Please import layer
+
 ### 3. Cleanup Report
 
 Use this to profile duplicate clusters, likely non-excerpt rows, and blank-book concentration:
@@ -48,6 +74,98 @@ Use this to profile duplicate clusters, likely non-excerpt rows, and blank-book 
 ```bash
 python3 excerpt_cleanup_report.py --top 25
 ```
+
+### 4. Build A Deduped Database
+
+Use this to build a cleaned database that collapses exact duplicate excerpt text into canonical rows while preserving all original occurrences:
+
+```bash
+python3 build_deduped_excerpt_library.py
+```
+
+This creates `data/excerpt_library_deduped.db` with:
+
+- `canonical_excerpts`
+- `canonical_excerpt_occurrences`
+- `v_canonical_excerpt_summary`
+
+Key fields:
+
+- `pull_count`: how many times the excerpt was pulled before dedupe
+- `primary_author`, `primary_book_title`, `primary_poem_title`: preferred merged values
+- `author_values_json`, `book_values_json`, `poem_title_values_json`: preserved variant values
+- `has_author_conflict`, `has_book_conflict`, `has_poem_title_conflict`: flags for groups where metadata drifted
+
+The safe workflow is to treat `canonical_excerpts` as the cleaned layer and `canonical_excerpt_occurrences` as the audit trail for every original row that was merged into it.
+
+### 4a. Classify Non-Excerpt Rows First
+
+Before deduping, classify raw imported rows into:
+
+- `likely_excerpt`
+- `likely_non_excerpt`
+- `needs_review`
+
+Run:
+
+```bash
+python3 classify_excerpt_rows.py --json-summary
+```
+
+This writes:
+
+- `data/excerpt_row_classification.csv`
+
+The intended workflow is:
+
+1. classify rows
+2. quarantine `likely_non_excerpt`
+3. manually inspect `needs_review`
+4. dedupe only the excerpt-safe subset
+
+### 5. Build A Normalized Excerpt Database
+
+Use this to make excerpts the primary records and attach `QI` / `INT` / `COV` rows as linked assets instead of treating them as competing content types:
+
+```bash
+python3 build_normalized_excerpt_database.py
+```
+
+This creates `data/excerpt_library_normalized.db` with:
+
+- `excerpts`
+- `source_rows`
+- `excerpt_assets`
+- `peeled_off_rows`
+
+Key ideas:
+
+- each row in `excerpts` is one underlying excerpt
+- each raw imported row is preserved in `source_rows`
+- `QI` rows become linked rows in `excerpt_assets`
+- peeled-off categories like `COV` are moved into `peeled_off_rows`
+- `has_qi_asset` and `qi_asset_count` live on the parent excerpt row
+
+This is the first step toward the model:
+
+- underlying excerpt
+- flag that it has a quote image
+- file/link metadata for that quote image
+
+### 5a. Export Peeled-Off Content
+
+Use this to export content categories that are being migrated out of the excerpt tool:
+
+```bash
+python3 export_peeled_off_content.py
+```
+
+Current peeled-off export:
+
+- `COV` -> `data/peeled_off/cov_rows.csv`
+- `ART` -> `data/peeled_off/art_rows.csv`
+
+See [PEELED_OFF_CONTENT.md](/Users/buttonpublishingone/Desktop/CODEX/Excerpt%20Management/PEELED_OFF_CONTENT.md) for the running list.
 
 ## Excerpt Review App
 
