@@ -44,6 +44,37 @@ function readRequestBody(req) {
   });
 }
 
+async function proxySaveReviews(apiBaseUrl, updates) {
+  if (!apiBaseUrl) {
+    throw new Error("Missing Apps Script Web App URL.");
+  }
+
+  const url = new URL(apiBaseUrl);
+  url.searchParams.set("action", "saveReviews");
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ updates })
+  });
+
+  const text = await response.text();
+  let data;
+  try {
+    data = JSON.parse(text || "{}");
+  } catch (_error) {
+    throw new Error("Apps Script batch save returned invalid JSON.");
+  }
+
+  if (!response.ok || !data.ok) {
+    throw new Error(data.error || `Apps Script batch save failed with status ${response.status}.`);
+  }
+
+  return data;
+}
+
 function runCatalogValidation(records) {
   return new Promise((resolve, reject) => {
     const child = spawn("python3", [path.join(__dirname, "catalog_validate.py")], {
@@ -191,6 +222,23 @@ const server = http.createServer(async (req, res) => {
       const parsed = JSON.parse(body || "{}");
       const records = Array.isArray(parsed.records) ? parsed.records : [];
       const result = await runCatalogValidation(records);
+      return sendJson(res, 200, result);
+    } catch (error) {
+      return sendJson(res, 500, {
+        ok: false,
+        error: error.message
+      });
+    }
+  }
+
+  if (url.pathname === "/api/save-reviews" && req.method === "POST") {
+    try {
+      const body = await readRequestBody(req);
+      const parsed = JSON.parse(body || "{}");
+      const apiBaseUrl = typeof parsed.apiBaseUrl === "string" ? parsed.apiBaseUrl.trim() : "";
+      const updates = Array.isArray(parsed.updates) ? parsed.updates : [];
+
+      const result = await proxySaveReviews(apiBaseUrl, updates);
       return sendJson(res, 200, result);
     } catch (error) {
       return sendJson(res, 500, {

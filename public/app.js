@@ -156,6 +156,60 @@ function requestJsonp(action, params = {}) {
   });
 }
 
+function buildReviewSavePayload(update) {
+  return {
+    sourceRow: update.sourceRow,
+    recordId: update.recordId,
+    approval: update.reviewDecision,
+    reviewDecision: update.reviewDecision,
+    correctionNote: update.correctionNote,
+    correctedAuthor: update.correctedAuthor,
+    correctedTitle: update.correctedTitle,
+    correctedBookTitle: update.correctedBookTitle,
+    correctedExcerpt: update.correctedExcerpt,
+    graphicsQi: update.useForQi ? "1" : "0",
+    useForQi: update.useForQi ? "1" : "0",
+    photos: update.useForInt ? "1" : "0",
+    useForInt: update.useForInt ? "1" : "0"
+  };
+}
+
+async function requestBatchSave(updates) {
+  const response = await fetch("/api/save-reviews", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      apiBaseUrl: getApiBaseUrl(),
+      updates: updates.map(buildReviewSavePayload)
+    })
+  });
+
+  let data;
+  try {
+    data = await response.json();
+  } catch (_error) {
+    throw new Error("Batch save returned an unreadable response.");
+  }
+
+  if (!response.ok || !data.ok) {
+    throw new Error(data.error || "Batch save failed.");
+  }
+
+  return data;
+}
+
+async function saveReviewsSequentially(changedUpdates) {
+  for (const update of changedUpdates) {
+    const response = await requestJsonp("saveReview", buildReviewSavePayload(update));
+
+    if (!response.ok) {
+      throw new Error(response.error || `Save failed for row ${update.sourceRow}.`);
+    }
+  }
+}
+
 async function loadBooks(options = {}) {
   const preserveSelection = options.preserveSelection !== false;
   const previousSelection = preserveSelection ? elements.bookSelect.value : "";
@@ -1034,26 +1088,16 @@ async function submitExcerptSet({
     setSubmitState(true, `Saving ${changedUpdates.length}...`);
     setStatus(`${progressLabel} ${changedUpdates.length} changed records...`);
 
-    for (const update of changedUpdates) {
-      const response = await requestJsonp("saveReview", {
-        sourceRow: update.sourceRow,
-        recordId: update.recordId,
-        approval: update.reviewDecision,
-        reviewDecision: update.reviewDecision,
-        correctionNote: update.correctionNote,
-        correctedAuthor: update.correctedAuthor,
-        correctedTitle: update.correctedTitle,
-        correctedBookTitle: update.correctedBookTitle,
-        correctedExcerpt: update.correctedExcerpt,
-        graphicsQi: update.useForQi ? "1" : "0",
-        useForQi: update.useForQi ? "1" : "0",
-        photos: update.useForInt ? "1" : "0",
-        useForInt: update.useForInt ? "1" : "0"
-      });
-
-      if (!response.ok) {
-        throw new Error(response.error || `Save failed for row ${update.sourceRow}.`);
-      }
+    let usedFallback = false;
+    try {
+      await requestBatchSave(changedUpdates);
+    } catch (batchError) {
+      usedFallback = true;
+      setStatus(
+        `Batch save failed, falling back to row-by-row saves for ${changedUpdates.length} records...`,
+        { error: batchError.message }
+      );
+      await saveReviewsSequentially(changedUpdates);
     }
 
     setStatus(`Submitted ${changedUpdates.length} changed decisions. Verifying saved values...`);
@@ -1070,11 +1114,15 @@ async function submitExcerptSet({
 
     if (remainingUpdatedRows === 0) {
       setStatus(
-        `Saved ${changedUpdates.length} changed decisions. Those excerpts dropped out of the pending queue.`
+        usedFallback
+          ? `Saved ${changedUpdates.length} changed decisions with fallback mode. Those excerpts dropped out of the pending queue.`
+          : `Saved ${changedUpdates.length} changed decisions. Those excerpts dropped out of the pending queue.`
       );
     } else {
       setStatus(
-        `Saved ${changedUpdates.length} changed decisions. ${droppedFromQueue} dropped out of queue and ${remainingUpdatedRows} are still showing.`,
+        usedFallback
+          ? `Saved ${changedUpdates.length} changed decisions with fallback mode. ${droppedFromQueue} dropped out of queue and ${remainingUpdatedRows} are still showing.`
+          : `Saved ${changedUpdates.length} changed decisions. ${droppedFromQueue} dropped out of queue and ${remainingUpdatedRows} are still showing.`,
         refreshed.excerpts.slice(0, 5)
       );
     }
