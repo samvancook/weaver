@@ -35,6 +35,7 @@ let isSaving = false;
 let currentValidationByRecordId = new Map();
 let currentModule = "review";
 let reviewVisibleCount = 25;
+let reviewPinnedRowOrder = [];
 
 const REVIEW_BATCH_SIZE = 25;
 
@@ -298,6 +299,7 @@ async function loadExcerpts() {
 
     currentExcerpts = data.excerpts;
     reviewVisibleCount = REVIEW_BATCH_SIZE;
+    reviewPinnedRowOrder = [];
     await loadCatalogValidation(data.excerpts);
     renderCurrentExcerpts();
     setStatus(`Loaded ${data.excerpts.length} excerpts for "${bookTitle}". Backend ${data.version || "unknown"}.`);
@@ -367,7 +369,6 @@ async function loadCorrections() {
 }
 
 async function loadCatalogValidation(excerpts) {
-  currentValidationByRecordId = new Map();
   if (!excerpts.length) return;
 
   const recordsNeedingLiveValidation = [];
@@ -376,6 +377,8 @@ async function loadCatalogValidation(excerpts) {
     const key = excerpt.recordId || String(excerpt.sourceRow);
     if (excerpt.catalogValidation && excerpt.catalogValidation.status) {
       currentValidationByRecordId.set(key, excerpt.catalogValidation);
+    } else if (currentValidationByRecordId.has(key)) {
+      return;
     } else {
       recordsNeedingLiveValidation.push({
         sourceRow: excerpt.sourceRow,
@@ -412,7 +415,7 @@ async function loadCatalogValidation(excerpts) {
 
 function renderExcerpts(excerpts) {
   const totalMatching = excerpts.length;
-  const visibleExcerpts = excerpts.slice(0, reviewVisibleCount);
+  const visibleExcerpts = orderReviewExcerptsForRender(excerpts).slice(0, reviewVisibleCount);
   renderExcerptCollection(visibleExcerpts, elements.excerptList, elements.excerptCountBadge, getEmptyStateMessage(), {
     totalMatching,
     visibleCount: visibleExcerpts.length,
@@ -487,6 +490,31 @@ function renderExcerptCollection(excerpts, container, countBadge, emptyMessage, 
 
 function renderCurrentExcerpts() {
   renderExcerpts(applyReviewFilter(currentExcerpts));
+}
+
+function orderReviewExcerptsForRender(excerpts) {
+  if (!reviewPinnedRowOrder.length) {
+    return excerpts;
+  }
+
+  const pinnedSet = new Set(reviewPinnedRowOrder.map(Number));
+  const excerptByRow = new Map(excerpts.map(excerpt => [Number(excerpt.sourceRow), excerpt]));
+  const ordered = [];
+
+  reviewPinnedRowOrder.forEach(sourceRow => {
+    const excerpt = excerptByRow.get(Number(sourceRow));
+    if (excerpt) {
+      ordered.push(excerpt);
+    }
+  });
+
+  excerpts.forEach(excerpt => {
+    if (!pinnedSet.has(Number(excerpt.sourceRow))) {
+      ordered.push(excerpt);
+    }
+  });
+
+  return ordered;
 }
 
 function getSelectedReviewFilter() {
@@ -1042,6 +1070,10 @@ function getWordCountBadgeClass(wordCount) {
 }
 
 async function submitReview() {
+  const pinnedSourceRows = Array.from(
+    elements.excerptList.querySelectorAll(".excerpt-card")
+  ).map(card => Number(card.dataset.sourceRow)).filter(Boolean);
+
   return submitExcerptSet({
     sourceExcerpts: currentExcerpts,
     collectUpdates: collectUpdates,
@@ -1049,6 +1081,10 @@ async function submitReview() {
     reloadAction: "excerpts",
     afterReload: async refreshed => {
       currentExcerpts = refreshed.excerpts;
+      const remainingSourceRows = new Set(
+        refreshed.excerpts.map(excerpt => Number(excerpt.sourceRow))
+      );
+      reviewPinnedRowOrder = pinnedSourceRows.filter(sourceRow => remainingSourceRows.has(sourceRow));
       await loadCatalogValidation(refreshed.excerpts);
       renderCurrentExcerpts();
       loadBooks({ preserveSelection: true }).catch(() => {});
@@ -1180,6 +1216,7 @@ elements.showCorrectionsModule?.addEventListener("click", () => {
 if (elements.reviewFilter) {
   elements.reviewFilter.addEventListener("change", () => {
     reviewVisibleCount = REVIEW_BATCH_SIZE;
+    reviewPinnedRowOrder = [];
     renderCurrentExcerpts();
   });
 }
