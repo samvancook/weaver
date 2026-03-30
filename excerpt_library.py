@@ -72,6 +72,16 @@ def clean_whitespace(text: str | None) -> str:
     return re.sub(r"\s+", " ", (text or "")).strip()
 
 
+def preserve_excerpt_text(text: str | None) -> str:
+    raw = (text or "").replace("\r\n", "\n").replace("\r", "\n")
+    lines = [re.sub(r"[ \t]+", " ", line).strip() for line in raw.split("\n")]
+    while lines and not lines[0]:
+        lines.pop(0)
+    while lines and not lines[-1]:
+        lines.pop()
+    return "\n".join(lines).strip()
+
+
 def normalize_text(text: str | None) -> str:
     if not text:
         return ""
@@ -189,7 +199,7 @@ def build_imported_excerpt(
     author_column: str,
     id_column: str,
 ) -> ImportedExcerpt | None:
-    excerpt_text = clean_whitespace(record.get(text_column, ""))
+    excerpt_text = preserve_excerpt_text(record.get(text_column, ""))
     if not excerpt_text:
         return None
 
