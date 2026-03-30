@@ -36,16 +36,15 @@ body {
 }
 
 .hero-wordmark {
-  display: flex;
-  align-items: flex-end;
-  gap: 2px;
+  display: block;
+  margin: 0;
 }
 
-.hero-wordmark__mark {
-  width: clamp(40px, 5.8vw, 60px);
-  height: clamp(40px, 5.8vw, 60px);
-  flex: 0 0 auto;
-  transform: translateY(1px);
+.hero-wordmark__logo {
+  display: block;
+  width: min(380px, 62vw);
+  max-width: 100%;
+  height: auto;
 }
 
 .eyebrow {
