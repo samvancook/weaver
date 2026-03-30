@@ -8,6 +8,9 @@ import sys
 from functools import lru_cache
 from pathlib import Path
 
+from excerpt_library import DEFAULT_DB_PATH as EXCERPT_LIBRARY_DB_PATH
+from excerpt_library import find_library_excerpt_match
+
 DEFAULT_DB_PATH = Path(__file__).resolve().parent / "data" / "formal_catalog.db"
 LEGACY_DB_PATH = Path("/Users/buttonpublishingone/Desktop/CODEX/Social Media Dev/poetry_catalog/formal_catalog.db")
 DB_PATH = DEFAULT_DB_PATH if DEFAULT_DB_PATH.exists() else LEGACY_DB_PATH
@@ -84,6 +87,29 @@ def load_book_status_rows() -> list[dict]:
         connection.close()
 
 
+@lru_cache(maxsize=1)
+def load_author_alias_map() -> dict[int, set[str]]:
+    connection = sqlite3.connect(DB_PATH)
+    connection.row_factory = sqlite3.Row
+    try:
+        rows = connection.execute(
+            """
+            SELECT canonical_book_id, alias
+            FROM author_aliases
+            """
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return {}
+    finally:
+        connection.close()
+
+    alias_map: dict[int, set[str]] = {}
+    for row in rows:
+        canonical_book_id = int(row["canonical_book_id"])
+        alias_map.setdefault(canonical_book_id, set()).add(normalize(row["alias"]))
+    return alias_map
+
+
 def fetch_book_status(_cursor: sqlite3.Cursor, book_title: str) -> dict | None:
     query_aliases = title_aliases(book_title)
     if not query_aliases:
@@ -138,7 +164,19 @@ def find_global_excerpt_match(cursor: sqlite3.Cursor, snippets: list[str]) -> di
     return None
 
 
-def validate_record(cursor: sqlite3.Cursor, record: dict) -> dict:
+def load_excerpt_library_connection() -> sqlite3.Connection | None:
+    if not EXCERPT_LIBRARY_DB_PATH.exists():
+        return None
+    connection = sqlite3.connect(EXCERPT_LIBRARY_DB_PATH)
+    connection.row_factory = sqlite3.Row
+    return connection
+
+
+def validate_record(
+    cursor: sqlite3.Cursor,
+    record: dict,
+    excerpt_library_connection: sqlite3.Connection | None = None,
+) -> dict:
     book_title = record.get("bookTitle") or ""
     author = record.get("author") or ""
     poem_title = record.get("title") or ""
@@ -157,8 +195,17 @@ def validate_record(cursor: sqlite3.Cursor, record: dict) -> dict:
         "excerptMatchesInBook": False,
         "matchedPoemTitle": None,
         "globalExcerptMatch": None,
+        "libraryExcerptMatch": None,
         "status": "unvalidated",
     }
+
+    if excerpt_library_connection is not None:
+        result["libraryExcerptMatch"] = find_library_excerpt_match(
+            excerpt_library_connection,
+            excerpt_text=record.get("excerptText"),
+            book_title=book_title,
+            author=author,
+        )
 
     if not book_status:
         result["globalExcerptMatch"] = find_global_excerpt_match(cursor, snippets)
@@ -168,7 +215,12 @@ def validate_record(cursor: sqlite3.Cursor, record: dict) -> dict:
     result["bookEffectiveStatus"] = book_status["effective_status"]
     result["bookCanonicalTitle"] = book_status["title"]
     result["bookCanonicalAuthor"] = book_status["author"]
-    result["authorMatchesBook"] = normalize(author) == normalize(book_status["author"])
+    canonical_book_id = int(book_status["canonical_book_id"])
+    allowed_author_names = {
+        normalize(book_status["author"])
+    }
+    allowed_author_names.update(load_author_alias_map().get(canonical_book_id, set()))
+    result["authorMatchesBook"] = normalize(author) in allowed_author_names
 
     if book_status["effective_status"] == "skip_epub":
         result["status"] = "epub_not_present"
@@ -209,9 +261,15 @@ def main() -> int:
     connection = sqlite3.connect(DB_PATH)
     connection.row_factory = sqlite3.Row
     cursor = connection.cursor()
+    excerpt_library_connection = load_excerpt_library_connection()
     try:
-        results = [validate_record(cursor, record) for record in records]
+        results = [
+            validate_record(cursor, record, excerpt_library_connection=excerpt_library_connection)
+            for record in records
+        ]
     finally:
+        if excerpt_library_connection is not None:
+            excerpt_library_connection.close()
         connection.close()
     json.dump({"ok": True, "results": results}, sys.stdout)
     return 0
