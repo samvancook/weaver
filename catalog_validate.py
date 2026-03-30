@@ -23,6 +23,7 @@ def normalize(text: str | None) -> str:
     text = text.replace("—", " ").replace("–", " ")
     text = text.replace("&", " and ")
     text = text.replace("’", "'").replace("‘", "'")
+    text = re.sub(r'[\"“”`]', "", text)
     text = re.sub(r"\s+", " ", text)
     return text.strip()
 
