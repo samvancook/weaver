@@ -25,6 +25,14 @@ function sendJson(res, statusCode, body) {
   res.end(JSON.stringify(body, null, 2));
 }
 
+function escapeHtml(text) {
+  return String(text || "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
 function readRequestBody(req) {
   return new Promise((resolve, reject) => {
     let body = "";
@@ -66,6 +74,40 @@ function runCatalogValidation(records) {
     });
 
     child.stdin.write(JSON.stringify({ records }));
+    child.stdin.end();
+  });
+}
+
+function runCatalogPoemLookup(bookTitle, poemTitle) {
+  return new Promise((resolve, reject) => {
+    const child = spawn("python3", [path.join(__dirname, "catalog_poem_text.py")], {
+      env: {
+        ...process.env
+      }
+    });
+    let stdout = "";
+    let stderr = "";
+
+    child.stdout.on("data", chunk => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on("data", chunk => {
+      stderr += chunk.toString();
+    });
+    child.on("error", reject);
+    child.on("close", code => {
+      if (code !== 0) {
+        reject(new Error(stderr || `catalog_poem_text.py exited with code ${code}`));
+        return;
+      }
+      try {
+        resolve(JSON.parse(stdout));
+      } catch (error) {
+        reject(error);
+      }
+    });
+
+    child.stdin.write(JSON.stringify({ bookTitle, poemTitle }));
     child.stdin.end();
   });
 }
@@ -121,6 +163,54 @@ const server = http.createServer(async (req, res) => {
         ok: false,
         error: error.message
       });
+    }
+  }
+
+  if (url.pathname === "/catalog-poem" && req.method === "GET") {
+    try {
+      const bookTitle = url.searchParams.get("bookTitle") || "";
+      const poemTitle = url.searchParams.get("poemTitle") || "";
+      const result = await runCatalogPoemLookup(bookTitle, poemTitle);
+      const html = result.ok
+        ? `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>${escapeHtml(result.poemTitle)} · Weaver Catalog Context</title>
+  <style>
+    body { margin: 0; font-family: Georgia, "Times New Roman", serif; background: #f7f2ea; color: #1d1a17; }
+    main { max-width: 820px; margin: 0 auto; padding: 32px 24px 56px; }
+    .meta { color: #6b6259; font-size: 14px; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 12px; }
+    h1 { margin: 0 0 8px; font-size: clamp(30px, 5vw, 46px); line-height: 1.05; }
+    h2 { margin: 0 0 22px; font-size: 22px; color: #b84f2d; font-weight: 600; }
+    pre { white-space: pre-wrap; word-break: break-word; background: rgba(255,252,247,.92); border: 1px solid rgba(29,26,23,.1); border-radius: 24px; padding: 24px; font: 18px/1.7 Georgia, "Times New Roman", serif; box-shadow: 0 18px 40px rgba(62,39,27,.08); }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="meta">Catalog Poem Context · ${escapeHtml(result.wordCount || "")} words</div>
+    <h1>${escapeHtml(result.poemTitle)}</h1>
+    <h2>${escapeHtml(result.author)} · ${escapeHtml(result.bookTitle)}</h2>
+    <pre>${escapeHtml(result.text)}</pre>
+  </main>
+</body>
+</html>`
+        : `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /><title>Weaver Catalog Context</title></head>
+<body style="font-family: Georgia, 'Times New Roman', serif; background:#f7f2ea; color:#1d1a17; padding:32px;">
+  <h1 style="margin-top:0;">Catalog poem unavailable</h1>
+  <p>${escapeHtml(result.error || "Unable to load poem text.")}</p>
+</body>
+</html>`;
+      res.writeHead(result.ok ? 200 : 404, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(html);
+      return;
+    } catch (error) {
+      res.writeHead(500, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(`<html><body style="font-family: sans-serif; padding: 32px;"><h1>Catalog poem lookup failed</h1><p>${escapeHtml(error.message)}</p></body></html>`);
+      return;
     }
   }
 

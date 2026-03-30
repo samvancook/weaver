@@ -11,7 +11,9 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Iterable
 
-DEFAULT_DB_PATH = Path(__file__).resolve().parent / "data" / "excerpt_library.db"
+RUNTIME_DB_PATH = Path(__file__).resolve().parent / "data" / "excerpt_library_runtime.db"
+FULL_DB_PATH = Path(__file__).resolve().parent / "data" / "excerpt_library.db"
+DEFAULT_DB_PATH = FULL_DB_PATH if FULL_DB_PATH.exists() else RUNTIME_DB_PATH
 
 TEXT_COLUMN_FALLBACKS = (
     "Enter the Quote",

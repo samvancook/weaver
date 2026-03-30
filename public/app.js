@@ -478,7 +478,7 @@ function buildExcerptCard(excerpt, uniqueKey) {
     ? `<span class="badge badge--warn">${libraryMatch.matchType === "exact" ? "In library" : "Possible library match"}</span>`
     : "";
 
-  const validationMarkup = buildValidationMarkup(validation);
+  const validationMarkup = buildValidationMarkup(validation, excerpt);
   const reviewDecision = normalizeDecision(excerpt.excerptReviewDecision);
   const useForQi = Boolean(excerpt.useForQi ?? excerpt.useForGraphicsQi);
   const useForInt = Boolean(excerpt.useForInt ?? excerpt.useForPhotos);
@@ -587,10 +587,25 @@ function buildExcerptCard(excerpt, uniqueKey) {
     }
   }
 
+  card.querySelectorAll(".catalog-poem-link").forEach(link => {
+    link.addEventListener("click", event => {
+      event.preventDefault();
+      const href = link.getAttribute("href");
+      if (!href) {
+        return;
+      }
+      window.open(
+        href,
+        "weaverCatalogPoem",
+        "popup=yes,width=760,height=860,scrollbars=yes,resizable=yes"
+      );
+    });
+  });
+
   return card;
 }
 
-function buildValidationMarkup(validation) {
+function buildValidationMarkup(validation, excerpt) {
   if (!validation) {
     return `<p class="validation validation--pending">Catalog validation unavailable for this excerpt.</p>`;
   }
@@ -600,21 +615,22 @@ function buildValidationMarkup(validation) {
     validation.bookCanonicalAuthor
   ].filter(Boolean).join(" - ");
   const libraryMarkup = buildLibraryMatchMarkup(validation.libraryExcerptMatch);
+  const poemLink = buildCatalogPoemLink(validation, excerpt);
 
   if (validation.status === "catalog_match") {
-    return `<p class="validation validation--good">Catalog match: ${escapeHtml(canonical || "confirmed")}.</p>${libraryMarkup}`;
+    return `<p class="validation validation--good">Catalog match: ${escapeHtml(canonical || "confirmed")}. ${poemLink}</p>${libraryMarkup}`;
   }
 
   if (validation.status === "author_mismatch") {
-    return `<p class="validation validation--warn">Author mismatch. Catalog says ${escapeHtml(canonical || "different author")}.</p>${libraryMarkup}`;
+    return `<p class="validation validation--warn">Author mismatch. Catalog says ${escapeHtml(canonical || "different author")}. ${poemLink}</p>${libraryMarkup}`;
   }
 
   if (validation.status === "title_mismatch") {
-    return `<p class="validation validation--warn">Excerpt matches the catalog, but the poem title appears wrong. Catalog match: ${escapeHtml(validation.matchedPoemTitle || "different title")}.</p>${libraryMarkup}`;
+    return `<p class="validation validation--warn">Excerpt matches the catalog, but the poem title appears wrong. Catalog match: ${escapeHtml(validation.matchedPoemTitle || "different title")}. ${poemLink}</p>${libraryMarkup}`;
   }
 
   if (validation.status === "poem_title_match_only") {
-    return `<p class="validation validation--warn">Poem title matches this book, but the excerpt text did not match the catalog text.</p>${libraryMarkup}`;
+    return `<p class="validation validation--warn">Poem title matches this book, but the excerpt text did not match the catalog text. ${poemLink}</p>${libraryMarkup}`;
   }
 
   if (validation.status === "epub_not_present") {
@@ -622,7 +638,7 @@ function buildValidationMarkup(validation) {
   }
 
   if (validation.status === "excerpt_not_found_in_book" && validation.globalExcerptMatch) {
-    return `<p class="validation validation--warn">Excerpt not found in ${escapeHtml(validation.bookCanonicalTitle || "this book")}. Closest catalog hit: ${escapeHtml(validation.globalExcerptMatch.book_title)} / ${escapeHtml(validation.globalExcerptMatch.poem_title)} by ${escapeHtml(validation.globalExcerptMatch.author)}.</p>${libraryMarkup}`;
+    return `<p class="validation validation--warn">Excerpt not found in ${escapeHtml(validation.bookCanonicalTitle || "this book")}. Closest catalog hit: ${escapeHtml(validation.globalExcerptMatch.book_title)} / ${escapeHtml(validation.globalExcerptMatch.poem_title)} by ${escapeHtml(validation.globalExcerptMatch.author)}. ${poemLink}</p>${libraryMarkup}`;
   }
 
   if (validation.status === "book_not_found") {
@@ -630,6 +646,25 @@ function buildValidationMarkup(validation) {
   }
 
   return `<p class="validation validation--warn">Catalog check: ${escapeHtml(validation.status)}.</p>${libraryMarkup}`;
+}
+
+function buildCatalogPoemLink(validation, excerpt) {
+  let bookTitle = validation.bookCanonicalTitle || excerpt.bookTitle || "";
+  let poemTitle = validation.matchedPoemTitle || excerpt.title || "";
+
+  if (validation.status === "excerpt_not_found_in_book" && validation.globalExcerptMatch) {
+    bookTitle = validation.globalExcerptMatch.book_title || bookTitle;
+    poemTitle = validation.globalExcerptMatch.poem_title || poemTitle;
+  }
+
+  if (!bookTitle || !poemTitle) {
+    return "";
+  }
+
+  const url = new URL("/catalog-poem", window.location.origin);
+  url.searchParams.set("bookTitle", bookTitle);
+  url.searchParams.set("poemTitle", poemTitle);
+  return `<a class="catalog-poem-link" href="${escapeHtml(url.toString())}" target="_blank" rel="noreferrer">View catalog poem</a>`;
 }
 
 function buildLibraryMatchMarkup(match) {

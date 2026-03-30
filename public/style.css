@@ -111,6 +111,15 @@ body {
   border-color: rgba(191, 158, 86, 0.28);
 }
 
+.validation a {
+  color: var(--support);
+  font-weight: 700;
+}
+
+.validation a:hover {
+  color: #214449;
+}
+
 .module-panel {
   display: none;
 }
