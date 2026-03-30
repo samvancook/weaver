@@ -228,11 +228,11 @@ def validate_record(
         return result
 
     poems = fetch_poems_for_book(cursor, int(book_status["canonical_book_id"]))
-    normalized_poem_title = normalize(poem_title)
+    normalized_poem_title = normalize_title(poem_title)
 
     for poem in poems:
         poem_text = normalize(poem["text"])
-        if normalize(poem["title"]) == normalized_poem_title:
+        if normalize_title(poem["title"]) == normalized_poem_title:
             result["poemTitleMatchesInBook"] = True
         if any(snippet and snippet in poem_text for snippet in snippets):
             result["excerptMatchesInBook"] = True
@@ -240,7 +240,7 @@ def validate_record(
             break
 
     if result["excerptMatchesInBook"]:
-        title_matches_excerpt = normalize(result["matchedPoemTitle"]) == normalized_poem_title
+        title_matches_excerpt = normalize_title(result["matchedPoemTitle"]) == normalized_poem_title
         if not result["authorMatchesBook"]:
             result["status"] = "author_mismatch"
         elif title_matches_excerpt:
