@@ -4,13 +4,27 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Weaver</title>
-  <link rel="stylesheet" href="/style.css?v=20260330a" />
+  <link rel="icon" type="image/svg+xml" href="/weaver-mark.svg" />
+  <script>
+    (function() {
+      const isLocalhost = ["127.0.0.1", "localhost"].includes(window.location.hostname);
+      window.WEAVER_CONFIG = {
+        appVersion: "2026-03-30d",
+        apiBaseUrl: "https://script.google.com/macros/s/AKfycbyfAPOSuMPbTmwTzIzvEIABHdl8H07NytFh9AjBGJbnNwNvCgHkE6yCw9mVfHRCbP11fg/exec",
+        lockApiBaseUrl: !isLocalhost
+      };
+    })();
+  </script>
+  <link rel="stylesheet" href="/style.css?v=20260330d" />
 </head>
 <body>
   <div class="shell">
     <header class="hero">
       <p class="eyebrow">Button Internal Tool</p>
-      <h1>Weaver</h1>
+      <h1 class="hero-wordmark">
+        <img class="hero-wordmark__mark" src="/weaver-mark.svg" alt="" />
+        <span>eaver</span>
+      </h1>
       <p class="lede">
         Select a book, review excerpts, and submit decisions back to the working sheet.
       </p>
@@ -27,7 +41,7 @@
     </header>
 
     <main class="grid">
-      <section class="panel panel--wide panel--compact">
+      <section class="panel panel--wide panel--compact" id="connection-panel-shell">
         <details class="connection-panel">
           <summary class="connection-panel__summary">
             <span>Connection</span>
@@ -124,13 +138,13 @@
       <section class="panel panel--wide">
         <div class="panel__header">
           <h2>Status</h2>
-          <span class="badge badge--muted">Dev</span>
+          <span class="badge badge--muted" id="app-mode-badge">Dev</span>
         </div>
         <pre id="status-output">Ready.</pre>
       </section>
     </main>
   </div>
 
-  <script src="/app.js?v=20260330a"></script>
+  <script src="/app.js?v=20260330d"></script>
 </body>
 </html>

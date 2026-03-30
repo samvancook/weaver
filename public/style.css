@@ -35,6 +35,20 @@ body {
   padding: 28px 28px 10px;
 }
 
+.hero-wordmark {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.hero-wordmark__mark {
+  width: clamp(44px, 6.3vw, 68px);
+  height: clamp(44px, 6.3vw, 68px);
+  flex: 0 0 auto;
+  transform: translateY(3px);
+  filter: drop-shadow(0 10px 20px rgba(62, 39, 27, 0.12));
+}
+
 .eyebrow {
   margin: 0 0 10px;
   font: 700 12px/1.2 "Helvetica Neue", Arial, sans-serif;

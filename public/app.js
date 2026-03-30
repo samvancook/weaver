@@ -1,6 +1,8 @@
 const storageKey = "weaver.appsScriptUrl";
+const runtimeConfig = window.WEAVER_CONFIG || {};
 
 const elements = {
+  connectionPanelShell: document.getElementById("connection-panel-shell"),
   apiBaseUrl: document.getElementById("api-base-url"),
   saveApiUrl: document.getElementById("save-api-url"),
   showReviewModule: document.getElementById("show-review-module"),
@@ -20,6 +22,7 @@ const elements = {
   submitCorrections: document.getElementById("submit-corrections"),
   correctionList: document.getElementById("correction-list"),
   statusOutput: document.getElementById("status-output"),
+  appModeBadge: document.getElementById("app-mode-badge"),
   bookCountBadge: document.getElementById("book-count-badge"),
   excerptCountBadge: document.getElementById("excerpt-count-badge"),
   correctionBookCountBadge: document.getElementById("correction-book-count-badge"),
@@ -55,6 +58,10 @@ function getApiBaseUrl() {
 }
 
 function saveApiBaseUrl() {
+  if (runtimeConfig.lockApiBaseUrl) {
+    setStatus("This hosted Weaver environment is pinned to the production Apps Script backend.");
+    return;
+  }
   const value = getApiBaseUrl();
   localStorage.setItem(storageKey, value);
   setStatus("Saved Apps Script URL.");
@@ -64,8 +71,26 @@ function saveApiBaseUrl() {
 }
 
 function restoreApiBaseUrl() {
+  if (runtimeConfig.apiBaseUrl) {
+    elements.apiBaseUrl.value = runtimeConfig.apiBaseUrl;
+    elements.apiBaseUrl.readOnly = Boolean(runtimeConfig.lockApiBaseUrl);
+    if (elements.saveApiUrl) {
+      elements.saveApiUrl.disabled = Boolean(runtimeConfig.lockApiBaseUrl);
+    }
+    return;
+  }
   const saved = localStorage.getItem(storageKey) || "";
   elements.apiBaseUrl.value = saved;
+}
+
+function applyRuntimeMode() {
+  const isLocked = Boolean(runtimeConfig.lockApiBaseUrl);
+  if (elements.appModeBadge) {
+    elements.appModeBadge.textContent = isLocked ? "Hosted" : "Dev";
+  }
+  if (elements.connectionPanelShell) {
+    elements.connectionPanelShell.hidden = isLocked;
+  }
 }
 
 function setActiveModule(moduleName) {
@@ -946,9 +971,10 @@ if (elements.reviewFilter) {
 }
 
 restoreApiBaseUrl();
+applyRuntimeMode();
 setActiveModule("review");
 if (getApiBaseUrl()) {
-  setStatus("Ready. Loading books...");
+  setStatus(`Ready${runtimeConfig.appVersion ? ` (${runtimeConfig.appVersion})` : ""}. Loading books...`);
   loadBooks();
 } else {
   setStatus("Ready. Save the Apps Script URL, then books will load automatically.");
