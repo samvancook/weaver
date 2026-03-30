@@ -4,25 +4,25 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Weaver</title>
-  <link rel="icon" type="image/png" href="/weaver-logo.png?v=20260330h" />
+  <link rel="icon" type="image/png" href="/weaver-logo.png?v=20260330i" />
   <script>
     (function() {
       const isLocalhost = ["127.0.0.1", "localhost"].includes(window.location.hostname);
       window.WEAVER_CONFIG = {
-        appVersion: "2026-03-30h",
+        appVersion: "2026-03-30i",
         apiBaseUrl: "https://script.google.com/macros/s/AKfycbyfAPOSuMPbTmwTzIzvEIABHdl8H07NytFh9AjBGJbnNwNvCgHkE6yCw9mVfHRCbP11fg/exec",
         lockApiBaseUrl: !isLocalhost
       };
     })();
   </script>
-  <link rel="stylesheet" href="/style.css?v=20260330h" />
+  <link rel="stylesheet" href="/style.css?v=20260330i" />
 </head>
 <body>
   <div class="shell">
     <header class="hero">
       <p class="eyebrow">Button Internal Tool</p>
       <h1 class="hero-wordmark">
-        <img class="hero-wordmark__logo" src="/weaver-logo.png?v=20260330h" alt="Weaver" />
+        <img class="hero-wordmark__logo" src="/weaver-logo.png?v=20260330i" alt="Weaver" />
       </h1>
       <p class="lede">
         Select a book, review excerpts, and submit decisions back to the working sheet.
@@ -79,7 +79,8 @@
             <select id="review-filter">
               <option value="all">All pending</option>
               <option value="new_only">New to library only</option>
-              <option value="existing_library">Already in library</option>
+              <option value="exact_library">Exact library matches</option>
+              <option value="possible_library">Possible library matches</option>
               <option value="likely_correction">Likely need correction</option>
               <option value="good_only">Good content only</option>
             </select>
@@ -87,7 +88,7 @@
           <button id="load-excerpts" class="button">Load Excerpts</button>
         </div>
         <p class="hint" id="book-selection-hint">
-          Use `New to library only` to focus on net-new approvals, or `Already in library` to quickly skip records that already exist in the excerpt database.
+          Use `New to library only` for net-new approvals, `Exact library matches` for fast duplicate rejection, and `Possible library matches` when a human check is still needed.
         </p>
       </section>
 
@@ -144,6 +145,6 @@
     </main>
   </div>
 
-  <script src="/app.js?v=20260330g"></script>
+  <script src="/app.js?v=20260330i"></script>
 </body>
 </html>

@@ -34,6 +34,9 @@ let currentCorrectionExcerpts = [];
 let isSaving = false;
 let currentValidationByRecordId = new Map();
 let currentModule = "review";
+let reviewVisibleCount = 25;
+
+const REVIEW_BATCH_SIZE = 25;
 
 function setStatus(message, details) {
   elements.statusOutput.textContent = details
@@ -206,6 +209,7 @@ async function loadExcerpts() {
     }
 
     currentExcerpts = data.excerpts;
+    reviewVisibleCount = REVIEW_BATCH_SIZE;
     await loadCatalogValidation(data.excerpts);
     renderCurrentExcerpts();
     setStatus(`Loaded ${data.excerpts.length} excerpts for "${bookTitle}". Backend ${data.version || "unknown"}.`);
@@ -319,7 +323,18 @@ async function loadCatalogValidation(excerpts) {
 }
 
 function renderExcerpts(excerpts) {
-  renderExcerptCollection(excerpts, elements.excerptList, elements.excerptCountBadge, getEmptyStateMessage());
+  const totalMatching = excerpts.length;
+  const visibleExcerpts = excerpts.slice(0, reviewVisibleCount);
+  renderExcerptCollection(visibleExcerpts, elements.excerptList, elements.excerptCountBadge, getEmptyStateMessage(), {
+    totalMatching,
+    visibleCount: visibleExcerpts.length,
+    batchSize: REVIEW_BATCH_SIZE,
+    canShowMore: totalMatching > visibleExcerpts.length,
+    onShowMore: () => {
+      reviewVisibleCount += REVIEW_BATCH_SIZE;
+      renderCurrentExcerpts();
+    }
+  });
 }
 
 function renderCorrectionExcerpts(excerpts) {
@@ -331,11 +346,15 @@ function renderCorrectionExcerpts(excerpts) {
   );
 }
 
-function renderExcerptCollection(excerpts, container, countBadge, emptyMessage) {
+function renderExcerptCollection(excerpts, container, countBadge, emptyMessage, options = {}) {
+  const totalMatching = options.totalMatching ?? excerpts.length;
+  const visibleCount = options.visibleCount ?? excerpts.length;
   container.innerHTML = "";
-  countBadge.textContent = `${excerpts.length} Excerpts`;
+  countBadge.textContent = totalMatching > visibleCount
+    ? `${visibleCount} of ${totalMatching} Excerpts`
+    : `${visibleCount} Excerpts`;
 
-  if (!excerpts.length) {
+  if (!visibleCount) {
     const empty = document.createElement("p");
     empty.className = "empty-state";
     empty.textContent = emptyMessage;
@@ -363,6 +382,19 @@ function renderExcerptCollection(excerpts, container, countBadge, emptyMessage) 
 
     container.appendChild(section);
   });
+
+  if (options.canShowMore) {
+    const controls = document.createElement("div");
+    controls.className = "excerpt-batch-controls";
+    controls.innerHTML = `
+      <p class="hint excerpt-batch-controls__hint">Showing ${visibleCount} of ${totalMatching} matching excerpts.</p>
+      <button type="button" class="button button--secondary excerpt-batch-controls__button">
+        Show next ${options.batchSize || REVIEW_BATCH_SIZE}
+      </button>
+    `;
+    controls.querySelector("button")?.addEventListener("click", options.onShowMore);
+    container.appendChild(controls);
+  }
 }
 
 function renderCurrentExcerpts() {
@@ -378,8 +410,14 @@ function applyReviewFilter(excerpts) {
   if (mode === "new_only") {
     return excerpts.filter(excerpt => !hasLibraryExcerptMatch(excerpt));
   }
-  if (mode === "existing_library") {
-    return excerpts.filter(excerpt => hasLibraryExcerptMatch(excerpt));
+  if (mode === "exact_library") {
+    return excerpts.filter(excerpt => getLibraryMatchType(excerpt) === "exact");
+  }
+  if (mode === "possible_library") {
+    return excerpts.filter(excerpt => {
+      const matchType = getLibraryMatchType(excerpt);
+      return Boolean(matchType && matchType !== "exact");
+    });
   }
   if (mode === "likely_correction") {
     return excerpts.filter(excerpt => isLikelyCorrectionExcerpt(excerpt));
@@ -404,6 +442,13 @@ function hasLibraryExcerptMatch(excerpt) {
   return Boolean(validation && validation.libraryExcerptMatch);
 }
 
+function getLibraryMatchType(excerpt) {
+  const validation =
+    currentValidationByRecordId.get(excerpt.recordId || String(excerpt.sourceRow)) || null;
+
+  return validation?.libraryExcerptMatch?.matchType || "";
+}
+
 function isLikelyCorrectionStatus(status) {
   return [
     "author_mismatch",
@@ -426,8 +471,11 @@ function getEmptyStateMessage() {
   if (getSelectedReviewFilter() === "new_only") {
     return "No currently loaded excerpts appear to be net new to the excerpt library.";
   }
-  if (getSelectedReviewFilter() === "existing_library") {
-    return "No currently loaded excerpts were matched against the excerpt library.";
+  if (getSelectedReviewFilter() === "exact_library") {
+    return "No currently loaded excerpts are exact matches to the excerpt library.";
+  }
+  if (getSelectedReviewFilter() === "possible_library") {
+    return "No currently loaded excerpts are possible matches to the excerpt library.";
   }
   if (getSelectedReviewFilter() === "likely_correction") {
     return "No pending excerpts in this book are currently flagged as likely needing correction.";
@@ -475,7 +523,7 @@ function buildExcerptCard(excerpt, uniqueKey) {
       : "";
   const libraryMatch = validation?.libraryExcerptMatch || null;
   const libraryBadge = libraryMatch
-    ? `<span class="badge badge--warn">${libraryMatch.matchType === "exact" ? "In library" : "Possible library match"}</span>`
+    ? `<span class="badge badge--warn">${libraryMatch.matchType === "exact" ? "Exact library match" : "Possible library match"}</span>`
     : "";
 
   const validationMarkup = buildValidationMarkup(validation, excerpt);
@@ -505,7 +553,7 @@ function buildExcerptCard(excerpt, uniqueKey) {
   const qcBadge = excerpt.quoteCreatedQc === "Y"
     ? `<span class="badge badge--signal">Made + QCed</span>`
     : "";
-  const currentDecision = reviewDecision;
+  const currentDecision = reviewDecision || (libraryMatch?.matchType === "exact" ? "reject" : "");
   const wordCount = resolveWordCount(excerpt);
   const wordCountBadgeClass = getWordCountBadgeClass(wordCount);
   const wordCountTooltip = '10-25 words is often the sweet spot for readability. Longer excerpts should still be considered and can work as EXC, INT or QI in some cases.';
@@ -1025,6 +1073,7 @@ elements.showCorrectionsModule?.addEventListener("click", () => {
 });
 if (elements.reviewFilter) {
   elements.reviewFilter.addEventListener("change", () => {
+    reviewVisibleCount = REVIEW_BATCH_SIZE;
     renderCurrentExcerpts();
   });
 }

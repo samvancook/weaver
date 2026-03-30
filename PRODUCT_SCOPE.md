@@ -132,6 +132,12 @@ Use the same shape as the current Poetry Please apps:
 4. overlap review
 5. graphics-facing export
 
+## Near-Term Weaver Review UX
+
+- split excerpt-library review into `Exact library matches` and `Possible library matches`
+- default exact library matches to `Reject` so duplicate cleanup is faster and safer for interns
+- keep bulk actions out of the current flow for now, but revisit them once the exact-match lane feels reliable
+
 ## Non-Goals For MVP
 
 - full visual graphic creation inside the app

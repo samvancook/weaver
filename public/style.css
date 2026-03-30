@@ -328,6 +328,19 @@ textarea {
   margin-top: 16px;
 }
 
+.excerpt-batch-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 4px 0;
+  flex-wrap: wrap;
+}
+
+.excerpt-batch-controls__hint {
+  margin: 0;
+}
+
 .poem-group {
   display: grid;
   gap: 12px;
