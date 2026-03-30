@@ -112,6 +112,40 @@ function runCatalogPoemLookup(bookTitle, poemTitle) {
   });
 }
 
+function runLibraryExcerptLookup(sourceRow) {
+  return new Promise((resolve, reject) => {
+    const child = spawn("python3", [path.join(__dirname, "excerpt_library_text.py")], {
+      env: {
+        ...process.env
+      }
+    });
+    let stdout = "";
+    let stderr = "";
+
+    child.stdout.on("data", chunk => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on("data", chunk => {
+      stderr += chunk.toString();
+    });
+    child.on("error", reject);
+    child.on("close", code => {
+      if (code !== 0) {
+        reject(new Error(stderr || `excerpt_library_text.py exited with code ${code}`));
+        return;
+      }
+      try {
+        resolve(JSON.parse(stdout));
+      } catch (error) {
+        reject(error);
+      }
+    });
+
+    child.stdin.write(JSON.stringify({ sourceRow }));
+    child.stdin.end();
+  });
+}
+
 async function serveFile(res, filePath) {
   try {
     const data = await readFile(filePath);
@@ -210,6 +244,53 @@ const server = http.createServer(async (req, res) => {
     } catch (error) {
       res.writeHead(500, { "Content-Type": "text/html; charset=utf-8" });
       res.end(`<html><body style="font-family: sans-serif; padding: 32px;"><h1>Catalog poem lookup failed</h1><p>${escapeHtml(error.message)}</p></body></html>`);
+      return;
+    }
+  }
+
+  if (url.pathname === "/library-excerpt" && req.method === "GET") {
+    try {
+      const sourceRow = Number(url.searchParams.get("sourceRow") || 0);
+      const result = await runLibraryExcerptLookup(sourceRow);
+      const html = result.ok
+        ? `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Excerpt Library Match · ${escapeHtml(result.poemTitle || "Weaver")}</title>
+  <style>
+    body { margin: 0; font-family: Georgia, "Times New Roman", serif; background: #f7f2ea; color: #1d1a17; }
+    main { max-width: 820px; margin: 0 auto; padding: 32px 24px 56px; }
+    .meta { color: #6b6259; font-size: 14px; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 12px; }
+    h1 { margin: 0 0 8px; font-size: clamp(30px, 5vw, 46px); line-height: 1.05; }
+    h2 { margin: 0 0 22px; font-size: 22px; color: #b84f2d; font-weight: 600; }
+    pre { white-space: pre-wrap; word-break: break-word; background: rgba(255,252,247,.92); border: 1px solid rgba(29,26,23,.1); border-radius: 24px; padding: 24px; font: 18px/1.7 Georgia, "Times New Roman", serif; box-shadow: 0 18px 40px rgba(62,39,27,.08); }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="meta">Excerpt Library Match · Row ${escapeHtml(result.sourceRow)}${result.wordCount ? ` · ${escapeHtml(result.wordCount)} words` : ""}</div>
+    <h1>${escapeHtml(result.poemTitle || "Untitled")}</h1>
+    <h2>${escapeHtml(result.author || "Unknown author")}${result.bookTitle ? ` · ${escapeHtml(result.bookTitle)}` : ""}</h2>
+    <pre>${escapeHtml(result.text)}</pre>
+  </main>
+</body>
+</html>`
+        : `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /><title>Excerpt Library Match</title></head>
+<body style="font-family: Georgia, 'Times New Roman', serif; background:#f7f2ea; color:#1d1a17; padding:32px;">
+  <h1 style="margin-top:0;">Library excerpt unavailable</h1>
+  <p>${escapeHtml(result.error || "Unable to load excerpt text.")}</p>
+</body>
+</html>`;
+      res.writeHead(result.ok ? 200 : 404, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(html);
+      return;
+    } catch (error) {
+      res.writeHead(500, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(`<html><body style="font-family: sans-serif; padding: 32px;"><h1>Library excerpt lookup failed</h1><p>${escapeHtml(error.message)}</p></body></html>`);
       return;
     }
   }

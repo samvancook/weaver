@@ -601,6 +601,20 @@ function buildExcerptCard(excerpt, uniqueKey) {
       );
     });
   });
+  card.querySelectorAll(".library-excerpt-link").forEach(link => {
+    link.addEventListener("click", event => {
+      event.preventDefault();
+      const href = link.getAttribute("href");
+      if (!href) {
+        return;
+      }
+      window.open(
+        href,
+        "weaverLibraryExcerpt",
+        "popup=yes,width=760,height=860,scrollbars=yes,resizable=yes"
+      );
+    });
+  });
 
   return card;
 }
@@ -682,8 +696,18 @@ function buildLibraryMatchMarkup(match) {
     match.poemTitle,
     match.author
   ].filter(Boolean).join(" / ");
+  const excerptLink = buildLibraryExcerptLink(match);
+  return `<p class="validation validation--warn">${escapeHtml(label)} ${escapeHtml(meta || "Existing source row")}${match.sourceRow ? `, row ${escapeHtml(String(match.sourceRow))}` : ""}. ${excerptLink}</p>`;
+}
 
-  return `<p class="validation validation--warn">${escapeHtml(label)} ${escapeHtml(meta || "Existing source row")}${match.sourceRow ? `, row ${escapeHtml(String(match.sourceRow))}` : ""}.</p>`;
+function buildLibraryExcerptLink(match) {
+  if (!match || !match.sourceRow) {
+    return "";
+  }
+
+  const url = new URL("/library-excerpt", window.location.origin);
+  url.searchParams.set("sourceRow", String(match.sourceRow));
+  return `<a class="library-excerpt-link" href="${escapeHtml(url.toString())}" target="_blank" rel="noreferrer">View library excerpt</a>`;
 }
 
 function slugify(text) {

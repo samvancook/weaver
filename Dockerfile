@@ -13,6 +13,7 @@ COPY server.mjs ./server.mjs
 COPY catalog_validate.py ./catalog_validate.py
 COPY catalog_poem_text.py ./catalog_poem_text.py
 COPY excerpt_library.py ./excerpt_library.py
+COPY excerpt_library_text.py ./excerpt_library_text.py
 COPY data ./data
 
 ENV PORT=8080
