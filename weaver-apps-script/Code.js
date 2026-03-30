@@ -1,5 +1,5 @@
 const WEAVER_CONFIG = {
-  version: "2026-03-27-review-qi-int-1",
+  version: "2026-03-30-explicit-review-only-1",
   spreadsheetId: "1yTCRQKAavimDEJka1-Ice4xlJ1mCm8hq0-G1PTQkTLM",
   sourceSheetName: "Excerpt Tool 1.20",
   startRow: 2,
@@ -605,7 +605,6 @@ function ensureWeaverReviewColumns_(sourceSheet) {
     }
   });
 
-  backfillExcerptReviewDecisions_(sourceSheet, WEAVER_CONFIG);
   backfillUseForInt_(sourceSheet, WEAVER_CONFIG);
 }
 
@@ -726,45 +725,7 @@ function getExcerptReviewDecisionFromRow_(row, config) {
   const statusIndicator = cleanWhitespace_(row[config.columnMap.statusIndicator - 1]).toUpperCase();
   if (statusIndicator === "NEEDS_CORRECTION") return "NEEDS_CORRECTION";
 
-  const approved = cleanWhitespace_(row[config.columnMap.approved - 1]).toUpperCase();
-  if (approved === "Y") return "ACCEPT";
-  if (approved === "N") return "REJECT";
-
   return "";
-}
-
-function backfillExcerptReviewDecisions_(sourceSheet, config) {
-  const lastRow = sourceSheet.getLastRow();
-  if (lastRow < config.startRow) return;
-
-  const rowCount = lastRow - config.startRow + 1;
-  const values = sourceSheet
-    .getRange(config.startRow, config.columnMap.approved, rowCount, config.columnMap.excerptReviewDecision - config.columnMap.approved + 1)
-    .getValues();
-
-  const updates = [];
-  values.forEach(function(row, index) {
-    const existingDecision = cleanWhitespace_(row[config.columnMap.excerptReviewDecision - config.columnMap.approved]);
-    if (existingDecision) return;
-
-    const derivedDecision = getExcerptReviewDecisionFromRow_(row, {
-      columnMap: {
-        approved: 1,
-        statusIndicator: 2,
-        excerptReviewDecision: config.columnMap.excerptReviewDecision - config.columnMap.approved + 1
-      }
-    });
-    if (!derivedDecision) return;
-
-    updates.push({
-      rowNumber: config.startRow + index,
-      value: derivedDecision
-    });
-  });
-
-  updates.forEach(function(update) {
-    sourceSheet.getRange(update.rowNumber, config.columnMap.excerptReviewDecision).setValue(update.value);
-  });
 }
 
 function backfillUseForInt_(sourceSheet, config) {
