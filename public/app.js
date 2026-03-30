@@ -179,15 +179,26 @@ function openComparisonWindow(href, windowName) {
     `height=${height}`,
     `left=${Math.round(left)}`,
     `top=${Math.round(top)}`,
+    "toolbar=no",
+    "menubar=no",
+    "location=no",
+    "status=no",
     "scrollbars=yes",
     "resizable=yes"
   ].join(",");
-  const popup = window.open(href, windowName, features);
+  const popup = window.open("", windowName, features);
 
   if (popup) {
+    try {
+      popup.moveTo(Math.round(left), Math.round(top));
+      popup.resizeTo(width, height);
+    } catch (_error) {
+      // Ignore browser restrictions on popup positioning.
+    }
+    popup.location.replace(href);
     popup.focus();
   } else {
-    window.open(href, "_blank", "noreferrer");
+    window.open(href, "_blank", "noopener,noreferrer");
   }
 }
 
@@ -759,7 +770,7 @@ function buildExcerptCard(excerpt, uniqueKey) {
   card.querySelectorAll(".catalog-poem-link").forEach(link => {
     link.addEventListener("click", event => {
       event.preventDefault();
-      const href = link.getAttribute("href");
+      const href = link.dataset.popupUrl;
       if (!href) {
         return;
       }
@@ -769,7 +780,7 @@ function buildExcerptCard(excerpt, uniqueKey) {
   card.querySelectorAll(".library-excerpt-link").forEach(link => {
     link.addEventListener("click", event => {
       event.preventDefault();
-      const href = link.getAttribute("href");
+      const href = link.dataset.popupUrl;
       if (!href) {
         return;
       }
@@ -839,7 +850,7 @@ function buildCatalogPoemLink(validation, excerpt) {
   const url = new URL("/catalog-poem", window.location.origin);
   url.searchParams.set("bookTitle", bookTitle);
   url.searchParams.set("poemTitle", poemTitle);
-  return `<a class="catalog-poem-link" href="${escapeHtml(url.toString())}" target="_blank" rel="noreferrer">View catalog poem</a>`;
+  return `<button type="button" class="catalog-poem-link button-link" data-popup-url="${escapeHtml(url.toString())}">View catalog poem</button>`;
 }
 
 function buildLibraryMatchMarkup(match) {
@@ -895,7 +906,7 @@ function buildLibraryExcerptLink(match) {
 
   const url = new URL("/library-excerpt", window.location.origin);
   url.searchParams.set("sourceRow", String(match.sourceRow));
-  return `<a class="library-excerpt-link" href="${escapeHtml(url.toString())}" target="_blank" rel="noreferrer">View library excerpt</a>`;
+  return `<button type="button" class="library-excerpt-link button-link" data-popup-url="${escapeHtml(url.toString())}">View library excerpt</button>`;
 }
 
 function slugify(text) {
