@@ -350,6 +350,12 @@ function getSelectedReviewFilter() {
 
 function applyReviewFilter(excerpts) {
   const mode = getSelectedReviewFilter();
+  if (mode === "new_only") {
+    return excerpts.filter(excerpt => !hasLibraryExcerptMatch(excerpt));
+  }
+  if (mode === "existing_library") {
+    return excerpts.filter(excerpt => hasLibraryExcerptMatch(excerpt));
+  }
   if (mode === "likely_correction") {
     return excerpts.filter(excerpt => isLikelyCorrectionExcerpt(excerpt));
   }
@@ -364,6 +370,13 @@ function isLikelyCorrectionExcerpt(excerpt) {
     currentValidationByRecordId.get(excerpt.recordId || String(excerpt.sourceRow)) || null;
 
   return Boolean(validation && isLikelyCorrectionStatus(validation.status));
+}
+
+function hasLibraryExcerptMatch(excerpt) {
+  const validation =
+    currentValidationByRecordId.get(excerpt.recordId || String(excerpt.sourceRow)) || null;
+
+  return Boolean(validation && validation.libraryExcerptMatch);
 }
 
 function isLikelyCorrectionStatus(status) {
@@ -385,6 +398,12 @@ function isGoodContentExcerpt(excerpt) {
 }
 
 function getEmptyStateMessage() {
+  if (getSelectedReviewFilter() === "new_only") {
+    return "No currently loaded excerpts appear to be net new to the excerpt library.";
+  }
+  if (getSelectedReviewFilter() === "existing_library") {
+    return "No currently loaded excerpts were matched against the excerpt library.";
+  }
   if (getSelectedReviewFilter() === "likely_correction") {
     return "No pending excerpts in this book are currently flagged as likely needing correction.";
   }
@@ -429,6 +448,10 @@ function buildExcerptCard(excerpt, uniqueKey) {
     excerpt.duplicateGroupId
       ? `<span class="badge badge--signal">Group ${escapeHtml(excerpt.duplicateGroupId)}</span>`
       : "";
+  const libraryMatch = validation?.libraryExcerptMatch || null;
+  const libraryBadge = libraryMatch
+    ? `<span class="badge badge--warn">${libraryMatch.matchType === "exact" ? "In library" : "Possible library match"}</span>`
+    : "";
 
   const validationMarkup = buildValidationMarkup(validation);
   const reviewDecision = normalizeDecision(excerpt.excerptReviewDecision);
@@ -469,6 +492,7 @@ function buildExcerptCard(excerpt, uniqueKey) {
         <span class="badge ${wordCountBadgeClass}" title="${escapeHtml(wordCountTooltip)}">Words ${wordCount}</span>
         ${pullBadge}
         ${overlapBadge}
+        ${libraryBadge}
         ${decisionBadge}
         ${qiBadge}
         ${overrideBadge}
@@ -550,36 +574,56 @@ function buildValidationMarkup(validation) {
     validation.bookCanonicalTitle,
     validation.bookCanonicalAuthor
   ].filter(Boolean).join(" - ");
+  const libraryMarkup = buildLibraryMatchMarkup(validation.libraryExcerptMatch);
 
   if (validation.status === "catalog_match") {
-    return `<p class="validation validation--good">Catalog match: ${escapeHtml(canonical || "confirmed")}.</p>`;
+    return `<p class="validation validation--good">Catalog match: ${escapeHtml(canonical || "confirmed")}.</p>${libraryMarkup}`;
   }
 
   if (validation.status === "author_mismatch") {
-    return `<p class="validation validation--warn">Author mismatch. Catalog says ${escapeHtml(canonical || "different author")}.</p>`;
+    return `<p class="validation validation--warn">Author mismatch. Catalog says ${escapeHtml(canonical || "different author")}.</p>${libraryMarkup}`;
   }
 
   if (validation.status === "title_mismatch") {
-    return `<p class="validation validation--warn">Excerpt matches the catalog, but the poem title appears wrong. Catalog match: ${escapeHtml(validation.matchedPoemTitle || "different title")}.</p>`;
+    return `<p class="validation validation--warn">Excerpt matches the catalog, but the poem title appears wrong. Catalog match: ${escapeHtml(validation.matchedPoemTitle || "different title")}.</p>${libraryMarkup}`;
   }
 
   if (validation.status === "poem_title_match_only") {
-    return `<p class="validation validation--warn">Poem title matches this book, but the excerpt text did not match the catalog text.</p>`;
+    return `<p class="validation validation--warn">Poem title matches this book, but the excerpt text did not match the catalog text.</p>${libraryMarkup}`;
   }
 
   if (validation.status === "epub_not_present") {
-    return `<p class="validation validation--warn">This title appears to be intentionally absent from EPUB/catalog coverage, not simply mismatched.</p>`;
+    return `<p class="validation validation--warn">This title appears to be intentionally absent from EPUB/catalog coverage, not simply mismatched.</p>${libraryMarkup}`;
   }
 
   if (validation.status === "excerpt_not_found_in_book" && validation.globalExcerptMatch) {
-    return `<p class="validation validation--warn">Excerpt not found in ${escapeHtml(validation.bookCanonicalTitle || "this book")}. Closest catalog hit: ${escapeHtml(validation.globalExcerptMatch.book_title)} / ${escapeHtml(validation.globalExcerptMatch.poem_title)} by ${escapeHtml(validation.globalExcerptMatch.author)}.</p>`;
+    return `<p class="validation validation--warn">Excerpt not found in ${escapeHtml(validation.bookCanonicalTitle || "this book")}. Closest catalog hit: ${escapeHtml(validation.globalExcerptMatch.book_title)} / ${escapeHtml(validation.globalExcerptMatch.poem_title)} by ${escapeHtml(validation.globalExcerptMatch.author)}.</p>${libraryMarkup}`;
   }
 
   if (validation.status === "book_not_found") {
-    return `<p class="validation validation--warn">Book not found in catalog.</p>`;
+    return `<p class="validation validation--warn">Book not found in catalog.</p>${libraryMarkup}`;
   }
 
-  return `<p class="validation validation--warn">Catalog check: ${escapeHtml(validation.status)}.</p>`;
+  return `<p class="validation validation--warn">Catalog check: ${escapeHtml(validation.status)}.</p>${libraryMarkup}`;
+}
+
+function buildLibraryMatchMarkup(match) {
+  if (!match) {
+    return "";
+  }
+
+  const label = match.matchType === "exact"
+    ? "Already exists in excerpt library."
+    : match.matchType === "substring"
+      ? `Possible existing excerpt in library (${match.matchType}, score ${match.score}).`
+      : `Possible near-duplicate in library (score ${match.score}).`;
+  const meta = [
+    match.bookTitle,
+    match.poemTitle,
+    match.author
+  ].filter(Boolean).join(" / ");
+
+  return `<p class="validation validation--warn">${escapeHtml(label)} ${escapeHtml(meta || "Existing source row")}${match.sourceRow ? `, row ${escapeHtml(String(match.sourceRow))}` : ""}.</p>`;
 }
 
 function slugify(text) {

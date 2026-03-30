@@ -11,3 +11,7 @@ __pycache__/
 Excerpt Gathering & Quote Image Creation Database (Responses)*.xlsx
 google_apps_script_backup_before_duplicates.gs
 backups/
+Primary Excerpt Database - Excerpt Database.csv
+data/excerpt_library.db
+data/excerpt_library.db-shm
+data/excerpt_library.db-wal

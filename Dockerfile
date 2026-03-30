@@ -11,6 +11,7 @@ RUN npm install --omit=dev
 COPY public ./public
 COPY server.mjs ./server.mjs
 COPY catalog_validate.py ./catalog_validate.py
+COPY excerpt_library.py ./excerpt_library.py
 COPY data ./data
 
 ENV PORT=8080

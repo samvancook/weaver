@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Weaver</title>
-  <link rel="stylesheet" href="/style.css?v=20260327d" />
+  <link rel="stylesheet" href="/style.css?v=20260330a" />
 </head>
 <body>
   <div class="shell">
@@ -65,6 +65,8 @@
             <span>Queue Mode</span>
             <select id="review-filter">
               <option value="all">All pending</option>
+              <option value="new_only">New to library only</option>
+              <option value="existing_library">Already in library</option>
               <option value="likely_correction">Likely need correction</option>
               <option value="good_only">Good content only</option>
             </select>
@@ -72,7 +74,7 @@
           <button id="load-excerpts" class="button">Load Excerpts</button>
         </div>
         <p class="hint" id="book-selection-hint">
-          `Likely need correction` now filters only the currently loaded book, so review stays fast.
+          Use `New to library only` to focus on net-new approvals, or `Already in library` to quickly skip records that already exist in the excerpt database.
         </p>
       </section>
 
@@ -129,6 +131,6 @@
     </main>
   </div>
 
-  <script src="/app.js?v=20260327d"></script>
+  <script src="/app.js?v=20260330a"></script>
 </body>
 </html>

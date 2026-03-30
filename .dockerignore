@@ -8,3 +8,7 @@ CURRENT_LIVE_SCRIPT_BACKUP_*
 firebase-debug.log
 *.pyc
 __pycache__
+Primary Excerpt Database - Excerpt Database.csv
+data/excerpt_library.db
+data/excerpt_library.db-shm
+data/excerpt_library.db-wal

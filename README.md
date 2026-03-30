@@ -2,6 +2,53 @@
 
 This workspace now includes a first-pass CSV utility for surfacing duplicate and high-overlap excerpts.
 
+## Excerpt Library Database
+
+There is now also a SQLite-backed excerpt library for turning a large spreadsheet export into a cleaner local database that Weaver can query.
+
+Import a CSV export:
+
+```bash
+python3 import_excerpt_library.py /path/to/excerpts.csv --replace-source
+```
+
+This creates `data/excerpt_library.db` with:
+
+- `excerpt_sources` for import provenance
+- `excerpt_entries` for normalized excerpt rows plus searchable metadata
+
+Once that database exists, `catalog_validate.py` will also attach `libraryExcerptMatch` to validation results so Weaver can flag excerpts that already exist in your imported library.
+
+### 1. Exact-Match Batch Report
+
+Use this when you want a strict report of which candidate rows already exist exactly in the library:
+
+```bash
+python3 exact_excerpt_report.py /path/to/candidates.csv --output-csv /tmp/exact_matches.csv
+```
+
+### 2. Reusable Matcher
+
+Use this when you want a reusable JSON or CSV matcher that flags exact matches and near matches:
+
+```bash
+python3 match_excerpt_candidates.py /path/to/candidates.json
+```
+
+Or with CSV input:
+
+```bash
+python3 match_excerpt_candidates.py /path/to/candidates.csv --output-csv /tmp/match_results.csv
+```
+
+### 3. Cleanup Report
+
+Use this to profile duplicate clusters, likely non-excerpt rows, and blank-book concentration:
+
+```bash
+python3 excerpt_cleanup_report.py --top 25
+```
+
 ## Excerpt Review App
 
 This repo now also includes the first scaffold for a Firebase-style `Excerpt Review Tool`:
