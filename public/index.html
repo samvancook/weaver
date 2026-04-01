@@ -78,18 +78,17 @@
           <label class="field">
             <span>Queue Mode</span>
             <select id="review-filter">
-              <option value="standard_review">Standard review</option>
+              <option value="all">All pending</option>
               <option value="new_only">New to library only</option>
               <option value="exact_library">Exact library matches</option>
               <option value="possible_library">Possible library matches</option>
               <option value="likely_correction">Likely need correction</option>
-              <option value="all">All pending</option>
             </select>
           </label>
           <button id="load-excerpts" class="button">Load Excerpts</button>
         </div>
         <p class="hint" id="book-selection-hint">
-          `Standard review` is the normal approval lane. Use the separate `Extra review` module for incomplete, conflicting, or otherwise weird rows that should not be mixed into the main queue.
+          `Review queue` is the normal approval lane. Use the separate `Extra review` module for incomplete, conflicting, or otherwise weird rows that deserve their own pass.
         </p>
       </section>
 

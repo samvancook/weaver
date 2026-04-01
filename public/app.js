@@ -48,7 +48,7 @@ let reviewVisibleCount = 25;
 let reviewPinnedRowOrder = [];
 let weirdVisibleCount = 25;
 let weirdPinnedRowOrder = [];
-let currentGoodBookSummaries = [];
+let currentReviewBookSummaries = [];
 let currentWeirdBookSummaries = [];
 
 const REVIEW_BATCH_SIZE = 25;
@@ -293,13 +293,13 @@ async function loadBooks(options = {}) {
 
     const records = Array.isArray(data.records) ? data.records : [];
     const allBookSummaries = summarizePendingBooks(records);
-    currentGoodBookSummaries = allBookSummaries.filter(book => book.goodCount > 0);
+    currentReviewBookSummaries = allBookSummaries.filter(book => book.totalCount > 0);
     currentWeirdBookSummaries = allBookSummaries.filter(book => book.needsCheckingCount > 0);
 
-    populateBookSelect(elements.bookSelect, currentGoodBookSummaries, previousSelection, book => `${book.title} (${book.goodCount})`);
+    populateBookSelect(elements.bookSelect, currentReviewBookSummaries, previousSelection, book => `${book.title} (${book.totalCount})`);
     populateBookSelect(elements.weirdBookSelect, currentWeirdBookSummaries, previousWeirdSelection, book => `${book.title} (${book.needsCheckingCount})`);
 
-    elements.bookCountBadge.textContent = `${currentGoodBookSummaries.length} Books`;
+    elements.bookCountBadge.textContent = `${currentReviewBookSummaries.length} Books`;
     if (elements.weirdBookCountBadge) {
       elements.weirdBookCountBadge.textContent = `${currentWeirdBookSummaries.length} Books`;
     }
@@ -672,14 +672,11 @@ function orderWeirdExcerptsForRender(excerpts) {
 }
 
 function getSelectedReviewFilter() {
-  return elements.reviewFilter?.value || "standard_review";
+  return elements.reviewFilter?.value || "all";
 }
 
 function applyReviewFilter(excerpts) {
   const mode = getSelectedReviewFilter();
-  if (mode === "standard_review") {
-    return excerpts.filter(excerpt => isStandardReviewExcerpt(excerpt));
-  }
   if (mode === "new_only") {
     return excerpts.filter(excerpt => !hasLibraryExcerptMatch(excerpt));
   }
@@ -805,9 +802,6 @@ function isExtraReviewRecord(record) {
 }
 
 function getEmptyStateMessage() {
-  if (getSelectedReviewFilter() === "standard_review") {
-    return "No pending excerpts in this book are currently in the standard review lane.";
-  }
   if (getSelectedReviewFilter() === "new_only") {
     return "No currently loaded excerpts appear to be net new to the excerpt library.";
   }
