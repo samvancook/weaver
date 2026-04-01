@@ -29,6 +29,7 @@
       </p>
       <div class="hero-links">
         <button class="hero-pill hero-pill--active" id="show-review-module" type="button">Review queue</button>
+        <button class="hero-pill" id="show-weird-module" type="button">Needs checking</button>
         <button class="hero-pill" id="show-corrections-module" type="button">Needs correction</button>
         <a
           class="hero-pill hero-pill--graphics"
@@ -78,7 +79,6 @@
             <span>Queue Mode</span>
             <select id="review-filter">
               <option value="good_only">Good content</option>
-              <option value="needs_checking">Needs checking</option>
               <option value="new_only">New to library only</option>
               <option value="exact_library">Exact library matches</option>
               <option value="possible_library">Possible library matches</option>
@@ -89,7 +89,7 @@
           <button id="load-excerpts" class="button">Load Excerpts</button>
         </div>
         <p class="hint" id="book-selection-hint">
-          `Good content` is the main approval lane. Use `Needs checking` for rows that still need human review, and `Exact library matches` / `Possible library matches` for duplicate cleanup.
+          `Good content` is the main approval lane. Use the separate `Needs checking` module for rows that still need human review, and `Exact library matches` / `Possible library matches` for duplicate cleanup.
         </p>
       </section>
 
@@ -103,6 +103,38 @@
         </div>
         <div id="excerpt-list" class="excerpt-list">
           <p class="empty-state">Load a book to start reviewing excerpts.</p>
+        </div>
+      </section>
+
+      <section class="panel panel--wide module-panel" id="weird-module">
+        <div class="panel__header">
+          <h2>Needs Checking</h2>
+          <span class="badge badge--muted" id="weird-book-count-badge">0 Books</span>
+        </div>
+        <div class="book-picker">
+          <label class="field field--grow">
+            <span>Book Title</span>
+            <select id="weird-book-select">
+              <option value="">Load books first</option>
+            </select>
+          </label>
+          <button id="load-weird-excerpts" class="button">Load Needs Checking</button>
+        </div>
+        <p class="hint">
+          These are the rows that still need human attention because they are not already good content and not strict exact library duplicates.
+        </p>
+      </section>
+
+      <section class="panel panel--wide module-panel" id="weird-queue-panel">
+        <div class="panel__header">
+          <h2>Needs Checking Queue</h2>
+          <span class="badge badge--muted" id="weird-excerpt-count-badge">0 Excerpts</span>
+        </div>
+        <div class="toolbar">
+          <button id="submit-weird-review" class="button button--accent">Submit Decisions</button>
+        </div>
+        <div id="weird-excerpt-list" class="excerpt-list">
+          <p class="empty-state">Load a book to start reviewing the rows that still need checking.</p>
         </div>
       </section>
 

@@ -6,16 +6,23 @@ const elements = {
   apiBaseUrl: document.getElementById("api-base-url"),
   saveApiUrl: document.getElementById("save-api-url"),
   showReviewModule: document.getElementById("show-review-module"),
+  showWeirdModule: document.getElementById("show-weird-module"),
   showCorrectionsModule: document.getElementById("show-corrections-module"),
   reviewModule: document.getElementById("review-module"),
   reviewQueuePanel: document.getElementById("review-queue-panel"),
+  weirdModule: document.getElementById("weird-module"),
+  weirdQueuePanel: document.getElementById("weird-queue-panel"),
   correctionsModule: document.getElementById("corrections-module"),
   loadBooks: document.getElementById("load-books"),
   bookSelect: document.getElementById("book-select"),
+  weirdBookSelect: document.getElementById("weird-book-select"),
   reviewFilter: document.getElementById("review-filter"),
   loadExcerpts: document.getElementById("load-excerpts"),
+  loadWeirdExcerpts: document.getElementById("load-weird-excerpts"),
   submitReview: document.getElementById("submit-review"),
+  submitWeirdReview: document.getElementById("submit-weird-review"),
   excerptList: document.getElementById("excerpt-list"),
+  weirdExcerptList: document.getElementById("weird-excerpt-list"),
   loadCorrectionBooks: document.getElementById("load-correction-books"),
   correctionBookSelect: document.getElementById("correction-book-select"),
   loadCorrections: document.getElementById("load-corrections"),
@@ -25,18 +32,24 @@ const elements = {
   appModeBadge: document.getElementById("app-mode-badge"),
   bookCountBadge: document.getElementById("book-count-badge"),
   excerptCountBadge: document.getElementById("excerpt-count-badge"),
+  weirdBookCountBadge: document.getElementById("weird-book-count-badge"),
+  weirdExcerptCountBadge: document.getElementById("weird-excerpt-count-badge"),
   correctionBookCountBadge: document.getElementById("correction-book-count-badge"),
   correctionExcerptCountBadge: document.getElementById("correction-excerpt-count-badge")
 };
 
 let currentExcerpts = [];
+let currentWeirdExcerpts = [];
 let currentCorrectionExcerpts = [];
 let isSaving = false;
 let currentValidationByRecordId = new Map();
 let currentModule = "review";
 let reviewVisibleCount = 25;
 let reviewPinnedRowOrder = [];
-let currentBookSummaries = [];
+let weirdVisibleCount = 25;
+let weirdPinnedRowOrder = [];
+let currentGoodBookSummaries = [];
+let currentWeirdBookSummaries = [];
 
 const REVIEW_BATCH_SIZE = 25;
 
@@ -49,10 +62,16 @@ function setStatus(message, details) {
 function setSubmitState(isBusy, label) {
   isSaving = isBusy;
   elements.submitReview.disabled = isBusy;
+  if (elements.submitWeirdReview) {
+    elements.submitWeirdReview.disabled = isBusy;
+  }
   if (elements.submitCorrections) {
     elements.submitCorrections.disabled = isBusy;
   }
   elements.submitReview.textContent = label || (isBusy ? "Saving..." : "Submit Decisions");
+  if (elements.submitWeirdReview) {
+    elements.submitWeirdReview.textContent = label || (isBusy ? "Saving..." : "Submit Decisions");
+  }
   if (elements.submitCorrections) {
     elements.submitCorrections.textContent = label || (isBusy ? "Saving..." : "Save Corrections");
   }
@@ -99,11 +118,14 @@ function applyRuntimeMode() {
 }
 
 function setActiveModule(moduleName) {
-  currentModule = moduleName === "corrections" ? "corrections" : "review";
+  currentModule = ["review", "weird", "corrections"].includes(moduleName) ? moduleName : "review";
   elements.reviewModule?.classList.toggle("module-panel--active", currentModule === "review");
   elements.reviewQueuePanel?.classList.toggle("module-panel--active", currentModule === "review");
+  elements.weirdModule?.classList.toggle("module-panel--active", currentModule === "weird");
+  elements.weirdQueuePanel?.classList.toggle("module-panel--active", currentModule === "weird");
   elements.correctionsModule?.classList.toggle("module-panel--active", currentModule === "corrections");
   elements.showReviewModule?.classList.toggle("hero-pill--active", currentModule === "review");
+  elements.showWeirdModule?.classList.toggle("hero-pill--active", currentModule === "weird");
   elements.showCorrectionsModule?.classList.toggle("hero-pill--active", currentModule === "corrections");
 }
 
@@ -260,6 +282,7 @@ async function saveReviewsSequentially(changedUpdates) {
 async function loadBooks(options = {}) {
   const preserveSelection = options.preserveSelection !== false;
   const previousSelection = preserveSelection ? elements.bookSelect.value : "";
+  const previousWeirdSelection = preserveSelection ? elements.weirdBookSelect?.value || "" : "";
 
   try {
     setStatus("Loading book titles...");
@@ -269,32 +292,20 @@ async function loadBooks(options = {}) {
     }
 
     const records = Array.isArray(data.records) ? data.records : [];
-    currentBookSummaries = summarizePendingBooks(records);
+    const allBookSummaries = summarizePendingBooks(records);
+    currentGoodBookSummaries = allBookSummaries.filter(book => book.goodCount > 0);
+    currentWeirdBookSummaries = allBookSummaries.filter(book => book.needsCheckingCount > 0);
 
-    elements.bookSelect.innerHTML = "";
-    const placeholder = document.createElement("option");
-    placeholder.value = "";
-    placeholder.textContent = "Choose a book";
-    elements.bookSelect.appendChild(placeholder);
+    populateBookSelect(elements.bookSelect, currentGoodBookSummaries, previousSelection, book => `${book.title} (${book.goodCount})`);
+    populateBookSelect(elements.weirdBookSelect, currentWeirdBookSummaries, previousWeirdSelection, book => `${book.title} (${book.needsCheckingCount})`);
 
-    currentBookSummaries.forEach(book => {
-      const option = document.createElement("option");
-      option.value = book.title;
-      option.textContent = formatBookSummaryLabel(book);
-      elements.bookSelect.appendChild(option);
-    });
-
-    if (previousSelection) {
-      const hasPreviousSelection = currentBookSummaries.some(book => book.title === previousSelection);
-      if (hasPreviousSelection) {
-        elements.bookSelect.value = previousSelection;
-      }
+    elements.bookCountBadge.textContent = `${currentGoodBookSummaries.length} Books`;
+    if (elements.weirdBookCountBadge) {
+      elements.weirdBookCountBadge.textContent = `${currentWeirdBookSummaries.length} Books`;
     }
-
-    elements.bookCountBadge.textContent = `${currentBookSummaries.length} Books`;
     setStatus(
-      `Loaded ${currentBookSummaries.length} books. Backend ${data.version || "unknown"}.`,
-      currentBookSummaries.slice(0, 10)
+      `Loaded ${allBookSummaries.length} books. Backend ${data.version || "unknown"}.`,
+      allBookSummaries.slice(0, 10)
     );
   } catch (error) {
     setStatus(`Book load failed: ${error.message}`);
@@ -333,18 +344,31 @@ function summarizePendingBooks(records) {
   return Array.from(byTitle.values()).sort((left, right) => left.title.localeCompare(right.title));
 }
 
-function isGoodValidation(validation) {
-  return Boolean(validation && validation.status === "catalog_match");
+function populateBookSelect(select, books, previousSelection, labelBuilder) {
+  if (!select) return;
+  select.innerHTML = "";
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = "Choose a book";
+  select.appendChild(placeholder);
+
+  books.forEach(book => {
+    const option = document.createElement("option");
+    option.value = book.title;
+    option.textContent = labelBuilder(book);
+    select.appendChild(option);
+  });
+
+  if (previousSelection) {
+    const hasPreviousSelection = books.some(book => book.title === previousSelection);
+    if (hasPreviousSelection) {
+      select.value = previousSelection;
+    }
+  }
 }
 
-function formatBookSummaryLabel(book) {
-  if (book.needsCheckingCount && book.goodCount) {
-    return `${book.title} (${book.goodCount} good · ${book.needsCheckingCount} needs check)`;
-  }
-  if (book.needsCheckingCount) {
-    return `${book.title} (${book.needsCheckingCount} needs check)`;
-  }
-  return `${book.title} (${book.goodCount} good)`;
+function isGoodValidation(validation) {
+  return Boolean(validation && validation.status === "catalog_match");
 }
 
 async function loadExcerpts() {
@@ -369,6 +393,31 @@ async function loadExcerpts() {
     setStatus(`Loaded ${data.excerpts.length} excerpts for "${bookTitle}". Backend ${data.version || "unknown"}.`);
   } catch (error) {
     setStatus(`Excerpt load failed: ${error.message}`);
+  }
+}
+
+async function loadWeirdExcerpts() {
+  const bookTitle = elements.weirdBookSelect?.value;
+  if (!bookTitle) {
+    setStatus("Choose a book title first.");
+    return;
+  }
+
+  try {
+    setStatus(`Loading needs-checking excerpts for "${bookTitle}"...`);
+    const data = await requestJsonp("excerpts", { bookTitle });
+    if (!data.ok) {
+      throw new Error(data.error || "Excerpt load failed.");
+    }
+
+    currentWeirdExcerpts = data.excerpts;
+    weirdVisibleCount = REVIEW_BATCH_SIZE;
+    weirdPinnedRowOrder = [];
+    await loadCatalogValidation(data.excerpts);
+    renderWeirdCurrentExcerpts();
+    setStatus(`Loaded ${applyNeedsCheckingFilter(data.excerpts).length} needs-checking excerpts for "${bookTitle}". Backend ${data.version || "unknown"}.`);
+  } catch (error) {
+    setStatus(`Needs checking load failed: ${error.message}`);
   }
 }
 
@@ -556,6 +605,22 @@ function renderCurrentExcerpts() {
   renderExcerpts(applyReviewFilter(currentExcerpts));
 }
 
+function renderWeirdCurrentExcerpts() {
+  const filtered = applyNeedsCheckingFilter(currentWeirdExcerpts);
+  const totalMatching = filtered.length;
+  const visibleExcerpts = orderWeirdExcerptsForRender(filtered).slice(0, weirdVisibleCount);
+  renderExcerptCollection(visibleExcerpts, elements.weirdExcerptList, elements.weirdExcerptCountBadge, getWeirdEmptyStateMessage(), {
+    totalMatching,
+    visibleCount: visibleExcerpts.length,
+    batchSize: REVIEW_BATCH_SIZE,
+    canShowMore: totalMatching > visibleExcerpts.length,
+    onShowMore: () => {
+      weirdVisibleCount += REVIEW_BATCH_SIZE;
+      renderWeirdCurrentExcerpts();
+    }
+  });
+}
+
 function orderReviewExcerptsForRender(excerpts) {
   if (!reviewPinnedRowOrder.length) {
     return excerpts;
@@ -581,15 +646,37 @@ function orderReviewExcerptsForRender(excerpts) {
   return ordered;
 }
 
+function orderWeirdExcerptsForRender(excerpts) {
+  if (!weirdPinnedRowOrder.length) {
+    return excerpts;
+  }
+
+  const pinnedSet = new Set(weirdPinnedRowOrder.map(Number));
+  const excerptByRow = new Map(excerpts.map(excerpt => [Number(excerpt.sourceRow), excerpt]));
+  const ordered = [];
+
+  weirdPinnedRowOrder.forEach(sourceRow => {
+    const excerpt = excerptByRow.get(Number(sourceRow));
+    if (excerpt) {
+      ordered.push(excerpt);
+    }
+  });
+
+  excerpts.forEach(excerpt => {
+    if (!pinnedSet.has(Number(excerpt.sourceRow))) {
+      ordered.push(excerpt);
+    }
+  });
+
+  return ordered;
+}
+
 function getSelectedReviewFilter() {
   return elements.reviewFilter?.value || "good_only";
 }
 
 function applyReviewFilter(excerpts) {
   const mode = getSelectedReviewFilter();
-  if (mode === "needs_checking") {
-    return excerpts.filter(excerpt => isNeedsCheckingExcerpt(excerpt));
-  }
   if (mode === "new_only") {
     return excerpts.filter(excerpt => !hasLibraryExcerptMatch(excerpt));
   }
@@ -609,6 +696,10 @@ function applyReviewFilter(excerpts) {
     return excerpts.filter(excerpt => isGoodContentExcerpt(excerpt));
   }
   return excerpts;
+}
+
+function applyNeedsCheckingFilter(excerpts) {
+  return excerpts.filter(excerpt => isNeedsCheckingExcerpt(excerpt));
 }
 
 function isLikelyCorrectionExcerpt(excerpt) {
@@ -676,9 +767,6 @@ function getEmptyStateMessage() {
   if (getSelectedReviewFilter() === "new_only") {
     return "No currently loaded excerpts appear to be net new to the excerpt library.";
   }
-  if (getSelectedReviewFilter() === "needs_checking") {
-    return "No currently loaded excerpts are still flagged as needing review.";
-  }
   if (getSelectedReviewFilter() === "exact_library") {
     return "No currently loaded excerpts are exact matches to the excerpt library.";
   }
@@ -693,6 +781,10 @@ function getEmptyStateMessage() {
   }
 
   return "No pending excerpts remain for this book.";
+}
+
+function getWeirdEmptyStateMessage() {
+  return "No pending excerpts in this book are currently flagged as needing additional checking.";
 }
 
 function groupExcerptsByTitle(excerpts) {
@@ -1012,6 +1104,10 @@ function collectCorrectionUpdates() {
   return collectUpdatesFromContainer(elements.correctionList);
 }
 
+function collectWeirdUpdates() {
+  return collectUpdatesFromContainer(elements.weirdExcerptList);
+}
+
 function collectUpdatesFromContainer(container) {
   return Array.from(container.querySelectorAll(".excerpt-card")).map(card => {
     const reviewDecision = card.querySelector('input[type="radio"]:checked')?.value || "";
@@ -1181,7 +1277,35 @@ async function submitReview() {
       renderCurrentExcerpts();
       loadBooks({ preserveSelection: true }).catch(() => {});
     },
+    countExcerpts: refreshed => applyReviewFilter(refreshed.excerpts),
     emptyMessage: "Load excerpts before submitting.",
+    idleLabel: "Submit Decisions",
+    progressLabel: "Submitting"
+  });
+}
+
+async function submitWeirdReview() {
+  const pinnedSourceRows = Array.from(
+    elements.weirdExcerptList.querySelectorAll(".excerpt-card")
+  ).map(card => Number(card.dataset.sourceRow)).filter(Boolean);
+
+  return submitExcerptSet({
+    sourceExcerpts: currentWeirdExcerpts,
+    collectUpdates: collectWeirdUpdates,
+    bookTitle: elements.weirdBookSelect.value,
+    reloadAction: "excerpts",
+    afterReload: async refreshed => {
+      currentWeirdExcerpts = refreshed.excerpts;
+      const remainingSourceRows = new Set(
+        applyNeedsCheckingFilter(refreshed.excerpts).map(excerpt => Number(excerpt.sourceRow))
+      );
+      weirdPinnedRowOrder = pinnedSourceRows.filter(sourceRow => remainingSourceRows.has(sourceRow));
+      await loadCatalogValidation(refreshed.excerpts);
+      renderWeirdCurrentExcerpts();
+      loadBooks({ preserveSelection: true }).catch(() => {});
+    },
+    countExcerpts: refreshed => applyNeedsCheckingFilter(refreshed.excerpts),
+    emptyMessage: "Load needs-checking excerpts before submitting.",
     idleLabel: "Submit Decisions",
     progressLabel: "Submitting"
   });
@@ -1199,6 +1323,7 @@ async function submitCorrections() {
       renderCorrectionExcerpts(refreshed.excerpts);
       loadCorrectionBooks().catch(() => {});
     },
+    countExcerpts: refreshed => refreshed.excerpts,
     emptyMessage: "Load correction records before saving.",
     idleLabel: "Save Corrections",
     progressLabel: "Saving"
@@ -1211,6 +1336,7 @@ async function submitExcerptSet({
   bookTitle,
   reloadAction,
   afterReload,
+  countExcerpts,
   emptyMessage,
   idleLabel,
   progressLabel
@@ -1267,7 +1393,8 @@ async function submitExcerptSet({
     }
 
     await afterReload(refreshed);
-    const remainingUpdatedRows = countRemainingUpdatedRows(changedUpdates, refreshed.excerpts);
+    const countPool = typeof countExcerpts === "function" ? countExcerpts(refreshed) : refreshed.excerpts;
+    const remainingUpdatedRows = countRemainingUpdatedRows(changedUpdates, countPool);
     const droppedFromQueue = changedUpdates.length - remainingUpdatedRows;
 
     if (remainingUpdatedRows === 0) {
@@ -1294,11 +1421,19 @@ async function submitExcerptSet({
 elements.saveApiUrl.addEventListener("click", saveApiBaseUrl);
 elements.loadBooks.addEventListener("click", loadBooks);
 elements.loadExcerpts.addEventListener("click", loadExcerpts);
+elements.loadWeirdExcerpts?.addEventListener("click", loadWeirdExcerpts);
 elements.submitReview.addEventListener("click", submitReview);
+elements.submitWeirdReview?.addEventListener("click", submitWeirdReview);
 elements.loadCorrectionBooks?.addEventListener("click", loadCorrectionBooks);
 elements.loadCorrections?.addEventListener("click", loadCorrections);
 elements.submitCorrections?.addEventListener("click", submitCorrections);
 elements.showReviewModule?.addEventListener("click", () => setActiveModule("review"));
+elements.showWeirdModule?.addEventListener("click", () => {
+  setActiveModule("weird");
+  if (getApiBaseUrl() && elements.weirdBookSelect?.options.length <= 1) {
+    loadBooks();
+  }
+});
 elements.showCorrectionsModule?.addEventListener("click", () => {
   setActiveModule("corrections");
   if (getApiBaseUrl() && elements.correctionBookSelect?.options.length <= 1) {
