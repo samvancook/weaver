@@ -36,6 +36,7 @@ let currentValidationByRecordId = new Map();
 let currentModule = "review";
 let reviewVisibleCount = 25;
 let reviewPinnedRowOrder = [];
+let currentBookSummaries = [];
 
 const REVIEW_BATCH_SIZE = 25;
 
@@ -262,10 +263,13 @@ async function loadBooks(options = {}) {
 
   try {
     setStatus("Loading book titles...");
-    const data = await requestJsonp("books");
+    const data = await requestJsonp("pendingRecords");
     if (!data.ok) {
       throw new Error(data.error || "Book load failed.");
     }
+
+    const records = Array.isArray(data.records) ? data.records : [];
+    currentBookSummaries = summarizePendingBooks(records);
 
     elements.bookSelect.innerHTML = "";
     const placeholder = document.createElement("option");
@@ -273,25 +277,74 @@ async function loadBooks(options = {}) {
     placeholder.textContent = "Choose a book";
     elements.bookSelect.appendChild(placeholder);
 
-    data.books.forEach(book => {
+    currentBookSummaries.forEach(book => {
       const option = document.createElement("option");
       option.value = book.title;
-      option.textContent = `${book.title} (${book.count})`;
+      option.textContent = formatBookSummaryLabel(book);
       elements.bookSelect.appendChild(option);
     });
 
     if (previousSelection) {
-      const hasPreviousSelection = data.books.some(book => book.title === previousSelection);
+      const hasPreviousSelection = currentBookSummaries.some(book => book.title === previousSelection);
       if (hasPreviousSelection) {
         elements.bookSelect.value = previousSelection;
       }
     }
 
-    elements.bookCountBadge.textContent = `${data.books.length} Books`;
-    setStatus(`Loaded ${data.books.length} books. Backend ${data.version || "unknown"}.`, data.books.slice(0, 10));
+    elements.bookCountBadge.textContent = `${currentBookSummaries.length} Books`;
+    setStatus(
+      `Loaded ${currentBookSummaries.length} books. Backend ${data.version || "unknown"}.`,
+      currentBookSummaries.slice(0, 10)
+    );
   } catch (error) {
     setStatus(`Book load failed: ${error.message}`);
   }
+}
+
+function summarizePendingBooks(records) {
+  const byTitle = new Map();
+
+  records.forEach(record => {
+    const title = (record.bookTitle || "").trim();
+    if (!title) return;
+    const key = record.recordId || String(record.sourceRow);
+    if (record.catalogValidation?.status) {
+      currentValidationByRecordId.set(key, record.catalogValidation);
+    }
+
+    if (!byTitle.has(title)) {
+      byTitle.set(title, {
+        title,
+        totalCount: 0,
+        goodCount: 0,
+        needsCheckingCount: 0
+      });
+    }
+
+    const summary = byTitle.get(title);
+    summary.totalCount += 1;
+    if (isGoodValidation(record.catalogValidation)) {
+      summary.goodCount += 1;
+    } else {
+      summary.needsCheckingCount += 1;
+    }
+  });
+
+  return Array.from(byTitle.values()).sort((left, right) => left.title.localeCompare(right.title));
+}
+
+function isGoodValidation(validation) {
+  return Boolean(validation && validation.status === "catalog_match");
+}
+
+function formatBookSummaryLabel(book) {
+  if (book.needsCheckingCount && book.goodCount) {
+    return `${book.title} (${book.goodCount} good · ${book.needsCheckingCount} needs check)`;
+  }
+  if (book.needsCheckingCount) {
+    return `${book.title} (${book.needsCheckingCount} needs check)`;
+  }
+  return `${book.title} (${book.goodCount} good)`;
 }
 
 async function loadExcerpts() {
@@ -529,11 +582,14 @@ function orderReviewExcerptsForRender(excerpts) {
 }
 
 function getSelectedReviewFilter() {
-  return elements.reviewFilter?.value || "all";
+  return elements.reviewFilter?.value || "good_only";
 }
 
 function applyReviewFilter(excerpts) {
   const mode = getSelectedReviewFilter();
+  if (mode === "needs_checking") {
+    return excerpts.filter(excerpt => isNeedsCheckingExcerpt(excerpt));
+  }
   if (mode === "new_only") {
     return excerpts.filter(excerpt => !hasLibraryExcerptMatch(excerpt));
   }
@@ -594,9 +650,34 @@ function isGoodContentExcerpt(excerpt) {
   return Boolean(validation && validation.status === "catalog_match");
 }
 
+function isStrictExactLibraryMatch(excerpt) {
+  const validation =
+    currentValidationByRecordId.get(excerpt.recordId || String(excerpt.sourceRow)) || null;
+  const match = validation?.libraryExcerptMatch || null;
+  return Boolean(
+    match &&
+    match.matchType === "exact" &&
+    match.formattingMatch &&
+    match.lineBreaksMatch
+  );
+}
+
+function isNeedsCheckingExcerpt(excerpt) {
+  if (isGoodContentExcerpt(excerpt)) {
+    return false;
+  }
+  if (isStrictExactLibraryMatch(excerpt)) {
+    return false;
+  }
+  return true;
+}
+
 function getEmptyStateMessage() {
   if (getSelectedReviewFilter() === "new_only") {
     return "No currently loaded excerpts appear to be net new to the excerpt library.";
+  }
+  if (getSelectedReviewFilter() === "needs_checking") {
+    return "No currently loaded excerpts are still flagged as needing review.";
   }
   if (getSelectedReviewFilter() === "exact_library") {
     return "No currently loaded excerpts are exact matches to the excerpt library.";
@@ -608,7 +689,7 @@ function getEmptyStateMessage() {
     return "No pending excerpts in this book are currently flagged as likely needing correction.";
   }
   if (getSelectedReviewFilter() === "good_only") {
-    return "No pending excerpts in this book are currently flagged as catalog-matched good content.";
+    return "No pending excerpts in this book are currently flagged as good content.";
   }
 
   return "No pending excerpts remain for this book.";
