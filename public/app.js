@@ -334,10 +334,10 @@ function summarizePendingBooks(records) {
 
     const summary = byTitle.get(title);
     summary.totalCount += 1;
-    if (isGoodValidation(record.catalogValidation)) {
-      summary.goodCount += 1;
-    } else {
+    if (isNeedsCheckingValidation(record.catalogValidation)) {
       summary.needsCheckingCount += 1;
+    } else {
+      summary.goodCount += 1;
     }
   });
 
@@ -368,7 +368,11 @@ function populateBookSelect(select, books, previousSelection, labelBuilder) {
 }
 
 function isGoodValidation(validation) {
-  return Boolean(validation && validation.status === "catalog_match");
+  return !isNeedsCheckingValidation(validation);
+}
+
+function isNeedsCheckingValidation(validation) {
+  return !Boolean(validation && validation.status);
 }
 
 async function loadExcerpts() {
@@ -754,13 +758,9 @@ function isStrictExactLibraryMatch(excerpt) {
 }
 
 function isNeedsCheckingExcerpt(excerpt) {
-  if (isGoodContentExcerpt(excerpt)) {
-    return false;
-  }
-  if (isStrictExactLibraryMatch(excerpt)) {
-    return false;
-  }
-  return true;
+  const validation =
+    currentValidationByRecordId.get(excerpt.recordId || String(excerpt.sourceRow)) || null;
+  return isNeedsCheckingValidation(validation);
 }
 
 function getEmptyStateMessage() {
