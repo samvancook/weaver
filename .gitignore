@@ -15,3 +15,4 @@ Primary Excerpt Database - Excerpt Database.csv
 data/excerpt_library.db
 data/excerpt_library.db-shm
 data/excerpt_library.db-wal
+data/exact_library_match_autoreject_report.csv
