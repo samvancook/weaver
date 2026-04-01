@@ -334,7 +334,7 @@ function summarizePendingBooks(records) {
 
     const summary = byTitle.get(title);
     summary.totalCount += 1;
-    if (isNeedsCheckingValidation(record.catalogValidation)) {
+    if (isExtraReviewRecord(record)) {
       summary.needsCheckingCount += 1;
     } else {
       summary.goodCount += 1;
@@ -368,11 +368,7 @@ function populateBookSelect(select, books, previousSelection, labelBuilder) {
 }
 
 function isGoodValidation(validation) {
-  return !isNeedsCheckingValidation(validation);
-}
-
-function isNeedsCheckingValidation(validation) {
-  return !Boolean(validation && validation.status);
+  return Boolean(validation && validation.status === "catalog_match");
 }
 
 async function loadExcerpts() {
@@ -408,7 +404,7 @@ async function loadWeirdExcerpts() {
   }
 
   try {
-    setStatus(`Loading needs-checking excerpts for "${bookTitle}"...`);
+    setStatus(`Loading extra-review excerpts for "${bookTitle}"...`);
     const data = await requestJsonp("excerpts", { bookTitle });
     if (!data.ok) {
       throw new Error(data.error || "Excerpt load failed.");
@@ -419,9 +415,9 @@ async function loadWeirdExcerpts() {
     weirdPinnedRowOrder = [];
     await loadCatalogValidation(data.excerpts);
     renderWeirdCurrentExcerpts();
-    setStatus(`Loaded ${applyNeedsCheckingFilter(data.excerpts).length} needs-checking excerpts for "${bookTitle}". Backend ${data.version || "unknown"}.`);
+    setStatus(`Loaded ${applyNeedsCheckingFilter(data.excerpts).length} extra-review excerpts for "${bookTitle}". Backend ${data.version || "unknown"}.`);
   } catch (error) {
-    setStatus(`Needs checking load failed: ${error.message}`);
+    setStatus(`Extra review load failed: ${error.message}`);
   }
 }
 
@@ -676,11 +672,14 @@ function orderWeirdExcerptsForRender(excerpts) {
 }
 
 function getSelectedReviewFilter() {
-  return elements.reviewFilter?.value || "good_only";
+  return elements.reviewFilter?.value || "standard_review";
 }
 
 function applyReviewFilter(excerpts) {
   const mode = getSelectedReviewFilter();
+  if (mode === "standard_review") {
+    return excerpts.filter(excerpt => isStandardReviewExcerpt(excerpt));
+  }
   if (mode === "new_only") {
     return excerpts.filter(excerpt => !hasLibraryExcerptMatch(excerpt));
   }
@@ -696,14 +695,11 @@ function applyReviewFilter(excerpts) {
   if (mode === "likely_correction") {
     return excerpts.filter(excerpt => isLikelyCorrectionExcerpt(excerpt));
   }
-  if (mode === "good_only") {
-    return excerpts.filter(excerpt => isGoodContentExcerpt(excerpt));
-  }
   return excerpts;
 }
 
 function applyNeedsCheckingFilter(excerpts) {
-  return excerpts.filter(excerpt => isNeedsCheckingExcerpt(excerpt));
+  return excerpts.filter(excerpt => isExtraReviewExcerpt(excerpt));
 }
 
 function isLikelyCorrectionExcerpt(excerpt) {
@@ -757,13 +753,61 @@ function isStrictExactLibraryMatch(excerpt) {
   );
 }
 
-function isNeedsCheckingExcerpt(excerpt) {
+function isExtraReviewExcerpt(excerpt) {
   const validation =
     currentValidationByRecordId.get(excerpt.recordId || String(excerpt.sourceRow)) || null;
-  return isNeedsCheckingValidation(validation);
+  const libraryMatch = validation?.libraryExcerptMatch || null;
+
+  if (!validation || !validation.status) {
+    return true;
+  }
+
+  if (isLikelyCorrectionStatus(validation.status)) {
+    return true;
+  }
+
+  if (!libraryMatch) {
+    return false;
+  }
+
+  if (libraryMatch.matchType !== "exact") {
+    return true;
+  }
+
+  return !(libraryMatch.formattingMatch && libraryMatch.lineBreaksMatch);
+}
+
+function isStandardReviewExcerpt(excerpt) {
+  return !isExtraReviewExcerpt(excerpt);
+}
+
+function isExtraReviewRecord(record) {
+  const validation = record.catalogValidation || null;
+  const libraryMatch = validation?.libraryExcerptMatch || null;
+
+  if (!validation || !validation.status) {
+    return true;
+  }
+
+  if (isLikelyCorrectionStatus(validation.status)) {
+    return true;
+  }
+
+  if (!libraryMatch) {
+    return false;
+  }
+
+  if (libraryMatch.matchType !== "exact") {
+    return true;
+  }
+
+  return !(libraryMatch.formattingMatch && libraryMatch.lineBreaksMatch);
 }
 
 function getEmptyStateMessage() {
+  if (getSelectedReviewFilter() === "standard_review") {
+    return "No pending excerpts in this book are currently in the standard review lane.";
+  }
   if (getSelectedReviewFilter() === "new_only") {
     return "No currently loaded excerpts appear to be net new to the excerpt library.";
   }
@@ -776,15 +820,11 @@ function getEmptyStateMessage() {
   if (getSelectedReviewFilter() === "likely_correction") {
     return "No pending excerpts in this book are currently flagged as likely needing correction.";
   }
-  if (getSelectedReviewFilter() === "good_only") {
-    return "No pending excerpts in this book are currently flagged as good content.";
-  }
-
   return "No pending excerpts remain for this book.";
 }
 
 function getWeirdEmptyStateMessage() {
-  return "No pending excerpts in this book are currently flagged as needing additional checking.";
+  return "No pending excerpts in this book are currently flagged for extra review.";
 }
 
 function groupExcerptsByTitle(excerpts) {

@@ -4,32 +4,32 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Weaver</title>
-  <link rel="icon" type="image/png" href="/weaver-logo.png?v=20260401a" />
+  <link rel="icon" type="image/png" href="/weaver-logo.png?v=20260401b" />
   <script>
     (function() {
       const isLocalhost = ["127.0.0.1", "localhost"].includes(window.location.hostname);
       window.WEAVER_CONFIG = {
-        appVersion: "2026-04-01a",
+        appVersion: "2026-04-01b",
         apiBaseUrl: "https://script.google.com/macros/s/AKfycbytGpEIr8CbPdJDDF5tAn7JxH0-kNuBogD_elDlF8ljgb_7ebF2nt-yn45hUIwzRd2Xfg/exec",
         lockApiBaseUrl: !isLocalhost
       };
     })();
   </script>
-  <link rel="stylesheet" href="/style.css?v=20260401a" />
+  <link rel="stylesheet" href="/style.css?v=20260401b" />
 </head>
 <body>
   <div class="shell">
     <header class="hero">
       <p class="eyebrow">Button Internal Tool</p>
       <h1 class="hero-wordmark">
-        <img class="hero-wordmark__logo" src="/weaver-logo.png?v=20260401a" alt="Weaver" />
+        <img class="hero-wordmark__logo" src="/weaver-logo.png?v=20260401b" alt="Weaver" />
       </h1>
       <p class="lede">
         Select a book, review excerpts, and submit decisions back to the working sheet.
       </p>
       <div class="hero-links">
         <button class="hero-pill hero-pill--active" id="show-review-module" type="button">Review queue</button>
-        <button class="hero-pill" id="show-weird-module" type="button">Needs checking</button>
+        <button class="hero-pill" id="show-weird-module" type="button">Extra review</button>
         <button class="hero-pill" id="show-corrections-module" type="button">Needs correction</button>
         <a
           class="hero-pill hero-pill--graphics"
@@ -78,7 +78,7 @@
           <label class="field">
             <span>Queue Mode</span>
             <select id="review-filter">
-              <option value="good_only">Good content</option>
+              <option value="standard_review">Standard review</option>
               <option value="new_only">New to library only</option>
               <option value="exact_library">Exact library matches</option>
               <option value="possible_library">Possible library matches</option>
@@ -89,7 +89,7 @@
           <button id="load-excerpts" class="button">Load Excerpts</button>
         </div>
         <p class="hint" id="book-selection-hint">
-          `Good content` is the main approval lane. Use the separate `Needs checking` module for rows that still need human review, and `Exact library matches` / `Possible library matches` for duplicate cleanup.
+          `Standard review` is the normal approval lane. Use the separate `Extra review` module for incomplete, conflicting, or otherwise weird rows that should not be mixed into the main queue.
         </p>
       </section>
 
@@ -108,7 +108,7 @@
 
       <section class="panel panel--wide module-panel" id="weird-module">
         <div class="panel__header">
-          <h2>Needs Checking</h2>
+          <h2>Extra Review</h2>
           <span class="badge badge--muted" id="weird-book-count-badge">0 Books</span>
         </div>
         <div class="book-picker">
@@ -118,23 +118,23 @@
               <option value="">Load books first</option>
             </select>
           </label>
-          <button id="load-weird-excerpts" class="button">Load Needs Checking</button>
+          <button id="load-weird-excerpts" class="button">Load Extra Review</button>
         </div>
         <p class="hint">
-          These are the rows that still need human attention because they are not already good content and not strict exact library duplicates.
+          These are the rows with incomplete, conflicting, or otherwise weird catalog/library signals that should be reviewed separately from the standard queue.
         </p>
       </section>
 
       <section class="panel panel--wide module-panel" id="weird-queue-panel">
         <div class="panel__header">
-          <h2>Needs Checking Queue</h2>
+          <h2>Extra Review Queue</h2>
           <span class="badge badge--muted" id="weird-excerpt-count-badge">0 Excerpts</span>
         </div>
         <div class="toolbar">
           <button id="submit-weird-review" class="button button--accent">Submit Decisions</button>
         </div>
         <div id="weird-excerpt-list" class="excerpt-list">
-          <p class="empty-state">Load a book to start reviewing the rows that still need checking.</p>
+          <p class="empty-state">Load a book to start reviewing the rows that need extra attention.</p>
         </div>
       </section>
 
@@ -178,6 +178,6 @@
     </main>
   </div>
 
-  <script src="/app.js?v=20260401a"></script>
+  <script src="/app.js?v=20260401b"></script>
 </body>
 </html>
