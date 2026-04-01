@@ -619,7 +619,7 @@ function groupExcerptsByTitle(excerpts) {
 
   excerpts.forEach(excerpt => {
     const title = (excerpt.title || "Untitled poem").trim();
-    const key = title.toLowerCase();
+    const key = title.toLowerCase().replace(/\s+/g, " ").trim();
     if (!groups.has(key)) {
       groups.set(key, {
         title,
