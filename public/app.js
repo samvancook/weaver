@@ -17,6 +17,7 @@ const elements = {
   bookSelect: document.getElementById("book-select"),
   weirdBookSelect: document.getElementById("weird-book-select"),
   reviewFilter: document.getElementById("review-filter"),
+  weirdReviewFilter: document.getElementById("weird-review-filter"),
   loadExcerpts: document.getElementById("load-excerpts"),
   loadWeirdExcerpts: document.getElementById("load-weird-excerpts"),
   submitReview: document.getElementById("submit-review"),
@@ -293,10 +294,10 @@ async function loadBooks(options = {}) {
 
     const records = Array.isArray(data.records) ? data.records : [];
     const allBookSummaries = summarizePendingBooks(records);
-    currentReviewBookSummaries = allBookSummaries.filter(book => book.totalCount > 0);
+    currentReviewBookSummaries = allBookSummaries.filter(book => book.standardCount > 0);
     currentWeirdBookSummaries = allBookSummaries.filter(book => book.needsCheckingCount > 0);
 
-    populateBookSelect(elements.bookSelect, currentReviewBookSummaries, previousSelection, book => `${book.title} (${book.totalCount})`);
+    populateBookSelect(elements.bookSelect, currentReviewBookSummaries, previousSelection, book => `${book.title} (${book.standardCount})`);
     populateBookSelect(elements.weirdBookSelect, currentWeirdBookSummaries, previousWeirdSelection, book => `${book.title} (${book.needsCheckingCount})`);
 
     elements.bookCountBadge.textContent = `${currentReviewBookSummaries.length} Books`;
@@ -327,6 +328,7 @@ function summarizePendingBooks(records) {
       byTitle.set(title, {
         title,
         totalCount: 0,
+        standardCount: 0,
         goodCount: 0,
         needsCheckingCount: 0
       });
@@ -337,6 +339,7 @@ function summarizePendingBooks(records) {
     if (isExtraReviewRecord(record)) {
       summary.needsCheckingCount += 1;
     } else {
+      summary.standardCount += 1;
       summary.goodCount += 1;
     }
   });
@@ -415,7 +418,7 @@ async function loadWeirdExcerpts() {
     weirdPinnedRowOrder = [];
     await loadCatalogValidation(data.excerpts);
     renderWeirdCurrentExcerpts();
-    setStatus(`Loaded ${applyNeedsCheckingFilter(data.excerpts).length} extra-review excerpts for "${bookTitle}". Backend ${data.version || "unknown"}.`);
+    setStatus(`Loaded ${applyExtraReviewFilter(data.excerpts).length} extra-review excerpts for "${bookTitle}". Backend ${data.version || "unknown"}.`);
   } catch (error) {
     setStatus(`Extra review load failed: ${error.message}`);
   }
@@ -606,7 +609,7 @@ function renderCurrentExcerpts() {
 }
 
 function renderWeirdCurrentExcerpts() {
-  const filtered = applyNeedsCheckingFilter(currentWeirdExcerpts);
+  const filtered = applyExtraReviewFilter(currentWeirdExcerpts);
   const totalMatching = filtered.length;
   const visibleExcerpts = orderWeirdExcerptsForRender(filtered).slice(0, weirdVisibleCount);
   renderExcerptCollection(visibleExcerpts, elements.weirdExcerptList, elements.weirdExcerptCountBadge, getWeirdEmptyStateMessage(), {
@@ -695,7 +698,27 @@ function applyReviewFilter(excerpts) {
   return excerpts;
 }
 
-function applyNeedsCheckingFilter(excerpts) {
+function getSelectedExtraReviewFilter() {
+  return elements.weirdReviewFilter?.value || "all_extra";
+}
+
+function applyExtraReviewFilter(excerpts) {
+  const mode = getSelectedExtraReviewFilter();
+  if (mode === "missing_catalog") {
+    return excerpts.filter(excerpt => !hasCatalogStatus(excerpt));
+  }
+  if (mode === "likely_correction") {
+    return excerpts.filter(excerpt => isLikelyCorrectionExcerpt(excerpt));
+  }
+  if (mode === "possible_library") {
+    return excerpts.filter(excerpt => {
+      const match = getLibraryMatch(excerpt);
+      return Boolean(match && match.matchType && match.matchType !== "exact");
+    });
+  }
+  if (mode === "linebreak_diff") {
+    return excerpts.filter(excerpt => isLineBreakDifferenceExcerpt(excerpt));
+  }
   return excerpts.filter(excerpt => isExtraReviewExcerpt(excerpt));
 }
 
@@ -713,11 +736,21 @@ function hasLibraryExcerptMatch(excerpt) {
   return Boolean(validation && validation.libraryExcerptMatch);
 }
 
-function getLibraryMatchType(excerpt) {
+function getLibraryMatch(excerpt) {
   const validation =
     currentValidationByRecordId.get(excerpt.recordId || String(excerpt.sourceRow)) || null;
 
-  return validation?.libraryExcerptMatch?.matchType || "";
+  return validation?.libraryExcerptMatch || null;
+}
+
+function getLibraryMatchType(excerpt) {
+  return getLibraryMatch(excerpt)?.matchType || "";
+}
+
+function hasCatalogStatus(excerpt) {
+  const validation =
+    currentValidationByRecordId.get(excerpt.recordId || String(excerpt.sourceRow)) || null;
+  return Boolean(validation && validation.status);
 }
 
 function isLikelyCorrectionStatus(status) {
@@ -739,9 +772,7 @@ function isGoodContentExcerpt(excerpt) {
 }
 
 function isStrictExactLibraryMatch(excerpt) {
-  const validation =
-    currentValidationByRecordId.get(excerpt.recordId || String(excerpt.sourceRow)) || null;
-  const match = validation?.libraryExcerptMatch || null;
+  const match = getLibraryMatch(excerpt);
   return Boolean(
     match &&
     match.matchType === "exact" &&
@@ -753,7 +784,7 @@ function isStrictExactLibraryMatch(excerpt) {
 function isExtraReviewExcerpt(excerpt) {
   const validation =
     currentValidationByRecordId.get(excerpt.recordId || String(excerpt.sourceRow)) || null;
-  const libraryMatch = validation?.libraryExcerptMatch || null;
+  const libraryMatch = getLibraryMatch(excerpt);
 
   if (!validation || !validation.status) {
     return true;
@@ -772,6 +803,11 @@ function isExtraReviewExcerpt(excerpt) {
   }
 
   return !(libraryMatch.formattingMatch && libraryMatch.lineBreaksMatch);
+}
+
+function isLineBreakDifferenceExcerpt(excerpt) {
+  const match = getLibraryMatch(excerpt);
+  return Boolean(match && match.matchType === "exact" && match.lineBreaksMatch === false);
 }
 
 function isStandardReviewExcerpt(excerpt) {
@@ -818,6 +854,18 @@ function getEmptyStateMessage() {
 }
 
 function getWeirdEmptyStateMessage() {
+  if (getSelectedExtraReviewFilter() === "missing_catalog") {
+    return "No pending excerpts in this book are currently missing catalog status.";
+  }
+  if (getSelectedExtraReviewFilter() === "likely_correction") {
+    return "No pending excerpts in this book are currently flagged as likely needing correction.";
+  }
+  if (getSelectedExtraReviewFilter() === "possible_library") {
+    return "No pending excerpts in this book are currently flagged as possible library matches.";
+  }
+  if (getSelectedExtraReviewFilter() === "linebreak_diff") {
+    return "No pending excerpts in this book are currently flagged as text matches with line-break differences.";
+  }
   return "No pending excerpts in this book are currently flagged for extra review.";
 }
 
@@ -1331,15 +1379,15 @@ async function submitWeirdReview() {
     afterReload: async refreshed => {
       currentWeirdExcerpts = refreshed.excerpts;
       const remainingSourceRows = new Set(
-        applyNeedsCheckingFilter(refreshed.excerpts).map(excerpt => Number(excerpt.sourceRow))
+        applyExtraReviewFilter(refreshed.excerpts).map(excerpt => Number(excerpt.sourceRow))
       );
       weirdPinnedRowOrder = pinnedSourceRows.filter(sourceRow => remainingSourceRows.has(sourceRow));
       await loadCatalogValidation(refreshed.excerpts);
       renderWeirdCurrentExcerpts();
       loadBooks({ preserveSelection: true }).catch(() => {});
     },
-    countExcerpts: refreshed => applyNeedsCheckingFilter(refreshed.excerpts),
-    emptyMessage: "Load needs-checking excerpts before submitting.",
+    countExcerpts: refreshed => applyExtraReviewFilter(refreshed.excerpts),
+    emptyMessage: "Load extra-review excerpts before submitting.",
     idleLabel: "Submit Decisions",
     progressLabel: "Submitting"
   });
@@ -1479,6 +1527,13 @@ if (elements.reviewFilter) {
     reviewVisibleCount = REVIEW_BATCH_SIZE;
     reviewPinnedRowOrder = [];
     renderCurrentExcerpts();
+  });
+}
+if (elements.weirdReviewFilter) {
+  elements.weirdReviewFilter.addEventListener("change", () => {
+    weirdVisibleCount = REVIEW_BATCH_SIZE;
+    weirdPinnedRowOrder = [];
+    renderWeirdCurrentExcerpts();
   });
 }
 
