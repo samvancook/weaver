@@ -1431,10 +1431,12 @@ async function submitReview() {
     collectUpdates: collectUpdates,
     bookKey,
     reloadAction: "pendingRecords",
-    afterReload: async refreshed => {
+    afterReload: async (refreshed, changedUpdates) => {
+      const savedSourceRows = new Set(changedUpdates.map(update => Number(update.sourceRow)));
       const records = Array.isArray(refreshed.records) ? refreshed.records : [];
       applyPendingBookData(records, { preserveSelection: true });
-      currentExcerpts = getPendingRecordsForBookKey(bookKey, records);
+      currentExcerpts = getPendingRecordsForBookKey(bookKey, records)
+        .filter(excerpt => !savedSourceRows.has(Number(excerpt.sourceRow)));
       const remainingSourceRows = new Set(
         currentExcerpts.map(excerpt => Number(excerpt.sourceRow))
       );
@@ -1462,10 +1464,12 @@ async function submitWeirdReview() {
     collectUpdates: collectWeirdUpdates,
     bookKey,
     reloadAction: "pendingRecords",
-    afterReload: async refreshed => {
+    afterReload: async (refreshed, changedUpdates) => {
+      const savedSourceRows = new Set(changedUpdates.map(update => Number(update.sourceRow)));
       const records = Array.isArray(refreshed.records) ? refreshed.records : [];
       applyPendingBookData(records, { preserveSelection: true });
-      currentWeirdExcerpts = getPendingRecordsForBookKey(bookKey, records);
+      currentWeirdExcerpts = getPendingRecordsForBookKey(bookKey, records)
+        .filter(excerpt => !savedSourceRows.has(Number(excerpt.sourceRow)));
       const remainingSourceRows = new Set(
         applyExtraReviewFilter(currentWeirdExcerpts).map(excerpt => Number(excerpt.sourceRow))
       );
@@ -1563,7 +1567,7 @@ async function submitExcerptSet({
       throw new Error(refreshed.error || "Verification reload failed.");
     }
 
-    await afterReload(refreshed);
+    await afterReload(refreshed, changedUpdates);
     const countPool = typeof countExcerpts === "function" ? countExcerpts(refreshed) : refreshed.excerpts;
     const remainingUpdatedRows = countRemainingUpdatedRows(changedUpdates, countPool);
     const droppedFromQueue = changedUpdates.length - remainingUpdatedRows;
