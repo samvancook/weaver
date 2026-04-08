@@ -294,10 +294,10 @@ async function loadBooks(options = {}) {
 
     const records = Array.isArray(data.records) ? data.records : [];
     const allBookSummaries = summarizePendingBooks(records);
-    currentReviewBookSummaries = allBookSummaries.filter(book => book.standardCount > 0);
+    currentReviewBookSummaries = allBookSummaries.filter(book => book.totalCount > 0);
     currentWeirdBookSummaries = allBookSummaries.filter(book => book.needsCheckingCount > 0);
 
-    populateBookSelect(elements.bookSelect, currentReviewBookSummaries, previousSelection, book => `${book.title} (${book.standardCount})`);
+    populateBookSelect(elements.bookSelect, currentReviewBookSummaries, previousSelection, book => `${book.title} (${book.totalCount})`);
     populateBookSelect(elements.weirdBookSelect, currentWeirdBookSummaries, previousWeirdSelection, book => `${book.title} (${book.needsCheckingCount})`);
 
     elements.bookCountBadge.textContent = `${currentReviewBookSummaries.length} Books`;
