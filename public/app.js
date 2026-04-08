@@ -305,6 +305,24 @@ function buildReviewSavePayload(update) {
   };
 }
 
+function buildBatchReviewSavePayload(update) {
+  return {
+    sourceRow: update.sourceRow,
+    recordId: update.recordId,
+    approval: update.reviewDecision,
+    reviewDecision: update.reviewDecision,
+    correctionNote: update.correctionNote,
+    correctedAuthor: update.correctedAuthor,
+    correctedTitle: update.correctedTitle,
+    correctedBookTitle: update.correctedBookTitle,
+    correctedExcerpt: update.correctedExcerpt,
+    graphicsQi: Boolean(update.useForQi),
+    useForQi: Boolean(update.useForQi),
+    photos: Boolean(update.useForInt),
+    useForInt: Boolean(update.useForInt)
+  };
+}
+
 async function requestBatchSave(updates) {
   const response = await fetch("/api/save-reviews", {
     method: "POST",
@@ -313,7 +331,7 @@ async function requestBatchSave(updates) {
     },
     body: JSON.stringify({
       apiBaseUrl: getApiBaseUrl(),
-      updates: updates.map(buildReviewSavePayload)
+      updates: updates.map(buildBatchReviewSavePayload)
     })
   });
 
