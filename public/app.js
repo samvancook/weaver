@@ -55,7 +55,7 @@ let currentWeirdBookSummaries = [];
 let reviewBookSummaryByKey = new Map();
 let weirdBookSummaryByKey = new Map();
 
-const REVIEW_BATCH_SIZE = 25;
+const REVIEW_BATCH_SIZE = 1;
 
 function setStatus(message, details) {
   elements.statusOutput.textContent = details
@@ -671,10 +671,13 @@ function renderExcerptCollection(excerpts, container, countBadge, emptyMessage, 
   if (options.canShowMore) {
     const controls = document.createElement("div");
     controls.className = "excerpt-batch-controls";
+    const nextLabel = (options.batchSize || REVIEW_BATCH_SIZE) === 1
+      ? "Show next excerpt"
+      : `Show next ${options.batchSize || REVIEW_BATCH_SIZE}`;
     controls.innerHTML = `
       <p class="hint excerpt-batch-controls__hint">Showing ${visibleCount} of ${totalMatching} matching excerpts.</p>
       <button type="button" class="button button--secondary excerpt-batch-controls__button">
-        Show next ${options.batchSize || REVIEW_BATCH_SIZE}
+        ${nextLabel}
       </button>
     `;
     controls.querySelector("button")?.addEventListener("click", options.onShowMore);
