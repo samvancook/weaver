@@ -42,6 +42,7 @@ const elements = {
 let currentExcerpts = [];
 let currentWeirdExcerpts = [];
 let currentCorrectionExcerpts = [];
+let currentPendingRecords = [];
 let isSaving = false;
 let currentValidationByRecordId = new Map();
 let currentModule = "review";
@@ -51,6 +52,8 @@ let weirdVisibleCount = 25;
 let weirdPinnedRowOrder = [];
 let currentReviewBookSummaries = [];
 let currentWeirdBookSummaries = [];
+let reviewBookSummaryByKey = new Map();
+let weirdBookSummaryByKey = new Map();
 
 const REVIEW_BATCH_SIZE = 25;
 
@@ -76,6 +79,64 @@ function setSubmitState(isBusy, label) {
   if (elements.submitCorrections) {
     elements.submitCorrections.textContent = label || (isBusy ? "Saving..." : "Save Corrections");
   }
+}
+
+function normalizeBookKey(text) {
+  return (text || "").trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function getBookTitleDisplayScore(title) {
+  const text = (title || "").trim().replace(/\s+/g, " ");
+  if (!text) return -Infinity;
+
+  let score = 0;
+  if (text === (title || "")) score += 2;
+  if (/[a-z]/.test(text)) score += 3;
+  if (/^[A-Z0-9\s&'"?!:;.,()\/|-]+$/.test(text) && !/[a-z]/.test(text)) score -= 2;
+  score -= Math.max(0, text.length - text.trim().length);
+  return score;
+}
+
+function choosePreferredBookTitle(currentTitle, candidateTitle) {
+  if (!currentTitle) return candidateTitle;
+  if (!candidateTitle) return currentTitle;
+
+  const currentScore = getBookTitleDisplayScore(currentTitle);
+  const candidateScore = getBookTitleDisplayScore(candidateTitle);
+  if (candidateScore > currentScore) return candidateTitle;
+  if (candidateScore < currentScore) return currentTitle;
+
+  return candidateTitle.length < currentTitle.length ? candidateTitle : currentTitle;
+}
+
+function indexBookSummariesByKey(summaries) {
+  return new Map(summaries.map(summary => [summary.key, summary]));
+}
+
+function getPendingRecordsForBookKey(bookKey, records = currentPendingRecords) {
+  return records.filter(record => normalizeBookKey(record.bookTitle) === bookKey);
+}
+
+function applyPendingBookData(records, { preserveSelection = false } = {}) {
+  const previousSelection = preserveSelection ? elements.bookSelect?.value || "" : "";
+  const previousWeirdSelection = preserveSelection ? elements.weirdBookSelect?.value || "" : "";
+
+  currentPendingRecords = records;
+  const allBookSummaries = summarizePendingBooks(records);
+  currentReviewBookSummaries = allBookSummaries.filter(book => book.totalCount > 0);
+  currentWeirdBookSummaries = allBookSummaries.filter(book => book.needsCheckingCount > 0);
+  reviewBookSummaryByKey = indexBookSummariesByKey(currentReviewBookSummaries);
+  weirdBookSummaryByKey = indexBookSummariesByKey(currentWeirdBookSummaries);
+
+  populateBookSelect(elements.bookSelect, currentReviewBookSummaries, previousSelection, book => `${book.title} (${book.totalCount})`);
+  populateBookSelect(elements.weirdBookSelect, currentWeirdBookSummaries, previousWeirdSelection, book => `${book.title} (${book.needsCheckingCount})`);
+
+  elements.bookCountBadge.textContent = `${currentReviewBookSummaries.length} Books`;
+  if (elements.weirdBookCountBadge) {
+    elements.weirdBookCountBadge.textContent = `${currentWeirdBookSummaries.length} Books`;
+  }
+
+  return allBookSummaries;
 }
 
 function getApiBaseUrl() {
@@ -293,17 +354,11 @@ async function loadBooks(options = {}) {
     }
 
     const records = Array.isArray(data.records) ? data.records : [];
-    const allBookSummaries = summarizePendingBooks(records);
-    currentReviewBookSummaries = allBookSummaries.filter(book => book.totalCount > 0);
-    currentWeirdBookSummaries = allBookSummaries.filter(book => book.needsCheckingCount > 0);
-
-    populateBookSelect(elements.bookSelect, currentReviewBookSummaries, previousSelection, book => `${book.title} (${book.totalCount})`);
-    populateBookSelect(elements.weirdBookSelect, currentWeirdBookSummaries, previousWeirdSelection, book => `${book.title} (${book.needsCheckingCount})`);
-
-    elements.bookCountBadge.textContent = `${currentReviewBookSummaries.length} Books`;
-    if (elements.weirdBookCountBadge) {
-      elements.weirdBookCountBadge.textContent = `${currentWeirdBookSummaries.length} Books`;
-    }
+    const allBookSummaries = applyPendingBookData(records, {
+      preserveSelection,
+      previousSelection,
+      previousWeirdSelection
+    });
     setStatus(
       `Loaded ${allBookSummaries.length} books. Backend ${data.version || "unknown"}.`,
       allBookSummaries.slice(0, 10)
@@ -317,24 +372,30 @@ function summarizePendingBooks(records) {
   const byTitle = new Map();
 
   records.forEach(record => {
-    const title = (record.bookTitle || "").trim();
+    const title = (record.bookTitle || "").trim().replace(/\s+/g, " ");
     if (!title) return;
+    const titleKey = normalizeBookKey(title);
+    if (!titleKey) return;
     const key = record.recordId || String(record.sourceRow);
     if (record.catalogValidation?.status) {
       currentValidationByRecordId.set(key, record.catalogValidation);
     }
 
-    if (!byTitle.has(title)) {
-      byTitle.set(title, {
+    if (!byTitle.has(titleKey)) {
+      byTitle.set(titleKey, {
+        key: titleKey,
         title,
         totalCount: 0,
         standardCount: 0,
         goodCount: 0,
-        needsCheckingCount: 0
+        needsCheckingCount: 0,
+        variants: new Set([title])
       });
     }
 
-    const summary = byTitle.get(title);
+    const summary = byTitle.get(titleKey);
+    summary.title = choosePreferredBookTitle(summary.title, title);
+    summary.variants.add(title);
     summary.totalCount += 1;
     if (isExtraReviewRecord(record)) {
       summary.needsCheckingCount += 1;
@@ -344,7 +405,12 @@ function summarizePendingBooks(records) {
     }
   });
 
-  return Array.from(byTitle.values()).sort((left, right) => left.title.localeCompare(right.title));
+  return Array.from(byTitle.values())
+    .map(summary => ({
+      ...summary,
+      variants: Array.from(summary.variants).sort((left, right) => left.localeCompare(right))
+    }))
+    .sort((left, right) => left.title.localeCompare(right.title));
 }
 
 function populateBookSelect(select, books, previousSelection, labelBuilder) {
@@ -357,13 +423,13 @@ function populateBookSelect(select, books, previousSelection, labelBuilder) {
 
   books.forEach(book => {
     const option = document.createElement("option");
-    option.value = book.title;
+    option.value = book.key;
     option.textContent = labelBuilder(book);
     select.appendChild(option);
   });
 
   if (previousSelection) {
-    const hasPreviousSelection = books.some(book => book.title === previousSelection);
+    const hasPreviousSelection = books.some(book => book.key === previousSelection);
     if (hasPreviousSelection) {
       select.value = previousSelection;
     }
@@ -375,50 +441,44 @@ function isGoodValidation(validation) {
 }
 
 async function loadExcerpts() {
-  const bookTitle = elements.bookSelect.value;
-  if (!bookTitle) {
+  const bookKey = elements.bookSelect.value;
+  if (!bookKey) {
     setStatus("Choose a book title first.");
     return;
   }
 
   try {
+    const summary = reviewBookSummaryByKey.get(bookKey);
+    const bookTitle = summary?.title || bookKey;
     setStatus(`Loading excerpts for "${bookTitle}"...`);
-    const data = await requestJsonp("excerpts", { bookTitle });
-    if (!data.ok) {
-      throw new Error(data.error || "Excerpt load failed.");
-    }
-
-    currentExcerpts = data.excerpts;
+    currentExcerpts = getPendingRecordsForBookKey(bookKey);
     reviewVisibleCount = REVIEW_BATCH_SIZE;
     reviewPinnedRowOrder = [];
-    await loadCatalogValidation(data.excerpts);
+    await loadCatalogValidation(currentExcerpts);
     renderCurrentExcerpts();
-    setStatus(`Loaded ${data.excerpts.length} excerpts for "${bookTitle}". Backend ${data.version || "unknown"}.`);
+    setStatus(`Loaded ${currentExcerpts.length} excerpts for "${bookTitle}".`);
   } catch (error) {
     setStatus(`Excerpt load failed: ${error.message}`);
   }
 }
 
 async function loadWeirdExcerpts() {
-  const bookTitle = elements.weirdBookSelect?.value;
-  if (!bookTitle) {
+  const bookKey = elements.weirdBookSelect?.value;
+  if (!bookKey) {
     setStatus("Choose a book title first.");
     return;
   }
 
   try {
+    const summary = weirdBookSummaryByKey.get(bookKey) || reviewBookSummaryByKey.get(bookKey);
+    const bookTitle = summary?.title || bookKey;
     setStatus(`Loading extra-review excerpts for "${bookTitle}"...`);
-    const data = await requestJsonp("excerpts", { bookTitle });
-    if (!data.ok) {
-      throw new Error(data.error || "Excerpt load failed.");
-    }
-
-    currentWeirdExcerpts = data.excerpts;
+    currentWeirdExcerpts = getPendingRecordsForBookKey(bookKey);
     weirdVisibleCount = REVIEW_BATCH_SIZE;
     weirdPinnedRowOrder = [];
-    await loadCatalogValidation(data.excerpts);
+    await loadCatalogValidation(currentWeirdExcerpts);
     renderWeirdCurrentExcerpts();
-    setStatus(`Loaded ${applyExtraReviewFilter(data.excerpts).length} extra-review excerpts for "${bookTitle}". Backend ${data.version || "unknown"}.`);
+    setStatus(`Loaded ${applyExtraReviewFilter(currentWeirdExcerpts).length} extra-review excerpts for "${bookTitle}".`);
   } catch (error) {
     setStatus(`Extra review load failed: ${error.message}`);
   }
@@ -1343,23 +1403,27 @@ async function submitReview() {
   const pinnedSourceRows = Array.from(
     elements.excerptList.querySelectorAll(".excerpt-card")
   ).map(card => Number(card.dataset.sourceRow)).filter(Boolean);
+  const bookKey = elements.bookSelect.value;
 
   return submitExcerptSet({
     sourceExcerpts: currentExcerpts,
     collectUpdates: collectUpdates,
-    bookTitle: elements.bookSelect.value,
-    reloadAction: "excerpts",
+    bookKey,
+    reloadAction: "pendingRecords",
     afterReload: async refreshed => {
-      currentExcerpts = refreshed.excerpts;
+      const records = Array.isArray(refreshed.records) ? refreshed.records : [];
+      applyPendingBookData(records, { preserveSelection: true });
+      currentExcerpts = getPendingRecordsForBookKey(bookKey, records);
       const remainingSourceRows = new Set(
-        refreshed.excerpts.map(excerpt => Number(excerpt.sourceRow))
+        currentExcerpts.map(excerpt => Number(excerpt.sourceRow))
       );
       reviewPinnedRowOrder = pinnedSourceRows.filter(sourceRow => remainingSourceRows.has(sourceRow));
-      await loadCatalogValidation(refreshed.excerpts);
+      await loadCatalogValidation(currentExcerpts);
       renderCurrentExcerpts();
-      loadBooks({ preserveSelection: true }).catch(() => {});
     },
-    countExcerpts: refreshed => applyReviewFilter(refreshed.excerpts),
+    countExcerpts: refreshed => applyReviewFilter(
+      getPendingRecordsForBookKey(bookKey, Array.isArray(refreshed.records) ? refreshed.records : [])
+    ),
     emptyMessage: "Load excerpts before submitting.",
     idleLabel: "Submit Decisions",
     progressLabel: "Submitting"
@@ -1370,23 +1434,27 @@ async function submitWeirdReview() {
   const pinnedSourceRows = Array.from(
     elements.weirdExcerptList.querySelectorAll(".excerpt-card")
   ).map(card => Number(card.dataset.sourceRow)).filter(Boolean);
+  const bookKey = elements.weirdBookSelect.value;
 
   return submitExcerptSet({
     sourceExcerpts: currentWeirdExcerpts,
     collectUpdates: collectWeirdUpdates,
-    bookTitle: elements.weirdBookSelect.value,
-    reloadAction: "excerpts",
+    bookKey,
+    reloadAction: "pendingRecords",
     afterReload: async refreshed => {
-      currentWeirdExcerpts = refreshed.excerpts;
+      const records = Array.isArray(refreshed.records) ? refreshed.records : [];
+      applyPendingBookData(records, { preserveSelection: true });
+      currentWeirdExcerpts = getPendingRecordsForBookKey(bookKey, records);
       const remainingSourceRows = new Set(
-        applyExtraReviewFilter(refreshed.excerpts).map(excerpt => Number(excerpt.sourceRow))
+        applyExtraReviewFilter(currentWeirdExcerpts).map(excerpt => Number(excerpt.sourceRow))
       );
       weirdPinnedRowOrder = pinnedSourceRows.filter(sourceRow => remainingSourceRows.has(sourceRow));
-      await loadCatalogValidation(refreshed.excerpts);
+      await loadCatalogValidation(currentWeirdExcerpts);
       renderWeirdCurrentExcerpts();
-      loadBooks({ preserveSelection: true }).catch(() => {});
     },
-    countExcerpts: refreshed => applyExtraReviewFilter(refreshed.excerpts),
+    countExcerpts: refreshed => applyExtraReviewFilter(
+      getPendingRecordsForBookKey(bookKey, Array.isArray(refreshed.records) ? refreshed.records : [])
+    ),
     emptyMessage: "Load extra-review excerpts before submitting.",
     idleLabel: "Submit Decisions",
     progressLabel: "Submitting"
@@ -1397,7 +1465,7 @@ async function submitCorrections() {
   return submitExcerptSet({
     sourceExcerpts: currentCorrectionExcerpts,
     collectUpdates: collectCorrectionUpdates,
-    bookTitle: elements.correctionBookSelect.value,
+    bookKey: elements.correctionBookSelect.value,
     reloadAction: "corrections",
     afterReload: async refreshed => {
       currentCorrectionExcerpts = refreshed.excerpts;
@@ -1415,7 +1483,7 @@ async function submitCorrections() {
 async function submitExcerptSet({
   sourceExcerpts,
   collectUpdates,
-  bookTitle,
+  bookKey,
   reloadAction,
   afterReload,
   countExcerpts,
@@ -1469,7 +1537,7 @@ async function submitExcerptSet({
     setStatus(`Submitted ${changedUpdates.length} changed decisions. Verifying saved values...`);
     await sleep(750);
 
-    const refreshed = await requestJsonp(reloadAction, { bookTitle });
+    const refreshed = await requestJsonp(reloadAction, reloadAction === "pendingRecords" ? {} : { bookTitle: bookKey });
     if (!refreshed.ok) {
       throw new Error(refreshed.error || "Verification reload failed.");
     }
@@ -1490,7 +1558,7 @@ async function submitExcerptSet({
         usedFallback
           ? `Saved ${changedUpdates.length} changed decisions with fallback mode. ${droppedFromQueue} dropped out of queue and ${remainingUpdatedRows} are still showing.`
           : `Saved ${changedUpdates.length} changed decisions. ${droppedFromQueue} dropped out of queue and ${remainingUpdatedRows} are still showing.`,
-        refreshed.excerpts.slice(0, 5)
+        (Array.isArray(refreshed.excerpts) ? refreshed.excerpts : Array.isArray(refreshed.records) ? refreshed.records : []).slice(0, 5)
       );
     }
   } catch (error) {
