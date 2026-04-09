@@ -4,25 +4,25 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Weaver</title>
-  <link rel="icon" type="image/png" href="/weaver-logo.png?v=20260409f" />
+  <link rel="icon" type="image/png" href="/weaver-logo.png?v=20260409g" />
   <script>
     (function() {
       const isLocalhost = ["127.0.0.1", "localhost"].includes(window.location.hostname);
       window.WEAVER_CONFIG = {
-        appVersion: "2026-04-09f",
+        appVersion: "2026-04-09g",
         apiBaseUrl: "https://script.google.com/macros/s/AKfycbw2s782-4u1metHPGH6GgV_D4VdqVFif1Rs2gkelcp4eRX_3bA_1qm3Y7MEX7yN6CusOQ/exec",
         lockApiBaseUrl: !isLocalhost
       };
     })();
   </script>
-  <link rel="stylesheet" href="/style.css?v=20260409f" />
+  <link rel="stylesheet" href="/style.css?v=20260409g" />
 </head>
 <body>
   <div class="shell">
     <header class="hero">
       <p class="eyebrow">Button Internal Tool</p>
       <h1 class="hero-wordmark">
-        <img class="hero-wordmark__logo" src="/weaver-logo.png?v=20260409f" alt="Weaver" />
+        <img class="hero-wordmark__logo" src="/weaver-logo.png?v=20260409g" alt="Weaver" />
       </h1>
       <p class="lede">
         Select a book, review excerpts, and submit decisions back to the working sheet.
@@ -83,6 +83,13 @@
               <option value="exact_library">Exact library matches</option>
               <option value="possible_library">Possible library matches</option>
               <option value="likely_correction">Likely need correction</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Review Style</span>
+            <select id="review-display-mode">
+              <option value="single">Single excerpt</option>
+              <option value="batch">Batch review</option>
             </select>
           </label>
           <button id="load-excerpts" class="button">Load Excerpts</button>
@@ -187,6 +194,6 @@
     </main>
   </div>
 
-  <script src="/app.js?v=20260409a"></script>
+  <script src="/app.js?v=20260409g"></script>
 </body>
 </html>

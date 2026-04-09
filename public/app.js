@@ -17,6 +17,7 @@ const elements = {
   bookSelect: document.getElementById("book-select"),
   weirdBookSelect: document.getElementById("weird-book-select"),
   reviewFilter: document.getElementById("review-filter"),
+  reviewDisplayMode: document.getElementById("review-display-mode"),
   weirdReviewFilter: document.getElementById("weird-review-filter"),
   loadExcerpts: document.getElementById("load-excerpts"),
   loadWeirdExcerpts: document.getElementById("load-weird-excerpts"),
@@ -46,7 +47,7 @@ let currentPendingRecords = [];
 let isSaving = false;
 let currentValidationByRecordId = new Map();
 let currentModule = "review";
-let reviewVisibleCount = 25;
+let reviewVisibleCount = 1;
 let reviewPinnedRowOrder = [];
 let weirdVisibleCount = 25;
 let weirdPinnedRowOrder = [];
@@ -55,7 +56,9 @@ let currentWeirdBookSummaries = [];
 let reviewBookSummaryByKey = new Map();
 let weirdBookSummaryByKey = new Map();
 
-const REVIEW_BATCH_SIZE = 1;
+const REVIEW_SINGLE_BATCH_SIZE = 1;
+const REVIEW_MULTI_BATCH_SIZE = 25;
+const EXTRA_REVIEW_BATCH_SIZE = 1;
 
 function setStatus(message, details) {
   elements.statusOutput.textContent = details
@@ -79,6 +82,16 @@ function setSubmitState(isBusy, label) {
   if (elements.submitCorrections) {
     elements.submitCorrections.textContent = label || (isBusy ? "Saving..." : "Save Corrections");
   }
+}
+
+function getSelectedReviewDisplayMode() {
+  return elements.reviewDisplayMode?.value || "single";
+}
+
+function getReviewBatchSize() {
+  return getSelectedReviewDisplayMode() === "batch"
+    ? REVIEW_MULTI_BATCH_SIZE
+    : REVIEW_SINGLE_BATCH_SIZE;
 }
 
 function normalizeBookKey(text) {
@@ -533,7 +546,7 @@ async function loadExcerpts() {
     const bookTitle = summary?.title || bookKey;
     setStatus(`Loading excerpts for "${bookTitle}"...`);
     currentExcerpts = getPendingRecordsForBookKey(bookKey);
-    reviewVisibleCount = REVIEW_BATCH_SIZE;
+    reviewVisibleCount = getReviewBatchSize();
     reviewPinnedRowOrder = [];
     await loadCatalogValidation(currentExcerpts);
     renderCurrentExcerpts();
@@ -555,7 +568,7 @@ async function loadWeirdExcerpts() {
     const bookTitle = summary?.title || bookKey;
     setStatus(`Loading extra-review excerpts for "${bookTitle}"...`);
     currentWeirdExcerpts = getPendingRecordsForBookKey(bookKey);
-    weirdVisibleCount = REVIEW_BATCH_SIZE;
+    weirdVisibleCount = EXTRA_REVIEW_BATCH_SIZE;
     weirdPinnedRowOrder = [];
     await loadCatalogValidation(currentWeirdExcerpts);
     renderWeirdCurrentExcerpts();
@@ -676,10 +689,10 @@ function renderExcerpts(excerpts) {
   renderExcerptCollection(visibleExcerpts, elements.excerptList, elements.excerptCountBadge, getEmptyStateMessage(), {
     totalMatching,
     visibleCount: visibleExcerpts.length,
-    batchSize: REVIEW_BATCH_SIZE,
+    batchSize: getReviewBatchSize(),
     canShowMore: totalMatching > visibleExcerpts.length,
     onShowMore: () => {
-      reviewVisibleCount += REVIEW_BATCH_SIZE;
+      reviewVisibleCount += getReviewBatchSize();
       renderCurrentExcerpts();
     }
   });
@@ -734,9 +747,9 @@ function renderExcerptCollection(excerpts, container, countBadge, emptyMessage, 
   if (options.canShowMore) {
     const controls = document.createElement("div");
     controls.className = "excerpt-batch-controls";
-    const nextLabel = (options.batchSize || REVIEW_BATCH_SIZE) === 1
+    const nextLabel = (options.batchSize || REVIEW_SINGLE_BATCH_SIZE) === 1
       ? "Show next excerpt"
-      : `Show next ${options.batchSize || REVIEW_BATCH_SIZE}`;
+      : `Show next ${options.batchSize || REVIEW_SINGLE_BATCH_SIZE}`;
     controls.innerHTML = `
       <p class="hint excerpt-batch-controls__hint">Showing ${visibleCount} of ${totalMatching} matching excerpts.</p>
       <button type="button" class="button button--secondary excerpt-batch-controls__button">
@@ -759,10 +772,10 @@ function renderWeirdCurrentExcerpts() {
   renderExcerptCollection(visibleExcerpts, elements.weirdExcerptList, elements.weirdExcerptCountBadge, getWeirdEmptyStateMessage(), {
     totalMatching,
     visibleCount: visibleExcerpts.length,
-    batchSize: REVIEW_BATCH_SIZE,
+    batchSize: EXTRA_REVIEW_BATCH_SIZE,
     canShowMore: totalMatching > visibleExcerpts.length,
     onShowMore: () => {
-      weirdVisibleCount += REVIEW_BATCH_SIZE;
+      weirdVisibleCount += EXTRA_REVIEW_BATCH_SIZE;
       renderWeirdCurrentExcerpts();
     }
   });
@@ -1717,14 +1730,21 @@ elements.showCorrectionsModule?.addEventListener("click", () => {
 });
 if (elements.reviewFilter) {
   elements.reviewFilter.addEventListener("change", () => {
-    reviewVisibleCount = REVIEW_BATCH_SIZE;
+    reviewVisibleCount = getReviewBatchSize();
+    reviewPinnedRowOrder = [];
+    renderCurrentExcerpts();
+  });
+}
+if (elements.reviewDisplayMode) {
+  elements.reviewDisplayMode.addEventListener("change", () => {
+    reviewVisibleCount = getReviewBatchSize();
     reviewPinnedRowOrder = [];
     renderCurrentExcerpts();
   });
 }
 if (elements.weirdReviewFilter) {
   elements.weirdReviewFilter.addEventListener("change", () => {
-    weirdVisibleCount = REVIEW_BATCH_SIZE;
+    weirdVisibleCount = EXTRA_REVIEW_BATCH_SIZE;
     weirdPinnedRowOrder = [];
     renderWeirdCurrentExcerpts();
   });
