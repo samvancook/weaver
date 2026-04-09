@@ -1243,11 +1243,11 @@ function buildValidationMarkup(validation, excerpt) {
   }
 
   if (validation.status === "excerpt_not_found_in_book" && validation.globalExcerptMatch) {
-    return `<p class="validation validation--warn">This book is in the catalog, but this excerpt was not found in it. Closest catalog hit: ${escapeHtml(validation.globalExcerptMatch.book_title)} / ${escapeHtml(validation.globalExcerptMatch.poem_title)} by ${escapeHtml(validation.globalExcerptMatch.author)}. ${poemLink}</p>${libraryMarkup}`;
+    return `<p class="validation validation--warn">This book is in the catalog, but this poem title does not match a poem in that book, and this excerpt text was not found there either. Closest catalog hit: ${escapeHtml(validation.globalExcerptMatch.book_title)} / ${escapeHtml(validation.globalExcerptMatch.poem_title)} by ${escapeHtml(validation.globalExcerptMatch.author)}. ${poemLink}</p>${libraryMarkup}`;
   }
 
   if (validation.status === "excerpt_not_found_in_book") {
-    return `<p class="validation validation--warn">This book is in the catalog, but this excerpt was not found in it. ${poemLink}</p>${libraryMarkup}`;
+    return `<p class="validation validation--warn">This book is in the catalog, but this poem title does not match a poem in that book, and this excerpt text was not found there either. ${poemLink}</p>${libraryMarkup}`;
   }
 
   if (validation.status === "book_not_found") {
