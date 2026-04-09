@@ -359,6 +359,15 @@ function buildReviewSavePayload(update) {
   };
 }
 
+function getEffectiveReviewDecision(excerpt) {
+  const explicitDecision = normalizeDecision(excerpt?.excerptReviewDecision);
+  if (explicitDecision) {
+    return explicitDecision;
+  }
+
+  return Boolean(excerpt?.useForQi ?? excerpt?.useForGraphicsQi) ? "accept" : "";
+}
+
 function buildBatchReviewSavePayload(update) {
   return {
     sourceRow: update.sourceRow,
@@ -1048,7 +1057,7 @@ function buildExcerptCard(excerpt, uniqueKey) {
     : "";
 
   const validationMarkup = buildValidationMarkup(validation, excerpt);
-  const reviewDecision = normalizeDecision(excerpt.excerptReviewDecision);
+  const reviewDecision = getEffectiveReviewDecision(excerpt);
   const useForQi = Boolean(excerpt.useForQi ?? excerpt.useForGraphicsQi);
   const hasOverrides = Boolean(
     normalizeCorrectionNote(excerpt.correctedAuthor) ||
@@ -1096,7 +1105,7 @@ function buildExcerptCard(excerpt, uniqueKey) {
     </div>
     ${validationMarkup}
     <blockquote class="excerpt-card__quote">${escapeHtml(excerpt.excerptText)}</blockquote>
-    <p class="hint excerpt-card__hint">Accept/Reject/Needs correction controls excerpt review. Use for QI preserves the existing quote-image tool linkage. Made + QCed is downstream status only.</p>
+    <p class="hint excerpt-card__hint">Accept now means send to the quote-image queue. Reject and Needs correction do not.</p>
     <div class="decision-group">
       <label><input type="radio" name="approval-${uniqueKey}" value="accept" ${currentDecision === "accept" ? "checked" : ""}> Accept</label>
       <label><input type="radio" name="approval-${uniqueKey}" value="reject" ${currentDecision === "reject" ? "checked" : ""}> Reject</label>
@@ -1127,9 +1136,6 @@ function buildExcerptCard(excerpt, uniqueKey) {
         <textarea class="corrected-excerpt" rows="5" placeholder="Correct or replace the excerpt text.">${escapeHtml(excerpt.correctedExcerpt || excerpt.excerptText || "")}</textarea>
       </label>
       <p class="hint correction-block__hint">These edits save as durable source overrides so the original extracted values remain preserved for reference.</p>
-    </div>
-    <div class="decision-flags">
-      <label><input type="checkbox" class="graphics-qi" ${useForQi ? "checked" : ""}> Use for QI</label>
     </div>
   `;
 
@@ -1337,7 +1343,7 @@ function collectUpdatesFromContainer(container) {
       correctedTitle: card.querySelector(".corrected-title")?.value || "",
       correctedBookTitle: card.querySelector(".corrected-book-title")?.value || "",
       correctedExcerpt: card.querySelector(".corrected-excerpt")?.value || "",
-      useForQi: card.querySelector(".graphics-qi")?.checked || false,
+      useForQi: reviewDecision === "accept",
       useForInt: card.dataset.currentUseForInt === "1"
     };
   });
@@ -1353,7 +1359,7 @@ function filterChangedUpdates(updates, excerpts) {
     if (!current) return true;
 
     return (
-      normalizeDecision(update.reviewDecision) !== normalizeDecision(current.excerptReviewDecision) ||
+      normalizeDecision(update.reviewDecision) !== getEffectiveReviewDecision(current) ||
       normalizeCorrectionNote(update.correctionNote) !== normalizeCorrectionNote(current.correctionNote) ||
       normalizeCorrectionNote(update.correctedAuthor) !== normalizeCorrectionNote(current.correctedAuthor) ||
       normalizeCorrectionNote(update.correctedTitle) !== normalizeCorrectionNote(current.correctedTitle) ||
@@ -1397,7 +1403,7 @@ function compareUpdatesToExcerpts(updates, excerpts) {
     if (!saved) return;
 
     const decisionMatches =
-      normalizeDecision(update.reviewDecision) === normalizeDecision(saved.excerptReviewDecision);
+      normalizeDecision(update.reviewDecision) === getEffectiveReviewDecision(saved);
     const authorMatches =
       normalizeCorrectionNote(update.correctedAuthor) === normalizeCorrectionNote(saved.correctedAuthor);
     const titleMatches =
