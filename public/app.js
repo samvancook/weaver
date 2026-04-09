@@ -1431,6 +1431,12 @@ async function submitReview() {
     collectUpdates: collectUpdates,
     bookKey,
     reloadAction: "pendingRecords",
+    afterSaveOptimistic: changedUpdates => {
+      const savedSourceRows = new Set(changedUpdates.map(update => Number(update.sourceRow)));
+      currentExcerpts = currentExcerpts.filter(excerpt => !savedSourceRows.has(Number(excerpt.sourceRow)));
+      reviewPinnedRowOrder = [];
+      renderCurrentExcerpts();
+    },
     afterReload: async (refreshed, changedUpdates) => {
       const savedSourceRows = new Set(changedUpdates.map(update => Number(update.sourceRow)));
       const records = Array.isArray(refreshed.records) ? refreshed.records : [];
@@ -1464,6 +1470,12 @@ async function submitWeirdReview() {
     collectUpdates: collectWeirdUpdates,
     bookKey,
     reloadAction: "pendingRecords",
+    afterSaveOptimistic: changedUpdates => {
+      const savedSourceRows = new Set(changedUpdates.map(update => Number(update.sourceRow)));
+      currentWeirdExcerpts = currentWeirdExcerpts.filter(excerpt => !savedSourceRows.has(Number(excerpt.sourceRow)));
+      weirdPinnedRowOrder = [];
+      renderWeirdCurrentExcerpts();
+    },
     afterReload: async (refreshed, changedUpdates) => {
       const savedSourceRows = new Set(changedUpdates.map(update => Number(update.sourceRow)));
       const records = Array.isArray(refreshed.records) ? refreshed.records : [];
@@ -1492,6 +1504,7 @@ async function submitCorrections() {
     collectUpdates: collectCorrectionUpdates,
     bookKey: elements.correctionBookSelect.value,
     reloadAction: "corrections",
+    afterSaveOptimistic: null,
     afterReload: async refreshed => {
       currentCorrectionExcerpts = refreshed.excerpts;
       await loadCatalogValidation(refreshed.excerpts);
@@ -1510,6 +1523,7 @@ async function submitExcerptSet({
   collectUpdates,
   bookKey,
   reloadAction,
+  afterSaveOptimistic,
   afterReload,
   countExcerpts,
   emptyMessage,
@@ -1559,8 +1573,11 @@ async function submitExcerptSet({
       await saveReviewsSequentially(changedUpdates);
     }
 
+    if (typeof afterSaveOptimistic === "function") {
+      afterSaveOptimistic(changedUpdates);
+    }
+
     setStatus(`Submitted ${changedUpdates.length} changed decisions. Verifying saved values...`);
-    await sleep(750);
 
     const refreshed = await requestJsonp(reloadAction, reloadAction === "pendingRecords" ? {} : { bookTitle: bookKey });
     if (!refreshed.ok) {
