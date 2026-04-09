@@ -466,6 +466,44 @@ textarea {
   margin-top: 12px;
 }
 
+.correction-source {
+  margin-bottom: 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.62);
+  padding: 12px 14px;
+}
+
+.correction-source summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.correction-source__grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.correction-source__grid div {
+  display: grid;
+  gap: 4px;
+}
+
+.correction-source__grid span {
+  color: var(--muted);
+}
+
+.correction-source__excerpt {
+  margin: 12px 0 0;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(29, 26, 23, 0.05);
+  white-space: pre-wrap;
+  font: 15px/1.6 Georgia, "Times New Roman", serif;
+}
+
 .empty-state {
   margin: 0;
   color: var(--muted);
@@ -497,6 +535,10 @@ textarea {
   }
 
   .correction-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .correction-source__grid {
     grid-template-columns: 1fr;
   }
 }

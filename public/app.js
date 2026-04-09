@@ -1126,6 +1126,15 @@ function buildExcerptCard(excerpt, uniqueKey) {
       <label><input type="radio" name="approval-${uniqueKey}" value="" ${currentDecision === "" ? "checked" : ""}> No decision</label>
     </div>
     <div class="correction-block ${currentDecision === "needs_correction" ? "correction-block--active" : ""}">
+      <details class="correction-source">
+        <summary>Original extracted values</summary>
+        <div class="correction-source__grid">
+          <div><strong>Author</strong><span>${escapeHtml(excerpt.rawAuthor || excerpt.author || "")}</span></div>
+          <div><strong>Poem title</strong><span>${escapeHtml(excerpt.rawTitle || excerpt.title || "")}</span></div>
+          <div><strong>Book</strong><span>${escapeHtml(excerpt.rawBookTitle || excerpt.bookTitle || "")}</span></div>
+        </div>
+        <pre class="correction-source__excerpt">${escapeHtml(excerpt.rawExcerptText || excerpt.excerptText || "")}</pre>
+      </details>
       <label class="field">
         <span>Correction note</span>
         <textarea class="correction-note" rows="3" placeholder="Describe what is wrong and how it should be corrected.">${escapeHtml(excerpt.correctionNote || "")}</textarea>
@@ -1211,17 +1220,18 @@ function buildValidationMarkup(validation, excerpt) {
   ].filter(Boolean).join(" - ");
   const libraryMarkup = buildLibraryMatchMarkup(validation.libraryExcerptMatch);
   const poemLink = buildCatalogPoemLink(validation, excerpt);
+  const catalogFormattingMarkup = buildCatalogFormattingMarkup(validation);
 
   if (validation.status === "catalog_match") {
-    return `<p class="validation validation--good">Catalog match: ${escapeHtml(canonical || "confirmed")}. ${poemLink}</p>${libraryMarkup}`;
+    return `<p class="validation validation--good">Catalog match: ${escapeHtml(canonical || "confirmed")}. ${poemLink}</p>${catalogFormattingMarkup}${libraryMarkup}`;
   }
 
   if (validation.status === "author_mismatch") {
-    return `<p class="validation validation--warn">Author mismatch. Catalog says ${escapeHtml(canonical || "different author")}. ${poemLink}</p>${libraryMarkup}`;
+    return `<p class="validation validation--warn">Author mismatch. Catalog says ${escapeHtml(canonical || "different author")}. ${poemLink}</p>${catalogFormattingMarkup}${libraryMarkup}`;
   }
 
   if (validation.status === "title_mismatch") {
-    return `<p class="validation validation--warn">Excerpt matches the catalog, but the poem title appears wrong. Catalog match: ${escapeHtml(validation.matchedPoemTitle || "different title")}. ${poemLink}</p>${libraryMarkup}`;
+    return `<p class="validation validation--warn">Excerpt matches the catalog, but the poem title appears wrong. Catalog match: ${escapeHtml(validation.matchedPoemTitle || "different title")}. ${poemLink}</p>${catalogFormattingMarkup}${libraryMarkup}`;
   }
 
   if (validation.status === "poem_title_match_only") {
@@ -1245,6 +1255,14 @@ function buildValidationMarkup(validation, excerpt) {
   }
 
   return `<p class="validation validation--warn">Catalog check: ${escapeHtml(validation.status)}.</p>${libraryMarkup}`;
+}
+
+function buildCatalogFormattingMarkup(validation) {
+  if (!validation || validation.catalogFormattingMatch !== false) {
+    return "";
+  }
+
+  return `<p class="validation validation--pending">Catalog text matches, but the formatting or line breaks differ from the catalog poem.</p>`;
 }
 
 function buildCatalogPoemLink(validation, excerpt) {

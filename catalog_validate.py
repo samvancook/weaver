@@ -72,6 +72,16 @@ def candidate_snippets(text: str | None) -> list[str]:
     return snippets
 
 
+def preserve_excerpt_text(text: str | None) -> str:
+    raw = (text or "").replace("\r\n", "\n").replace("\r", "\n")
+    lines = [re.sub(r"[ \t]+", " ", line).strip() for line in raw.split("\n")]
+    while lines and not lines[0]:
+        lines.pop(0)
+    while lines and not lines[-1]:
+        lines.pop()
+    return "\n".join(lines).strip()
+
+
 @lru_cache(maxsize=1)
 def load_book_status_rows() -> list[dict]:
     connection = sqlite3.connect(DB_PATH)
@@ -195,6 +205,8 @@ def validate_record(
         "poemTitleMatchesInBook": False,
         "excerptMatchesInBook": False,
         "matchedPoemTitle": None,
+        "catalogFormattingMatch": None,
+        "catalogLineBreaksMatch": None,
         "globalExcerptMatch": None,
         "libraryExcerptMatch": None,
         "status": "unvalidated",
@@ -229,6 +241,7 @@ def validate_record(
 
     poems = fetch_poems_for_book(cursor, int(book_status["canonical_book_id"]))
     normalized_poem_title = normalize_title(poem_title)
+    query_excerpt_raw = preserve_excerpt_text(record.get("excerptText"))
 
     for poem in poems:
         poem_text = normalize(poem["text"])
@@ -237,6 +250,9 @@ def validate_record(
         if any(snippet and snippet in poem_text for snippet in snippets):
             result["excerptMatchesInBook"] = True
             result["matchedPoemTitle"] = poem["title"]
+            matched_raw_text = preserve_excerpt_text(poem["text"])
+            result["catalogFormattingMatch"] = bool(query_excerpt_raw and query_excerpt_raw in matched_raw_text)
+            result["catalogLineBreaksMatch"] = result["catalogFormattingMatch"]
             break
 
     if result["excerptMatchesInBook"]:
