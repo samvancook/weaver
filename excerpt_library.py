@@ -181,6 +181,11 @@ def build_library_status(metadata_json: str | None) -> dict[str, str | bool]:
     }
 
 
+def has_metadata_json_column(connection: sqlite3.Connection) -> bool:
+    rows = connection.execute("PRAGMA table_info(excerpt_entries)").fetchall()
+    return any((row[1] if isinstance(row, tuple) else row["name"]) == "metadata_json" for row in rows)
+
+
 def sequence_score(left: str, right: str) -> float:
     return SequenceMatcher(None, normalize_lookup_text(left), normalize_lookup_text(right)).ratio()
 
@@ -430,20 +435,22 @@ def find_library_excerpt_match(
     author_alias = normalize_lookup_text(author)
     excerpt_len = len(cleaned_excerpt)
     query_line_break_signature = line_break_signature(preserved_excerpt)
+    include_metadata = has_metadata_json_column(connection)
 
-    exact_row = connection.execute(
-        """
-        SELECT source_row_number, external_id, author, book_title, poem_title, excerpt_text, metadata_json
+    exact_sql = """
+        SELECT source_row_number, external_id, author, book_title, poem_title, excerpt_text
+        {metadata_select}
         FROM excerpt_entries
         WHERE excerpt_hash = ?
         LIMIT 1
-        """,
-        (excerpt_hash,),
-    ).fetchone()
+    """.format(
+        metadata_select=", metadata_json" if include_metadata else ""
+    )
+    exact_row = connection.execute(exact_sql, (excerpt_hash,)).fetchone()
     if exact_row:
         candidate_excerpt = exact_row[5] or ""
         candidate_line_break_signature = line_break_signature(candidate_excerpt)
-        status = build_library_status(exact_row[6])
+        status = build_library_status(exact_row[6] if include_metadata else None)
         return {
             "matchType": "exact",
             "score": 1.0,
@@ -460,15 +467,19 @@ def find_library_excerpt_match(
             "libraryStatus": status,
         }
 
-    candidate_rows = connection.execute(
-        """
+    candidate_sql = """
         SELECT source_row_number, external_id, author, normalized_author, book_title,
-               normalized_book_title, poem_title, excerpt_text, character_count, metadata_json
+               normalized_book_title, poem_title, excerpt_text, character_count
+               {metadata_select}
         FROM excerpt_entries
         WHERE character_count BETWEEN ? AND ?
         ORDER BY ABS(character_count - ?), source_row_number
         LIMIT 250
-        """,
+    """.format(
+        metadata_select=", metadata_json" if include_metadata else ""
+    )
+    candidate_rows = connection.execute(
+        candidate_sql,
         (max(1, excerpt_len - 160), excerpt_len + 160, excerpt_len),
     ).fetchall()
 
@@ -510,7 +521,7 @@ def find_library_excerpt_match(
             "excerptPreview": candidate_text[:180],
             "formattingMatch": False,
             "lineBreaksMatch": False,
-            "libraryStatus": build_library_status(row[9]),
+            "libraryStatus": build_library_status(row[9] if include_metadata else None),
         }
 
     return best_match
