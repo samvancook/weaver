@@ -117,6 +117,60 @@ function getPendingRecordsForBookKey(bookKey, records = currentPendingRecords) {
   return records.filter(record => normalizeBookKey(record.bookTitle) === bookKey);
 }
 
+async function requestMergedBookRecords(sourceExcerpts) {
+  const rawBookTitles = Array.from(
+    new Set(
+      sourceExcerpts
+        .map(excerpt => normalizeCorrectionNote(excerpt.bookTitle))
+        .filter(Boolean)
+    )
+  );
+
+  if (!rawBookTitles.length) {
+    return { ok: true, records: [] };
+  }
+
+  const responses = await Promise.all(
+    rawBookTitles.map(bookTitle => requestJsonp("excerpts", { bookTitle }))
+  );
+
+  const failed = responses.find(response => !response.ok);
+  if (failed) {
+    throw new Error(failed.error || "Book verification reload failed.");
+  }
+
+  const records = [];
+  const seenSourceRows = new Set();
+
+  responses.forEach(response => {
+    const excerpts = Array.isArray(response.excerpts) ? response.excerpts : [];
+    excerpts.forEach(excerpt => {
+      const sourceRow = Number(excerpt.sourceRow);
+      if (sourceRow && seenSourceRows.has(sourceRow)) {
+        return;
+      }
+      if (sourceRow) {
+        seenSourceRows.add(sourceRow);
+      }
+      records.push(excerpt);
+    });
+  });
+
+  return { ok: true, records };
+}
+
+function refreshBookCountsInBackground() {
+  requestJsonp("pendingRecords")
+    .then(data => {
+      if (!data.ok) return;
+      const records = Array.isArray(data.records) ? data.records : [];
+      applyPendingBookData(records, { preserveSelection: true });
+    })
+    .catch(() => {
+      // Background refresh is best-effort only.
+    });
+}
+
 function applyPendingBookData(records, { preserveSelection = false } = {}) {
   const previousSelection = preserveSelection ? elements.bookSelect?.value || "" : "";
   const previousWeirdSelection = preserveSelection ? elements.weirdBookSelect?.value || "" : "";
@@ -1427,7 +1481,7 @@ async function submitReview() {
     sourceExcerpts: currentExcerpts,
     collectUpdates: collectUpdates,
     bookKey,
-    reloadAction: "pendingRecords",
+    reloadRequest: () => requestMergedBookRecords(currentExcerpts),
     afterSaveOptimistic: changedUpdates => {
       const savedSourceRows = new Set(changedUpdates.map(update => Number(update.sourceRow)));
       currentExcerpts = currentExcerpts.filter(excerpt => !savedSourceRows.has(Number(excerpt.sourceRow)));
@@ -1446,6 +1500,7 @@ async function submitReview() {
       reviewPinnedRowOrder = pinnedSourceRows.filter(sourceRow => remainingSourceRows.has(sourceRow));
       await loadCatalogValidation(currentExcerpts);
       renderCurrentExcerpts();
+      refreshBookCountsInBackground();
     },
     countExcerpts: refreshed => applyReviewFilter(
       getPendingRecordsForBookKey(bookKey, Array.isArray(refreshed.records) ? refreshed.records : [])
@@ -1466,7 +1521,7 @@ async function submitWeirdReview() {
     sourceExcerpts: currentWeirdExcerpts,
     collectUpdates: collectWeirdUpdates,
     bookKey,
-    reloadAction: "pendingRecords",
+    reloadRequest: () => requestMergedBookRecords(currentWeirdExcerpts),
     afterSaveOptimistic: changedUpdates => {
       const savedSourceRows = new Set(changedUpdates.map(update => Number(update.sourceRow)));
       currentWeirdExcerpts = currentWeirdExcerpts.filter(excerpt => !savedSourceRows.has(Number(excerpt.sourceRow)));
@@ -1485,6 +1540,7 @@ async function submitWeirdReview() {
       weirdPinnedRowOrder = pinnedSourceRows.filter(sourceRow => remainingSourceRows.has(sourceRow));
       await loadCatalogValidation(currentWeirdExcerpts);
       renderWeirdCurrentExcerpts();
+      refreshBookCountsInBackground();
     },
     countExcerpts: refreshed => applyExtraReviewFilter(
       getPendingRecordsForBookKey(bookKey, Array.isArray(refreshed.records) ? refreshed.records : [])
@@ -1500,7 +1556,7 @@ async function submitCorrections() {
     sourceExcerpts: currentCorrectionExcerpts,
     collectUpdates: collectCorrectionUpdates,
     bookKey: elements.correctionBookSelect.value,
-    reloadAction: "corrections",
+    reloadRequest: () => requestJsonp("corrections", { bookTitle: elements.correctionBookSelect.value }),
     afterSaveOptimistic: null,
     afterReload: async refreshed => {
       currentCorrectionExcerpts = refreshed.excerpts;
@@ -1519,7 +1575,7 @@ async function submitExcerptSet({
   sourceExcerpts,
   collectUpdates,
   bookKey,
-  reloadAction,
+  reloadRequest,
   afterSaveOptimistic,
   afterReload,
   countExcerpts,
@@ -1576,7 +1632,7 @@ async function submitExcerptSet({
 
     setStatus(`Submitted ${changedUpdates.length} changed decisions. Verifying saved values...`);
 
-    const refreshed = await requestJsonp(reloadAction, reloadAction === "pendingRecords" ? {} : { bookTitle: bookKey });
+    const refreshed = await reloadRequest();
     if (!refreshed.ok) {
       throw new Error(refreshed.error || "Verification reload failed.");
     }
