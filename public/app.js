@@ -494,14 +494,16 @@ function summarizePendingBooks(records) {
     summary.title = choosePreferredBookTitle(summary.title, title);
     summary.variants.add(title);
     summary.totalCount += 1;
-    if (isPdfOnlyCatalogValidation(validation)) {
+    const isPdfOnly = isPdfOnlyCatalogValidation(validation, record);
+    if (isPdfOnly) {
       summary.pdfOnlyCount += 1;
+    }
+    if (!isPdfOnly) {
+      summary.standardCount += 1;
+      summary.goodCount += 1;
     }
     if (isExtraReviewRecord(record, validation)) {
       summary.needsCheckingCount += 1;
-    } else {
-      summary.standardCount += 1;
-      summary.goodCount += 1;
     }
   });
 
@@ -898,7 +900,7 @@ function isLikelyCorrectionExcerpt(excerpt) {
 function isPdfOnlyExcerpt(excerpt) {
   const validation =
     currentValidationByRecordId.get(excerpt.recordId || String(excerpt.sourceRow)) || null;
-  return isPdfOnlyCatalogValidation(validation);
+  return isPdfOnlyCatalogValidation(validation, excerpt);
 }
 
 function hasLibraryExcerptMatch(excerpt) {
@@ -936,7 +938,11 @@ function isLikelyCorrectionStatus(status) {
   ].includes(status);
 }
 
-function isPdfOnlyCatalogValidation(validation) {
+function isPdfOnlyCatalogValidation(validation, record) {
+  const direct = String(record?.bookPrimarySourceFormat || "").toLowerCase();
+  if (direct) {
+    return direct === "pdf";
+  }
   return Boolean(
     validation &&
     String(validation.bookPrimarySourceFormat || "").toLowerCase() === "pdf"
