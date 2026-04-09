@@ -996,7 +996,6 @@ function buildExcerptCard(excerpt, uniqueKey) {
   const validationMarkup = buildValidationMarkup(validation, excerpt);
   const reviewDecision = normalizeDecision(excerpt.excerptReviewDecision);
   const useForQi = Boolean(excerpt.useForQi ?? excerpt.useForGraphicsQi);
-  const useForInt = Boolean(excerpt.useForInt ?? excerpt.useForPhotos);
   const hasOverrides = Boolean(
     normalizeCorrectionNote(excerpt.correctedAuthor) ||
     normalizeCorrectionNote(excerpt.correctedTitle) ||
@@ -1077,9 +1076,10 @@ function buildExcerptCard(excerpt, uniqueKey) {
     </div>
     <div class="decision-flags">
       <label><input type="checkbox" class="graphics-qi" ${useForQi ? "checked" : ""}> Use for QI</label>
-      <label><input type="checkbox" class="use-for-int" ${useForInt ? "checked" : ""}> Use for INT</label>
     </div>
   `;
+
+  card.dataset.currentUseForInt = Boolean(excerpt.useForInt ?? excerpt.useForPhotos) ? "1" : "0";
 
   card.querySelectorAll(`input[name="approval-${uniqueKey}"]`).forEach(input => {
     input.addEventListener("change", () => {
@@ -1284,7 +1284,7 @@ function collectUpdatesFromContainer(container) {
       correctedBookTitle: card.querySelector(".corrected-book-title")?.value || "",
       correctedExcerpt: card.querySelector(".corrected-excerpt")?.value || "",
       useForQi: card.querySelector(".graphics-qi")?.checked || false,
-      useForInt: card.querySelector(".use-for-int")?.checked || false
+      useForInt: card.dataset.currentUseForInt === "1"
     };
   });
 }
@@ -1305,8 +1305,7 @@ function filterChangedUpdates(updates, excerpts) {
       normalizeCorrectionNote(update.correctedTitle) !== normalizeCorrectionNote(current.correctedTitle) ||
       normalizeCorrectionNote(update.correctedBookTitle) !== normalizeCorrectionNote(current.correctedBookTitle) ||
       normalizeCorrectionNote(update.correctedExcerpt) !== normalizeCorrectionNote(current.correctedExcerpt) ||
-      Boolean(update.useForQi) !== Boolean(current.useForQi ?? current.useForGraphicsQi) ||
-      Boolean(update.useForInt) !== Boolean(current.useForInt ?? current.useForPhotos)
+      Boolean(update.useForQi) !== Boolean(current.useForQi ?? current.useForGraphicsQi)
     );
   });
 }
@@ -1355,10 +1354,8 @@ function compareUpdatesToExcerpts(updates, excerpts) {
       normalizeCorrectionNote(update.correctedExcerpt) === normalizeCorrectionNote(saved.correctedExcerpt);
     const qiMatches =
       Boolean(update.useForQi) === Boolean(saved.useForQi ?? saved.useForGraphicsQi);
-    const intMatches =
-      Boolean(update.useForInt) === Boolean(saved.useForInt ?? saved.useForPhotos);
 
-    if (decisionMatches && authorMatches && titleMatches && bookMatches && excerptMatches && qiMatches && intMatches) {
+    if (decisionMatches && authorMatches && titleMatches && bookMatches && excerptMatches && qiMatches) {
       matched += 1;
     }
   });
