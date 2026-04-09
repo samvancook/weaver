@@ -975,7 +975,7 @@ function isExtraReviewExcerpt(excerpt) {
     return true;
   }
 
-  if (isPdfOnlyCatalogValidation(validation)) {
+  if (isPdfOnlyCatalogValidation(validation, excerpt)) {
     return true;
   }
 
@@ -1011,7 +1011,7 @@ function isExtraReviewRecord(record, providedValidation = null) {
     return true;
   }
 
-  if (isPdfOnlyCatalogValidation(validation)) {
+  if (isPdfOnlyCatalogValidation(validation, record)) {
     return true;
   }
 

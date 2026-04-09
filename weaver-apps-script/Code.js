@@ -31,7 +31,8 @@ const WEAVER_CONFIG = {
     correctedAuthor: 57,
     correctedTitle: 58,
     correctedBookTitle: 59,
-    correctedExcerpt: 60
+    correctedExcerpt: 60,
+    validationPrimarySourceFormat: 61
   }
 };
 
@@ -316,6 +317,7 @@ function getAllPendingWeaverRecords_() {
       title: (row[config.columnMap.title - 1] || "").toString(),
       bookTitle: bookTitle,
       excerptText: excerptText,
+      bookPrimarySourceFormat: cleanWhitespace_(row[config.columnMap.validationPrimarySourceFormat - 1]),
       catalogValidation: buildCatalogValidationPayload_(row, config)
     });
   });
@@ -370,6 +372,7 @@ function buildExcerptPayload_(row, sourceRow, config) {
     rawTitle: rawTitle,
     rawBookTitle: rawBookTitle,
     rawExcerptText: rawExcerptText,
+    bookPrimarySourceFormat: cleanWhitespace_(row[config.columnMap.validationPrimarySourceFormat - 1]),
     catalogValidation: buildCatalogValidationPayload_(row, config)
   };
 }
@@ -508,7 +511,7 @@ function saveValidationBatch_(payload) {
     }
     if (!targetRow) return;
 
-    sourceSheet.getRange(targetRow, config.columnMap.validationStatus, 1, 8).setValues([[
+    sourceSheet.getRange(targetRow, config.columnMap.validationStatus, 1, 9).setValues([[
       cleanWhitespace_(update.status),
       cleanWhitespace_(update.bookCanonicalTitle),
       cleanWhitespace_(update.bookCanonicalAuthor),
@@ -516,7 +519,8 @@ function saveValidationBatch_(payload) {
       cleanWhitespace_(update.globalExcerptMatch && update.globalExcerptMatch.book_title),
       cleanWhitespace_(update.globalExcerptMatch && update.globalExcerptMatch.author),
       cleanWhitespace_(update.globalExcerptMatch && update.globalExcerptMatch.poem_title),
-      new Date()
+      new Date(),
+      cleanWhitespace_(update.bookPrimarySourceFormat)
     ]]);
     savedCount++;
   });
@@ -594,7 +598,8 @@ function ensureWeaverReviewColumns_(sourceSheet) {
     { column: WEAVER_CONFIG.columnMap.correctedAuthor, header: "corrected_author" },
     { column: WEAVER_CONFIG.columnMap.correctedTitle, header: "corrected_title" },
     { column: WEAVER_CONFIG.columnMap.correctedBookTitle, header: "corrected_book_title" },
-    { column: WEAVER_CONFIG.columnMap.correctedExcerpt, header: "corrected_excerpt" }
+    { column: WEAVER_CONFIG.columnMap.correctedExcerpt, header: "corrected_excerpt" },
+    { column: WEAVER_CONFIG.columnMap.validationPrimarySourceFormat, header: "catalog_primary_source_format" }
   ];
 
   headers.forEach(function(definition) {
@@ -707,6 +712,7 @@ function buildCatalogValidationPayload_(row, config) {
     bookCanonicalTitle: cleanWhitespace_(row[config.columnMap.validationCanonicalBook - 1]),
     bookCanonicalAuthor: cleanWhitespace_(row[config.columnMap.validationCanonicalAuthor - 1]),
     matchedPoemTitle: cleanWhitespace_(row[config.columnMap.validationMatchedPoemTitle - 1]),
+    bookPrimarySourceFormat: cleanWhitespace_(row[config.columnMap.validationPrimarySourceFormat - 1]),
     globalExcerptMatch: globalBook || globalAuthor || globalPoem
       ? {
           book_title: globalBook,
@@ -773,6 +779,7 @@ function buildDebugPayload_(row, sourceRow, config) {
     correctedBookTitle: cleanWhitespace_(row[config.columnMap.correctedBookTitle - 1]),
     correctedExcerpt: cleanWhitespace_(row[config.columnMap.correctedExcerpt - 1]),
     pending: isPendingReview_(getExcerptReviewDecisionFromRow_(row, config)),
+    bookPrimarySourceFormat: cleanWhitespace_(row[config.columnMap.validationPrimarySourceFormat - 1]),
     catalogValidation: buildCatalogValidationPayload_(row, config)
   };
 }
