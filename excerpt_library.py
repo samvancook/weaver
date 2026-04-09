@@ -116,6 +116,71 @@ def fingerprint_excerpt(text: str) -> str:
     return hashlib.sha256(normalize_lookup_text(text).encode("utf-8")).hexdigest()
 
 
+def normalize_flag(value: str | None) -> str:
+    normalized = clean_whitespace(value).upper()
+    if normalized in {"Y", "YES", "TRUE", "1"}:
+        return "Y"
+    if normalized in {"N", "NO", "FALSE", "0"}:
+        return "N"
+    return ""
+
+
+def parse_metadata_json(text: str | None) -> dict[str, str]:
+    if not text:
+        return {}
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def first_metadata_value(metadata: dict[str, str], *keys: str) -> str:
+    for key in keys:
+        value = metadata.get(key)
+        if value is not None and clean_whitespace(value):
+            return str(value)
+    return ""
+
+
+def build_library_status(metadata_json: str | None) -> dict[str, str | bool]:
+    metadata = parse_metadata_json(metadata_json)
+    approved_for_qi = normalize_flag(
+        first_metadata_value(
+            metadata,
+            "Approved for Quote Image",
+            "Approved for Quote Creation? Y / N",
+            "Approved for Quote Creation",
+            "approved_for_quote",
+        )
+    )
+    quote_image_created = normalize_flag(
+        first_metadata_value(
+            metadata,
+            "Quote Image Created",
+            "quote_created_qc",
+            "Quote Created & QCed (Y/N)",
+        )
+    )
+    graphic_made = normalize_flag(
+        first_metadata_value(
+            metadata,
+            "Graphic Made?",
+            "graphic_made",
+        )
+    )
+
+    made = quote_image_created == "Y" or graphic_made == "Y"
+    approved = approved_for_qi == "Y"
+
+    return {
+        "approvedForQi": approved,
+        "quoteImageCreated": quote_image_created == "Y",
+        "graphicMade": graphic_made == "Y",
+        "made": made,
+    }
+
+
 def sequence_score(left: str, right: str) -> float:
     return SequenceMatcher(None, normalize_lookup_text(left), normalize_lookup_text(right)).ratio()
 
@@ -368,7 +433,7 @@ def find_library_excerpt_match(
 
     exact_row = connection.execute(
         """
-        SELECT source_row_number, external_id, author, book_title, poem_title, excerpt_text
+        SELECT source_row_number, external_id, author, book_title, poem_title, excerpt_text, metadata_json
         FROM excerpt_entries
         WHERE excerpt_hash = ?
         LIMIT 1
@@ -378,6 +443,7 @@ def find_library_excerpt_match(
     if exact_row:
         candidate_excerpt = exact_row[5] or ""
         candidate_line_break_signature = line_break_signature(candidate_excerpt)
+        status = build_library_status(exact_row[6])
         return {
             "matchType": "exact",
             "score": 1.0,
@@ -391,12 +457,13 @@ def find_library_excerpt_match(
             "lineBreaksMatch": candidate_line_break_signature == query_line_break_signature,
             "queryLineCount": len(query_line_break_signature),
             "matchedLineCount": len(candidate_line_break_signature),
+            "libraryStatus": status,
         }
 
     candidate_rows = connection.execute(
         """
         SELECT source_row_number, external_id, author, normalized_author, book_title,
-               normalized_book_title, poem_title, excerpt_text, character_count
+               normalized_book_title, poem_title, excerpt_text, character_count, metadata_json
         FROM excerpt_entries
         WHERE character_count BETWEEN ? AND ?
         ORDER BY ABS(character_count - ?), source_row_number
@@ -443,6 +510,7 @@ def find_library_excerpt_match(
             "excerptPreview": candidate_text[:180],
             "formattingMatch": False,
             "lineBreaksMatch": False,
+            "libraryStatus": build_library_status(row[9]),
         }
 
     return best_match

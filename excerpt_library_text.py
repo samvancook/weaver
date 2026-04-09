@@ -5,7 +5,7 @@ import json
 import sqlite3
 import sys
 
-from excerpt_library import DEFAULT_DB_PATH
+from excerpt_library import DEFAULT_DB_PATH, build_library_status
 
 
 def lookup_library_excerpt(source_row: int | None) -> dict:
@@ -20,7 +20,7 @@ def lookup_library_excerpt(source_row: int | None) -> dict:
     try:
         row = connection.execute(
             """
-            SELECT source_row_number, external_id, author, book_title, poem_title, excerpt_text, word_count
+            SELECT source_row_number, external_id, author, book_title, poem_title, excerpt_text, word_count, metadata_json
             FROM excerpt_entries
             WHERE source_row_number = ?
             LIMIT 1
@@ -33,6 +33,8 @@ def lookup_library_excerpt(source_row: int | None) -> dict:
     if not row:
         return {"ok": False, "error": "Excerpt not found in library."}
 
+    status = build_library_status(row["metadata_json"])
+
     return {
         "ok": True,
         "sourceRow": row["source_row_number"],
@@ -42,6 +44,7 @@ def lookup_library_excerpt(source_row: int | None) -> dict:
         "poemTitle": row["poem_title"] or "",
         "text": row["excerpt_text"],
         "wordCount": row["word_count"],
+        "libraryStatus": status,
     }
 
 

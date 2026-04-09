@@ -1259,13 +1259,17 @@ function buildLibraryMatchMarkup(match) {
   }
 
   const label = getLibraryMatchSentence(match);
+  const statusLabel = getLibraryProductionStatusLabel(match.libraryStatus);
   const meta = [
     match.bookTitle,
     match.poemTitle,
     match.author
   ].filter(Boolean).join(" / ");
   const excerptLink = buildLibraryExcerptLink(match);
-  return `<p class="validation validation--warn">${escapeHtml(label)} ${escapeHtml(meta || "Existing source row")}${match.sourceRow ? `, row ${escapeHtml(String(match.sourceRow))}` : ""}. ${excerptLink}</p>`;
+  const statusMarkup = statusLabel
+    ? ` <span class="library-status-note">${escapeHtml(statusLabel)}</span>`
+    : "";
+  return `<p class="validation validation--warn">${escapeHtml(label)} ${escapeHtml(meta || "Existing source row")}${match.sourceRow ? `, row ${escapeHtml(String(match.sourceRow))}` : ""}.${statusMarkup} ${excerptLink}</p>`;
 }
 
 function getLibraryBadgeLabel(match) {
@@ -1297,6 +1301,22 @@ function getLibraryMatchSentence(match) {
   }
 
   return `Possible near-duplicate in library (score ${match.score}).`;
+}
+
+function getLibraryProductionStatusLabel(status) {
+  if (!status) {
+    return "";
+  }
+
+  if (status.made) {
+    return "Graphic appears to have already been made.";
+  }
+
+  if (status.approvedForQi) {
+    return "Approved for quote image, but not confirmed made.";
+  }
+
+  return "In excerpt library only; no quote-image status found.";
 }
 
 function buildLibraryExcerptLink(match) {
