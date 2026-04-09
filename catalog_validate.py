@@ -89,7 +89,7 @@ def load_book_status_rows() -> list[dict]:
     try:
         rows = connection.execute(
             """
-            SELECT canonical_book_id, title, author, book_shortener, effective_status
+            SELECT canonical_book_id, title, author, book_shortener, effective_status, primary_source_format
             FROM book_status
             """
         ).fetchall()
@@ -199,6 +199,7 @@ def validate_record(
         "sourceRow": record.get("sourceRow"),
         "bookFound": bool(book_status),
         "bookEffectiveStatus": None,
+        "bookPrimarySourceFormat": None,
         "bookCanonicalTitle": None,
         "bookCanonicalAuthor": None,
         "authorMatchesBook": None,
@@ -226,6 +227,7 @@ def validate_record(
         return result
 
     result["bookEffectiveStatus"] = book_status["effective_status"]
+    result["bookPrimarySourceFormat"] = book_status.get("primary_source_format")
     result["bookCanonicalTitle"] = book_status["title"]
     result["bookCanonicalAuthor"] = book_status["author"]
     canonical_book_id = int(book_status["canonical_book_id"])

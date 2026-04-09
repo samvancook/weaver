@@ -190,12 +190,12 @@ function applyPendingBookData(records, { preserveSelection = false } = {}) {
 
   currentPendingRecords = records;
   const allBookSummaries = summarizePendingBooks(records);
-  currentReviewBookSummaries = allBookSummaries.filter(book => book.totalCount > 0);
+  currentReviewBookSummaries = allBookSummaries.filter(book => book.standardCount > 0);
   currentWeirdBookSummaries = allBookSummaries.filter(book => book.needsCheckingCount > 0);
   reviewBookSummaryByKey = indexBookSummariesByKey(currentReviewBookSummaries);
   weirdBookSummaryByKey = indexBookSummariesByKey(currentWeirdBookSummaries);
 
-  populateBookSelect(elements.bookSelect, currentReviewBookSummaries, previousSelection, book => `${book.title} (${book.totalCount})`);
+  populateBookSelect(elements.bookSelect, currentReviewBookSummaries, previousSelection, book => `${book.title} (${book.standardCount})`);
   populateBookSelect(elements.weirdBookSelect, currentWeirdBookSummaries, previousWeirdSelection, book => `${book.title} (${book.needsCheckingCount})`);
 
   elements.bookCountBadge.textContent = `${currentReviewBookSummaries.length} Books`;
@@ -448,6 +448,7 @@ async function loadBooks(options = {}) {
     }
 
     const records = Array.isArray(data.records) ? data.records : [];
+    await loadCatalogValidation(records);
     const allBookSummaries = applyPendingBookData(records, {
       preserveSelection,
       previousSelection,
@@ -474,6 +475,7 @@ function summarizePendingBooks(records) {
     if (record.catalogValidation?.status) {
       currentValidationByRecordId.set(key, record.catalogValidation);
     }
+    const validation = currentValidationByRecordId.get(key) || record.catalogValidation || null;
 
     if (!byTitle.has(titleKey)) {
       byTitle.set(titleKey, {
@@ -483,6 +485,7 @@ function summarizePendingBooks(records) {
         standardCount: 0,
         goodCount: 0,
         needsCheckingCount: 0,
+        pdfOnlyCount: 0,
         variants: new Set([title])
       });
     }
@@ -491,7 +494,10 @@ function summarizePendingBooks(records) {
     summary.title = choosePreferredBookTitle(summary.title, title);
     summary.variants.add(title);
     summary.totalCount += 1;
-    if (isExtraReviewRecord(record)) {
+    if (isPdfOnlyCatalogValidation(validation)) {
+      summary.pdfOnlyCount += 1;
+    }
+    if (isExtraReviewRecord(record, validation)) {
       summary.needsCheckingCount += 1;
     } else {
       summary.standardCount += 1;
@@ -861,6 +867,9 @@ function getSelectedExtraReviewFilter() {
 
 function applyExtraReviewFilter(excerpts) {
   const mode = getSelectedExtraReviewFilter();
+  if (mode === "pdf_only") {
+    return excerpts.filter(excerpt => isPdfOnlyExcerpt(excerpt));
+  }
   if (mode === "missing_catalog") {
     return excerpts.filter(excerpt => !hasCatalogStatus(excerpt));
   }
@@ -884,6 +893,12 @@ function isLikelyCorrectionExcerpt(excerpt) {
     currentValidationByRecordId.get(excerpt.recordId || String(excerpt.sourceRow)) || null;
 
   return Boolean(validation && isLikelyCorrectionStatus(validation.status));
+}
+
+function isPdfOnlyExcerpt(excerpt) {
+  const validation =
+    currentValidationByRecordId.get(excerpt.recordId || String(excerpt.sourceRow)) || null;
+  return isPdfOnlyCatalogValidation(validation);
 }
 
 function hasLibraryExcerptMatch(excerpt) {
@@ -921,6 +936,13 @@ function isLikelyCorrectionStatus(status) {
   ].includes(status);
 }
 
+function isPdfOnlyCatalogValidation(validation) {
+  return Boolean(
+    validation &&
+    String(validation.bookPrimarySourceFormat || "").toLowerCase() === "pdf"
+  );
+}
+
 function isGoodContentExcerpt(excerpt) {
   const validation =
     currentValidationByRecordId.get(excerpt.recordId || String(excerpt.sourceRow)) || null;
@@ -944,6 +966,10 @@ function isExtraReviewExcerpt(excerpt) {
   const libraryMatch = getLibraryMatch(excerpt);
 
   if (!validation || !validation.status) {
+    return true;
+  }
+
+  if (isPdfOnlyCatalogValidation(validation)) {
     return true;
   }
 
@@ -971,11 +997,15 @@ function isStandardReviewExcerpt(excerpt) {
   return !isExtraReviewExcerpt(excerpt);
 }
 
-function isExtraReviewRecord(record) {
-  const validation = record.catalogValidation || null;
+function isExtraReviewRecord(record, providedValidation = null) {
+  const validation = providedValidation || record.catalogValidation || null;
   const libraryMatch = validation?.libraryExcerptMatch || null;
 
   if (!validation || !validation.status) {
+    return true;
+  }
+
+  if (isPdfOnlyCatalogValidation(validation)) {
     return true;
   }
 
@@ -1011,6 +1041,9 @@ function getEmptyStateMessage() {
 }
 
 function getWeirdEmptyStateMessage() {
+  if (getSelectedExtraReviewFilter() === "pdf_only") {
+    return "No pending excerpts in this book are currently coming from PDF-backed catalog books.";
+  }
   if (getSelectedExtraReviewFilter() === "missing_catalog") {
     return "No pending excerpts in this book are currently missing catalog status.";
   }
