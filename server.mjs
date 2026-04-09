@@ -122,7 +122,7 @@ function runCatalogValidation(records) {
   });
 }
 
-function runCatalogPoemLookup(bookTitle, poemTitle) {
+function runCatalogPoemLookup(bookTitle, poemTitle, excerptText) {
   return new Promise((resolve, reject) => {
     const child = spawn("python3", [path.join(__dirname, "catalog_poem_text.py")], {
       env: {
@@ -151,7 +151,7 @@ function runCatalogPoemLookup(bookTitle, poemTitle) {
       }
     });
 
-    child.stdin.write(JSON.stringify({ bookTitle, poemTitle }));
+    child.stdin.write(JSON.stringify({ bookTitle, poemTitle, excerptText }));
     child.stdin.end();
   });
 }
@@ -265,7 +265,8 @@ const server = http.createServer(async (req, res) => {
     try {
       const bookTitle = url.searchParams.get("bookTitle") || "";
       const poemTitle = url.searchParams.get("poemTitle") || "";
-      const result = await runCatalogPoemLookup(bookTitle, poemTitle);
+      const excerptText = url.searchParams.get("excerptText") || "";
+      const result = await runCatalogPoemLookup(bookTitle, poemTitle, excerptText);
       const html = result.ok
         ? `<!DOCTYPE html>
 <html lang="en">

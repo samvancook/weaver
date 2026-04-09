@@ -1281,6 +1281,7 @@ function buildCatalogPoemLink(validation, excerpt) {
   const url = new URL("/catalog-poem", window.location.origin);
   url.searchParams.set("bookTitle", bookTitle);
   url.searchParams.set("poemTitle", poemTitle);
+  url.searchParams.set("excerptText", excerpt.excerptText || "");
   return `<button type="button" class="catalog-poem-link button-link" data-popup-url="${escapeHtml(url.toString())}">View catalog poem</button>`;
 }
 

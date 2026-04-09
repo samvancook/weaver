@@ -5,12 +5,19 @@ import json
 import sqlite3
 import sys
 
-from catalog_validate import DB_PATH, fetch_book_status, fetch_poems_for_book, normalize, title_aliases
+from catalog_validate import (
+    DB_PATH,
+    candidate_snippets,
+    fetch_book_status,
+    fetch_poems_for_book,
+    normalize,
+    title_aliases,
+)
 
 
-def lookup_poem_text(book_title: str, poem_title: str) -> dict:
-    if not book_title or not poem_title:
-        return {"ok": False, "error": "bookTitle and poemTitle are required."}
+def lookup_poem_text(book_title: str, poem_title: str, excerpt_text: str = "") -> dict:
+    if not book_title:
+        return {"ok": False, "error": "bookTitle is required."}
 
     connection = sqlite3.connect(DB_PATH)
     connection.row_factory = sqlite3.Row
@@ -23,6 +30,7 @@ def lookup_poem_text(book_title: str, poem_title: str) -> dict:
       poems = fetch_poems_for_book(cursor, int(book_status["canonical_book_id"]))
       requested_aliases = title_aliases(poem_title)
       requested_normalized = normalize(poem_title)
+      excerpt_snippets = candidate_snippets(excerpt_text)
 
       best_match = None
       best_score = -1
@@ -42,7 +50,28 @@ def lookup_poem_text(book_title: str, poem_title: str) -> dict:
               best_match = poem
 
       if not best_match or best_score < 1:
-          return {"ok": False, "error": "Poem not found in catalog for that book."}
+          fallback_match = None
+          fallback_score = -1
+
+          for poem in poems:
+              poem_text = normalize(poem["text"])
+              score = 0
+
+              if any(snippet and snippet in poem_text for snippet in excerpt_snippets):
+                  score = 2
+              elif excerpt_snippets:
+                  longest = max(excerpt_snippets, key=len)
+                  if longest and longest[:80] and longest[:80] in poem_text:
+                      score = 1
+
+              if score > fallback_score:
+                  fallback_score = score
+                  fallback_match = poem
+
+          if not fallback_match or fallback_score < 1:
+              return {"ok": False, "error": "Poem not found in catalog for that book."}
+
+          best_match = fallback_match
 
       return {
           "ok": True,
@@ -61,6 +90,7 @@ def main() -> int:
     result = lookup_poem_text(
         str(payload.get("bookTitle") or ""),
         str(payload.get("poemTitle") or ""),
+        str(payload.get("excerptText") or ""),
     )
     json.dump(result, sys.stdout)
     return 0
