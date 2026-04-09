@@ -1220,11 +1220,15 @@ function buildValidationMarkup(validation, excerpt) {
   }
 
   if (validation.status === "excerpt_not_found_in_book" && validation.globalExcerptMatch) {
-    return `<p class="validation validation--warn">Excerpt not found in ${escapeHtml(validation.bookCanonicalTitle || "this book")}. Closest catalog hit: ${escapeHtml(validation.globalExcerptMatch.book_title)} / ${escapeHtml(validation.globalExcerptMatch.poem_title)} by ${escapeHtml(validation.globalExcerptMatch.author)}. ${poemLink}</p>${libraryMarkup}`;
+    return `<p class="validation validation--warn">This book is in the catalog, but this excerpt was not found in it. Closest catalog hit: ${escapeHtml(validation.globalExcerptMatch.book_title)} / ${escapeHtml(validation.globalExcerptMatch.poem_title)} by ${escapeHtml(validation.globalExcerptMatch.author)}. ${poemLink}</p>${libraryMarkup}`;
+  }
+
+  if (validation.status === "excerpt_not_found_in_book") {
+    return `<p class="validation validation--warn">This book is in the catalog, but this excerpt was not found in it. ${poemLink}</p>${libraryMarkup}`;
   }
 
   if (validation.status === "book_not_found") {
-    return `<p class="validation validation--warn">Book not found in catalog.</p>${libraryMarkup}`;
+    return `<p class="validation validation--warn">This book is not in the catalog yet.</p>${libraryMarkup}`;
   }
 
   return `<p class="validation validation--warn">Catalog check: ${escapeHtml(validation.status)}.</p>${libraryMarkup}`;
