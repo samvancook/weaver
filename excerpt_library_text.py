@@ -5,7 +5,12 @@ import json
 import sqlite3
 import sys
 
-from excerpt_library import DEFAULT_DB_PATH, build_library_status, has_metadata_json_column
+from excerpt_library import (
+    DEFAULT_DB_PATH,
+    build_best_library_status,
+    fingerprint_excerpt,
+    has_metadata_json_column,
+)
 
 
 def lookup_library_excerpt(source_row: int | None) -> dict:
@@ -35,7 +40,10 @@ def lookup_library_excerpt(source_row: int | None) -> dict:
     if not row:
         return {"ok": False, "error": "Excerpt not found in library."}
 
-    status = build_library_status(row["metadata_json"] if include_metadata else None)
+    status = build_best_library_status(
+        excerpt_hash=fingerprint_excerpt(row["excerpt_text"]),
+        metadata_json=row["metadata_json"] if include_metadata else None,
+    )
 
     return {
         "ok": True,

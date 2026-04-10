@@ -43,6 +43,9 @@ function getLibraryStatusLabel(status) {
   if (status.approvedForQi) {
     return "Approved for quote image, but not confirmed made.";
   }
+  if (status.hasQiAsset) {
+    return "QI asset exists, but no approval or made status was found.";
+  }
   return "In excerpt library only; no quote-image status found.";
 }
 

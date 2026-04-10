@@ -8,11 +8,13 @@ import re
 import sqlite3
 from dataclasses import dataclass
 from difflib import SequenceMatcher
+from functools import lru_cache
 from pathlib import Path
 from typing import Iterable
 
 RUNTIME_DB_PATH = Path(__file__).resolve().parent / "data" / "excerpt_library_runtime.db"
 FULL_DB_PATH = Path(__file__).resolve().parent / "data" / "excerpt_library.db"
+QI_STATUS_DB_PATH = Path(__file__).resolve().parent / "data" / "excerpt_library_qi_status.db"
 DEFAULT_DB_PATH = FULL_DB_PATH if FULL_DB_PATH.exists() else RUNTIME_DB_PATH
 
 TEXT_COLUMN_FALLBACKS = (
@@ -174,11 +176,58 @@ def build_library_status(metadata_json: str | None) -> dict[str, str | bool]:
     approved = approved_for_qi == "Y"
 
     return {
+        "hasQiAsset": approved or made,
         "approvedForQi": approved,
         "quoteImageCreated": quote_image_created == "Y",
         "graphicMade": graphic_made == "Y",
         "made": made,
     }
+
+
+@lru_cache(maxsize=1)
+def load_normalized_qi_status_map() -> dict[str, dict[str, int | bool]]:
+    if not QI_STATUS_DB_PATH.exists():
+        return {}
+
+    connection = sqlite3.connect(QI_STATUS_DB_PATH)
+    connection.row_factory = sqlite3.Row
+    try:
+        rows = connection.execute(
+            """
+            SELECT excerpt_hash, has_qi_asset, qi_asset_count, qi_linked_asset_count,
+                   qi_approved_count, qi_graphic_made_count
+            FROM excerpt_qi_status
+            """
+        ).fetchall()
+    finally:
+        connection.close()
+
+    return {
+        row["excerpt_hash"]: {
+            "hasQiAsset": bool(row["has_qi_asset"]),
+            "approvedForQi": int(row["qi_approved_count"] or 0) > 0,
+            "quoteImageCreated": int(row["qi_graphic_made_count"] or 0) > 0,
+            "graphicMade": int(row["qi_graphic_made_count"] or 0) > 0,
+            "made": int(row["qi_graphic_made_count"] or 0) > 0,
+            "qiAssetCount": int(row["qi_asset_count"] or 0),
+            "qiLinkedAssetCount": int(row["qi_linked_asset_count"] or 0),
+            "qiApprovedCount": int(row["qi_approved_count"] or 0),
+            "qiGraphicMadeCount": int(row["qi_graphic_made_count"] or 0),
+        }
+        for row in rows
+    }
+
+
+def build_best_library_status(
+    *,
+    excerpt_hash: str | None = None,
+    metadata_json: str | None = None,
+) -> dict[str, str | bool | int]:
+    if excerpt_hash:
+        normalized_status = load_normalized_qi_status_map().get(excerpt_hash)
+        if normalized_status is not None:
+            return normalized_status
+    return build_library_status(metadata_json)
 
 
 def has_metadata_json_column(connection: sqlite3.Connection) -> bool:
@@ -450,7 +499,10 @@ def find_library_excerpt_match(
     if exact_row:
         candidate_excerpt = exact_row[5] or ""
         candidate_line_break_signature = line_break_signature(candidate_excerpt)
-        status = build_library_status(exact_row[6] if include_metadata else None)
+        status = build_best_library_status(
+            excerpt_hash=excerpt_hash,
+            metadata_json=exact_row[6] if include_metadata else None,
+        )
         return {
             "matchType": "exact",
             "score": 1.0,
@@ -521,7 +573,10 @@ def find_library_excerpt_match(
             "excerptPreview": candidate_text[:180],
             "formattingMatch": False,
             "lineBreaksMatch": False,
-            "libraryStatus": build_library_status(row[9] if include_metadata else None),
+            "libraryStatus": build_best_library_status(
+                excerpt_hash=fingerprint_excerpt(candidate_text),
+                metadata_json=row[9] if include_metadata else None,
+            ),
         }
 
     return best_match
