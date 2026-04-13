@@ -1,7 +1,9 @@
 const WEAVER_CONFIG = {
-  version: "2026-03-30-explicit-review-only-1",
+  version: "2026-04-13-graphics-module-1",
   spreadsheetId: "1yTCRQKAavimDEJka1-Ice4xlJ1mCm8hq0-G1PTQkTLM",
   sourceSheetName: "Excerpt Tool 1.20",
+  graphicsQueueSheetName: "Queue - Needs Graphics",
+  graphicsCleanupSheetName: "Cleanup - Created Graphics",
   startRow: 2,
   columnMap: {
     recordId: 25,
@@ -55,6 +57,10 @@ function doGet(e) {
     payload = getAllPendingWeaverRecords_();
   } else if (action === "validationQueue") {
     payload = getValidationQueue_((e.parameter.mode || "").toString());
+  } else if (action === "graphicsBooks") {
+    payload = getGraphicsBooks_((e.parameter.mode || "").toString());
+  } else if (action === "graphicsRecords") {
+    payload = getGraphicsRecordsForBook_((e.parameter.bookTitle || "").toString(), (e.parameter.mode || "").toString());
   } else if (action === "saveReview") {
     payload = saveSingleWeaverReview_(e.parameter || {});
   } else if (action === "debugRecord") {
@@ -99,11 +105,30 @@ function doPost(e) {
     return ContentService
       .createTextOutput(JSON.stringify(result))
       .setMimeType(ContentService.MimeType.JSON);
+  } else if (action === "saveQiCatchupUpdates") {
+    const payloadText =
+      (e && e.postData && e.postData.contents) ||
+      (e && e.parameter && e.parameter.payload) ||
+      "{}";
+    const parsed = safeParseJson_(payloadText);
+    const result = saveQiCatchupUpdates_(parsed);
+
+    return ContentService
+      .createTextOutput(JSON.stringify(result))
+      .setMimeType(ContentService.MimeType.JSON);
   }
 
   return ContentService
     .createTextOutput(JSON.stringify({ ok: false, error: "Unknown action" }))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+function debugWeaverRecord(sourceRow) {
+  return debugWeaverRecord_({ sourceRow: sourceRow });
+}
+
+function saveQiCatchupUpdates(payload) {
+  return saveQiCatchupUpdates_(payload);
 }
 
 function safeParseJson_(text) {
@@ -397,6 +422,100 @@ function getValidationQueue_(mode) {
   };
 }
 
+function getGraphicsSheetName_(mode) {
+  const normalizedMode = cleanWhitespace_(mode).toLowerCase();
+  return normalizedMode === "cleanup"
+    ? WEAVER_CONFIG.graphicsCleanupSheetName
+    : WEAVER_CONFIG.graphicsQueueSheetName;
+}
+
+function getGraphicsSheet_(mode) {
+  const spreadsheet = SpreadsheetApp.openById(WEAVER_CONFIG.spreadsheetId);
+  const sheetName = getGraphicsSheetName_(mode);
+  const sheet = spreadsheet.getSheetByName(sheetName);
+  if (!sheet) {
+    throw new Error('Graphics sheet "' + sheetName + '" not found.');
+  }
+  return sheet;
+}
+
+function getGraphicsBooks_(mode) {
+  const sheet = getGraphicsSheet_(mode);
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) {
+    return { ok: true, version: WEAVER_CONFIG.version, mode: cleanWhitespace_(mode).toLowerCase() || "queue", books: [] };
+  }
+
+  const values = sheet.getRange(2, 1, lastRow - 1, 9).getValues();
+  const counts = {};
+
+  values.forEach(function(row) {
+    const bookTitle = cleanWhitespace_(row[2]);
+    if (!bookTitle) return;
+    counts[bookTitle] = (counts[bookTitle] || 0) + 1;
+  });
+
+  const books = Object.keys(counts)
+    .sort(function(a, b) {
+      return a.localeCompare(b);
+    })
+    .map(function(title) {
+      return {
+        title: title,
+        count: counts[title]
+      };
+    });
+
+  return {
+    ok: true,
+    version: WEAVER_CONFIG.version,
+    mode: cleanWhitespace_(mode).toLowerCase() || "queue",
+    books: books
+  };
+}
+
+function getGraphicsRecordsForBook_(bookTitle, mode) {
+  const resolvedBookTitle = cleanWhitespace_(bookTitle);
+  if (!resolvedBookTitle) {
+    return { ok: true, version: WEAVER_CONFIG.version, mode: cleanWhitespace_(mode).toLowerCase() || "queue", bookTitle: "", records: [] };
+  }
+
+  const sheet = getGraphicsSheet_(mode);
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) {
+    return { ok: true, version: WEAVER_CONFIG.version, mode: cleanWhitespace_(mode).toLowerCase() || "queue", bookTitle: resolvedBookTitle, records: [] };
+  }
+
+  const values = sheet.getRange(2, 1, lastRow - 1, 9).getValues();
+  const records = [];
+
+  values.forEach(function(row, index) {
+    const currentBookTitle = cleanWhitespace_(row[2]);
+    if (currentBookTitle !== resolvedBookTitle) return;
+
+    records.push({
+      sheetRow: index + 2,
+      author: (row[0] || "").toString(),
+      poemTitle: (row[1] || "").toString(),
+      bookTitle: currentBookTitle,
+      quoteText: (row[3] || "").toString(),
+      notes: (row[4] || "").toString(),
+      approved: cleanWhitespace_(row[5]),
+      created: cleanWhitespace_(row[6]),
+      workflowStatus: cleanWhitespace_(row[7]),
+      recordId: (row[8] || "").toString()
+    });
+  });
+
+  return {
+    ok: true,
+    version: WEAVER_CONFIG.version,
+    mode: cleanWhitespace_(mode).toLowerCase() || "queue",
+    bookTitle: resolvedBookTitle,
+    records: records
+  };
+}
+
 function saveWeaverReviews_(payload) {
   const config = WEAVER_CONFIG;
   const sourceSheet = getSourceSheet_();
@@ -534,6 +653,52 @@ function saveValidationBatch_(payload) {
   };
 }
 
+function saveQiCatchupUpdates_(payload) {
+  const config = WEAVER_CONFIG;
+  const sourceSheet = getSourceSheet_();
+  ensureWeaverReviewColumns_(sourceSheet);
+  const updates = Array.isArray(payload && payload.updates) ? payload.updates : [];
+
+  if (!updates.length) {
+    return { ok: false, error: "No catch-up updates provided." };
+  }
+
+  const lastRow = sourceSheet.getLastRow();
+  if (lastRow < config.startRow) {
+    return { ok: false, error: "Source sheet has no data rows." };
+  }
+
+  const rowCount = lastRow - config.startRow + 1;
+  const stateRange = sourceSheet.getRange(
+    config.startRow,
+    config.columnMap.approved,
+    rowCount,
+    config.columnMap.correctedExcerpt - config.columnMap.approved + 1
+  );
+  const stateValues = stateRange.getValues();
+
+  let savedCount = 0;
+  updates.forEach(function(update) {
+    const sourceRow = parseInt(update && update.sourceRow, 10);
+    if (!sourceRow) return;
+
+    const sourceIndex = sourceRow - config.startRow;
+    if (sourceIndex < 0 || sourceIndex >= stateValues.length) return;
+
+    applyQiCatchupStateToRow_(stateValues[sourceIndex]);
+    savedCount++;
+  });
+
+  stateRange.setValues(stateValues);
+  SpreadsheetApp.flush();
+
+  return {
+    ok: true,
+    version: config.version,
+    savedCount: savedCount
+  };
+}
+
 function debugWeaverRecord_(params) {
   const config = WEAVER_CONFIG;
   const sourceSheet = getSourceSheet_();
@@ -662,6 +827,13 @@ function applyReviewStateToRow_(row, update) {
   row[23] = (update.correctedTitle || "").toString().trim();
   row[24] = (update.correctedBookTitle || "").toString().trim();
   row[25] = (update.correctedExcerpt || "").toString();
+}
+
+function applyQiCatchupStateToRow_(row) {
+  row[0] = "Y";
+  row[1] = "";
+  row[2] = "Y";
+  row[20] = "ACCEPT";
 }
 
 function normalizeDecision_(value) {

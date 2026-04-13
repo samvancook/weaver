@@ -9,13 +9,13 @@
     (function() {
       const isLocalhost = ["127.0.0.1", "localhost"].includes(window.location.hostname);
       window.WEAVER_CONFIG = {
-        appVersion: "2026-04-09i",
-        apiBaseUrl: "https://script.google.com/macros/s/AKfycbwFxacmghulvCFou1d-DIKiuRpkoAEHPvv3jHNWCiPMQmlHMHoRsCPhdY6DKkOOg0azEA/exec",
+        appVersion: "2026-04-13a",
+        apiBaseUrl: "https://script.google.com/macros/s/AKfycbyvn-Uysn3cydhl2Jbw0sA7Psm0g_sLCqCd1ddo9RRYjPCwrkLEeLRCDN6Za6DYdJPr6w/exec",
         lockApiBaseUrl: !isLocalhost
       };
     })();
   </script>
-  <link rel="stylesheet" href="/style.css?v=20260409i" />
+  <link rel="stylesheet" href="/style.css?v=20260413a" />
 </head>
 <body>
   <div class="shell">
@@ -31,12 +31,7 @@
         <button class="hero-pill hero-pill--active" id="show-review-module" type="button">Review queue</button>
         <button class="hero-pill" id="show-weird-module" type="button">Extra review</button>
         <button class="hero-pill" id="show-corrections-module" type="button">Needs correction</button>
-        <a
-          class="hero-pill hero-pill--graphics"
-          href="https://sites.google.com/buttonpoetry.com/quote-tool-binder/quote-image-creation"
-          target="_blank"
-          rel="noreferrer"
-        >Graphics queue</a>
+        <button class="hero-pill hero-pill--graphics" id="show-graphics-module" type="button">Graphics queue</button>
       </div>
     </header>
 
@@ -185,6 +180,40 @@
         </div>
       </section>
 
+      <section class="panel panel--wide module-panel" id="graphics-module">
+        <div class="panel__header">
+          <h2>Graphics Queue</h2>
+          <span class="badge badge--muted" id="graphics-book-count-badge">0 Books</span>
+        </div>
+        <div class="book-picker">
+          <label class="field">
+            <span>Mode</span>
+            <select id="graphics-mode">
+              <option value="queue">Needs graphics</option>
+              <option value="cleanup">Created / cleanup</option>
+            </select>
+          </label>
+          <label class="field field--grow">
+            <span>Book Title</span>
+            <select id="graphics-book-select">
+              <option value="">Load graphics books first</option>
+            </select>
+          </label>
+          <button id="load-graphics-books" class="button button--secondary">Load Graphics Books</button>
+          <button id="load-graphics-records" class="button">Load Graphics Rows</button>
+        </div>
+        <p class="hint">
+          This replaces the old quote-image creation browser. `Needs graphics` shows approved rows that still need graphics. `Created / cleanup` shows rows already matched to existing graphics.
+        </p>
+        <div class="panel__header module-panel__subheader">
+          <h3>Graphics Rows</h3>
+          <span class="badge badge--muted" id="graphics-count-badge">0 Rows</span>
+        </div>
+        <div id="graphics-list" class="excerpt-list">
+          <p class="empty-state">Load graphics books to start browsing the downstream queue.</p>
+        </div>
+      </section>
+
       <section class="panel panel--wide">
         <div class="panel__header">
           <h2>Status</h2>
@@ -195,6 +224,6 @@
     </main>
   </div>
 
-  <script src="/app.js?v=20260409i"></script>
+  <script src="/app.js?v=20260413a"></script>
 </body>
 </html>

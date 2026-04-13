@@ -8,11 +8,13 @@ const elements = {
   showReviewModule: document.getElementById("show-review-module"),
   showWeirdModule: document.getElementById("show-weird-module"),
   showCorrectionsModule: document.getElementById("show-corrections-module"),
+  showGraphicsModule: document.getElementById("show-graphics-module"),
   reviewModule: document.getElementById("review-module"),
   reviewQueuePanel: document.getElementById("review-queue-panel"),
   weirdModule: document.getElementById("weird-module"),
   weirdQueuePanel: document.getElementById("weird-queue-panel"),
   correctionsModule: document.getElementById("corrections-module"),
+  graphicsModule: document.getElementById("graphics-module"),
   loadBooks: document.getElementById("load-books"),
   bookSelect: document.getElementById("book-select"),
   weirdBookSelect: document.getElementById("weird-book-select"),
@@ -30,6 +32,11 @@ const elements = {
   loadCorrections: document.getElementById("load-corrections"),
   submitCorrections: document.getElementById("submit-corrections"),
   correctionList: document.getElementById("correction-list"),
+  graphicsMode: document.getElementById("graphics-mode"),
+  graphicsBookSelect: document.getElementById("graphics-book-select"),
+  loadGraphicsBooks: document.getElementById("load-graphics-books"),
+  loadGraphicsRecords: document.getElementById("load-graphics-records"),
+  graphicsList: document.getElementById("graphics-list"),
   statusOutput: document.getElementById("status-output"),
   appModeBadge: document.getElementById("app-mode-badge"),
   bookCountBadge: document.getElementById("book-count-badge"),
@@ -37,13 +44,17 @@ const elements = {
   weirdBookCountBadge: document.getElementById("weird-book-count-badge"),
   weirdExcerptCountBadge: document.getElementById("weird-excerpt-count-badge"),
   correctionBookCountBadge: document.getElementById("correction-book-count-badge"),
-  correctionExcerptCountBadge: document.getElementById("correction-excerpt-count-badge")
+  correctionExcerptCountBadge: document.getElementById("correction-excerpt-count-badge"),
+  graphicsBookCountBadge: document.getElementById("graphics-book-count-badge"),
+  graphicsCountBadge: document.getElementById("graphics-count-badge")
 };
 
 let currentExcerpts = [];
 let currentWeirdExcerpts = [];
 let currentCorrectionExcerpts = [];
 let currentPendingRecords = [];
+let currentGraphicsRecords = [];
+let currentGraphicsBookSummaries = [];
 let isSaving = false;
 let currentValidationByRecordId = new Map();
 let currentModule = "review";
@@ -55,6 +66,7 @@ let currentReviewBookSummaries = [];
 let currentWeirdBookSummaries = [];
 let reviewBookSummaryByKey = new Map();
 let weirdBookSummaryByKey = new Map();
+let graphicsBookSummaryByKey = new Map();
 
 const REVIEW_SINGLE_BATCH_SIZE = 1;
 const REVIEW_MULTI_BATCH_SIZE = 25;
@@ -247,15 +259,17 @@ function applyRuntimeMode() {
 }
 
 function setActiveModule(moduleName) {
-  currentModule = ["review", "weird", "corrections"].includes(moduleName) ? moduleName : "review";
+  currentModule = ["review", "weird", "corrections", "graphics"].includes(moduleName) ? moduleName : "review";
   elements.reviewModule?.classList.toggle("module-panel--active", currentModule === "review");
   elements.reviewQueuePanel?.classList.toggle("module-panel--active", currentModule === "review");
   elements.weirdModule?.classList.toggle("module-panel--active", currentModule === "weird");
   elements.weirdQueuePanel?.classList.toggle("module-panel--active", currentModule === "weird");
   elements.correctionsModule?.classList.toggle("module-panel--active", currentModule === "corrections");
+  elements.graphicsModule?.classList.toggle("module-panel--active", currentModule === "graphics");
   elements.showReviewModule?.classList.toggle("hero-pill--active", currentModule === "review");
   elements.showWeirdModule?.classList.toggle("hero-pill--active", currentModule === "weird");
   elements.showCorrectionsModule?.classList.toggle("hero-pill--active", currentModule === "corrections");
+  elements.showGraphicsModule?.classList.toggle("hero-pill--active", currentModule === "graphics");
 }
 
 function buildJsonpUrl(action, extraParams = {}) {
@@ -538,6 +552,76 @@ function populateBookSelect(select, books, previousSelection, labelBuilder) {
   }
 }
 
+function getSelectedGraphicsMode() {
+  return elements.graphicsMode?.value || "queue";
+}
+
+async function loadGraphicsBooks(options = {}) {
+  const preserveSelection = options.preserveSelection !== false;
+  const previousSelection = preserveSelection ? elements.graphicsBookSelect?.value || "" : "";
+  const mode = getSelectedGraphicsMode();
+
+  try {
+    setStatus(`Loading ${mode === "cleanup" ? "cleanup" : "graphics"} books...`);
+    const data = await requestJsonp("graphicsBooks", { mode });
+    if (!data.ok) {
+      throw new Error(data.error || "Graphics book load failed.");
+    }
+
+    currentGraphicsBookSummaries = Array.isArray(data.books) ? data.books : [];
+    graphicsBookSummaryByKey = new Map(
+      currentGraphicsBookSummaries.map(book => [normalizeBookKey(book.title), book])
+    );
+
+    populateBookSelect(
+      elements.graphicsBookSelect,
+      currentGraphicsBookSummaries.map(book => ({ ...book, key: normalizeBookKey(book.title) })),
+      previousSelection,
+      book => `${book.title} (${book.count})`
+    );
+
+    if (elements.graphicsBookCountBadge) {
+      elements.graphicsBookCountBadge.textContent = `${currentGraphicsBookSummaries.length} Books`;
+    }
+
+    setStatus(
+      `Loaded ${currentGraphicsBookSummaries.length} ${mode === "cleanup" ? "cleanup" : "graphics"} books. Backend ${data.version || "unknown"}.`,
+      currentGraphicsBookSummaries.slice(0, 10)
+    );
+  } catch (error) {
+    setStatus(`Graphics book load failed: ${error.message}`);
+  }
+}
+
+async function loadGraphicsRecords() {
+  const mode = getSelectedGraphicsMode();
+  const bookKey = elements.graphicsBookSelect?.value || "";
+  if (!bookKey) {
+    setStatus("Choose a graphics book title first.");
+    return;
+  }
+
+  const summary = graphicsBookSummaryByKey.get(bookKey);
+  const bookTitle = summary?.title || bookKey;
+
+  try {
+    setStatus(`Loading ${mode === "cleanup" ? "cleanup" : "graphics"} rows for "${bookTitle}"...`);
+    const data = await requestJsonp("graphicsRecords", { mode, bookTitle });
+    if (!data.ok) {
+      throw new Error(data.error || "Graphics record load failed.");
+    }
+
+    currentGraphicsRecords = Array.isArray(data.records) ? data.records : [];
+    renderGraphicsRecords(currentGraphicsRecords);
+    setStatus(
+      `Loaded ${currentGraphicsRecords.length} ${mode === "cleanup" ? "cleanup" : "graphics"} rows for "${bookTitle}".`,
+      currentGraphicsRecords.slice(0, 5)
+    );
+  } catch (error) {
+    setStatus(`Graphics record load failed: ${error.message}`);
+  }
+}
+
 function isGoodValidation(validation) {
   return Boolean(validation && validation.status === "catalog_match");
 }
@@ -713,6 +797,32 @@ function renderCorrectionExcerpts(excerpts) {
     elements.correctionExcerptCountBadge,
     "No correction records remain for this book."
   );
+}
+
+function renderGraphicsRecords(records) {
+  if (elements.graphicsCountBadge) {
+    elements.graphicsCountBadge.textContent = `${records.length} Rows`;
+  }
+
+  if (!elements.graphicsList) {
+    return;
+  }
+
+  elements.graphicsList.innerHTML = "";
+
+  if (!records.length) {
+    const empty = document.createElement("p");
+    empty.className = "empty-state";
+    empty.textContent = getSelectedGraphicsMode() === "cleanup"
+      ? "No cleanup rows remain for this book."
+      : "No graphics rows remain for this book.";
+    elements.graphicsList.appendChild(empty);
+    return;
+  }
+
+  records.forEach(record => {
+    elements.graphicsList.appendChild(buildGraphicsCard(record));
+  });
 }
 
 function renderExcerptCollection(excerpts, container, countBadge, emptyMessage, options = {}) {
@@ -1244,6 +1354,43 @@ function buildExcerptCard(excerpt, uniqueKey) {
       openComparisonWindow(href, "weaverLibraryExcerpt");
     });
   });
+
+  return card;
+}
+
+function buildGraphicsCard(record) {
+  const card = document.createElement("article");
+  card.className = "excerpt-card";
+
+  const approved = normalizeApprovalForCompare(record.approved) === "Y";
+  const created = normalizeApprovalForCompare(record.created) === "Y";
+  const workflowStatus = (record.workflowStatus || "").trim();
+  const notes = (record.notes || "").trim();
+  const wordCount = countWordsFromText(record.quoteText || "");
+
+  card.innerHTML = `
+    <div class="excerpt-card__meta">
+      <span class="badge badge--muted">Sheet row ${escapeHtml(String(record.sheetRow || ""))}</span>
+      <span class="badge badge--muted">Record ${escapeHtml(record.recordId || "none")}</span>
+      <span class="badge badge--muted">Book ${escapeHtml(record.bookTitle || "(blank)")}</span>
+      <span class="badge ${getWordCountBadgeClass(wordCount)}">Words ${wordCount}</span>
+      ${workflowStatus ? `<span class="badge badge--warn">${escapeHtml(workflowStatus)}</span>` : ""}
+      ${approved ? '<span class="badge badge--signal">Approved</span>' : '<span class="badge badge--muted">Not approved</span>'}
+      ${created ? '<span class="badge badge--signal">Created</span>' : '<span class="badge badge--muted">Not created</span>'}
+      <span class="excerpt-card__title">${escapeHtml(record.poemTitle || "Untitled poem")}</span>
+      <span class="excerpt-card__author">${escapeHtml(record.author || "Unknown author")}</span>
+    </div>
+    <blockquote class="excerpt-card__quote">${escapeHtml(record.quoteText || "")}</blockquote>
+    <div class="correction-source__grid">
+      <div><strong>Book</strong><span>${escapeHtml(record.bookTitle || "")}</span></div>
+      <div><strong>Approved?</strong><span>${escapeHtml(record.approved || "")}</span></div>
+      <div><strong>Created?</strong><span>${escapeHtml(record.created || "")}</span></div>
+      <div><strong>Workflow</strong><span>${escapeHtml(workflowStatus || "—")}</span></div>
+      <div><strong>Record ID</strong><span>${escapeHtml(record.recordId || "—")}</span></div>
+      <div><strong>Sheet Row</strong><span>${escapeHtml(String(record.sheetRow || "—"))}</span></div>
+    </div>
+    ${notes ? `<p class="hint">${escapeHtml(notes)}</p>` : ""}
+  `;
 
   return card;
 }
@@ -1790,6 +1937,14 @@ elements.showCorrectionsModule?.addEventListener("click", () => {
     loadCorrectionBooks();
   }
 });
+elements.showGraphicsModule?.addEventListener("click", () => {
+  setActiveModule("graphics");
+  if (getApiBaseUrl() && elements.graphicsBookSelect?.options.length <= 1) {
+    loadGraphicsBooks();
+  }
+});
+elements.loadGraphicsBooks?.addEventListener("click", loadGraphicsBooks);
+elements.loadGraphicsRecords?.addEventListener("click", loadGraphicsRecords);
 if (elements.reviewFilter) {
   elements.reviewFilter.addEventListener("change", () => {
     reviewVisibleCount = getReviewBatchSize();
@@ -1809,6 +1964,16 @@ if (elements.weirdReviewFilter) {
     weirdVisibleCount = EXTRA_REVIEW_BATCH_SIZE;
     weirdPinnedRowOrder = [];
     renderWeirdCurrentExcerpts();
+  });
+}
+if (elements.graphicsMode) {
+  elements.graphicsMode.addEventListener("change", () => {
+    currentGraphicsRecords = [];
+    renderGraphicsRecords([]);
+    if (elements.graphicsBookSelect) {
+      elements.graphicsBookSelect.innerHTML = '<option value="">Load graphics books first</option>';
+    }
+    loadGraphicsBooks({ preserveSelection: false });
   });
 }
 
