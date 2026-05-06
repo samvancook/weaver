@@ -12,8 +12,7 @@ from pathlib import Path
 from excerpt_library import connect_library, find_library_excerpt_match
 
 DEFAULT_API_BASE_URL = (
-    "https://script.google.com/macros/s/"
-    "AKfycbytGpEIr8CbPdJDDF5tAn7JxH0-kNuBogD_elDlF8ljgb_7ebF2nt-yn45hUIwzRd2Xfg/exec"
+    "https://weaver.buttonpoetry.com"
 )
 
 
@@ -35,14 +34,10 @@ def fetch_pending_records(api_base_url: str) -> dict:
         [
             "-L",
             "-sS",
-            f"{api_base_url}?action=pendingRecords&callback=weaverPending",
+            f"{api_base_url.rstrip('/')}/api/review/pending-records?filter=all",
         ]
     )
-    start = payload.find("(")
-    end = payload.rfind(")")
-    if start == -1 or end == -1 or end <= start:
-        raise ValueError("Pending records response was not valid JSONP.")
-    return json.loads(payload[start + 1 : end])
+    return json.loads(payload or "{}")
 
 
 def batch_save_reviews(api_base_url: str, updates: list[dict]) -> dict:
@@ -54,7 +49,7 @@ def batch_save_reviews(api_base_url: str, updates: list[dict]) -> dict:
             "POST",
             "-H",
             "Content-Type: application/json",
-            f"{api_base_url}?action=saveReviews",
+            f"{api_base_url.rstrip('/')}/api/save-reviews",
             "--data-binary",
             "@-",
         ],
@@ -66,14 +61,15 @@ def batch_save_reviews(api_base_url: str, updates: list[dict]) -> dict:
 def should_auto_reject(match: dict | None) -> bool:
     if not match:
         return False
-    return (
-        match.get("matchType") == "exact"
-        and bool(match.get("formattingMatch"))
-        and bool(match.get("lineBreaksMatch"))
-    )
+    return match.get("matchType") == "exact"
 
 
-def build_update(record: dict) -> dict:
+def build_update(record: dict, match: dict | None) -> dict:
+    duplicate_group_id = ""
+    if match and match.get("matchType") == "exact" and match.get("sourceRow"):
+        duplicate_prefix = "library-duplicate" if match.get("lineBreaksMatch") else "library-variant"
+        duplicate_group_id = f"{duplicate_prefix}:{match.get('sourceRow')}"
+
     return {
         "sourceRow": record.get("sourceRow"),
         "recordId": record.get("recordId", ""),
@@ -88,6 +84,7 @@ def build_update(record: dict) -> dict:
         "useForQi": "1" if record.get("useForQi") else "0",
         "photos": "1" if record.get("useForInt") else "0",
         "useForInt": "1" if record.get("useForInt") else "0",
+        "duplicateGroupId": duplicate_group_id,
     }
 
 
@@ -172,7 +169,7 @@ def main() -> int:
                     "excerptPreview": (record.get("excerptText") or "").replace("\n", "\\n")[:200],
                 }
             )
-            updates.append(build_update(record))
+            updates.append(build_update(record, match))
 
             if args.limit and len(updates) >= args.limit:
                 break
@@ -183,7 +180,7 @@ def main() -> int:
     write_report(report_path, matches)
 
     print(f"Pending records scanned: {len(records)}")
-    print(f"Strict exact library matches: {len(updates)}")
+    print(f"Exact library matches: {len(updates)}")
     print(f"Report: {report_path}")
 
     if not args.apply:
@@ -191,7 +188,7 @@ def main() -> int:
         return 0
 
     if not updates:
-        print("No strict exact matches to reject.")
+        print("No exact library matches to reject.")
         return 0
 
     total_saved = 0
@@ -218,7 +215,7 @@ def main() -> int:
       total_saved += saved_count
       print(f"Saved batch {start + 1}-{start + len(chunk)} ({saved_count} rows).")
 
-    print(f"Saved {total_saved} exact-match rejections.")
+    print(f"Saved {total_saved} exact-library-match rejections.")
     return 0
 
 
