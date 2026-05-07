@@ -2,17 +2,41 @@ node_modules/
 .DS_Store
 .env
 .env.*
+client_secret_*.json
 .firebase/
 firebase-debug.log
 ui-debug.log
 .clasp.json
 .clasprc.json
 __pycache__/
+*.pyc
 Excerpt Gathering & Quote Image Creation Database (Responses)*.xlsx
 google_apps_script_backup_before_duplicates.gs
 backups/
 Primary Excerpt Database - Excerpt Database.csv
+Screenshot *.png
+Just Weaver W no txt.png
+/*.xlsx
 data/excerpt_library.db
 data/excerpt_library.db-shm
 data/excerpt_library.db-wal
+data/excerpt_library_deduped.db
+data/excerpt_library_deduped.db-shm
+data/excerpt_library_deduped.db-wal
+data/excerpt_library_normalized.db
+data/excerpt_library_normalized.db-shm
+data/excerpt_library_normalized.db-wal
+data/qi_catalog_match.db
+data/qi_catalog_match.db-shm
+data/qi_catalog_match.db-wal
+data/weaver_runtime.db
+data/weaver_runtime.db-shm
+data/weaver_runtime.db-wal
 data/exact_library_match_autoreject_report.csv
+data/excerpt_row_classification.csv
+data/folder_link_backfill_unresolved.json
+data/int_audit/
+data/peeled_off/
+data/poetry_please_qi_*.json
+data/qi_graphic_*.csv
+data/qi_queue_cleanup*.csv

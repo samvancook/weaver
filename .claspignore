@@ -13,3 +13,4 @@ firebase.json
 PRODUCT_SCOPE.md
 WORKFLOW_REDESIGN_PLAN.md
 dev-server.mjs
+weaver-apps-script/**

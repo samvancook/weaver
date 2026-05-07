@@ -14,6 +14,11 @@ COPY catalog_validate.py ./catalog_validate.py
 COPY catalog_poem_text.py ./catalog_poem_text.py
 COPY excerpt_library.py ./excerpt_library.py
 COPY excerpt_library_text.py ./excerpt_library_text.py
+COPY intake_catalog_lookup.py ./intake_catalog_lookup.py
+COPY graphics_qi_lookup.py ./graphics_qi_lookup.py
+COPY weaver_runtime_db.py ./weaver_runtime_db.py
+COPY weaver_runtime_sync.py ./weaver_runtime_sync.py
+COPY db ./db
 COPY data ./data
 
 ENV PORT=8080

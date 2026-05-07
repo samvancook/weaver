@@ -4,18 +4,14 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Weaver</title>
-  <link rel="icon" type="image/png" href="/weaver-logo.png?v=20260409i" />
+  <link rel="icon" type="image/png" href="/weaver-logo.png?v=20260427a" />
   <script>
     (function() {
-      const isLocalhost = ["127.0.0.1", "localhost"].includes(window.location.hostname);
-      window.WEAVER_CONFIG = {
-        appVersion: "2026-04-13a",
-        apiBaseUrl: "https://script.google.com/macros/s/AKfycbyvn-Uysn3cydhl2Jbw0sA7Psm0g_sLCqCd1ddo9RRYjPCwrkLEeLRCDN6Za6DYdJPr6w/exec",
-        lockApiBaseUrl: !isLocalhost
-      };
+      window.WEAVER_CONFIG = {};
     })();
   </script>
-  <link rel="stylesheet" href="/style.css?v=20260413a" />
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <link rel="stylesheet" href="/style.css?v=20260427a" />
 </head>
 <body>
   <div class="shell">
@@ -28,34 +24,140 @@
         Select a book, review excerpts, and submit decisions back to the working sheet.
       </p>
       <div class="hero-links">
+        <button class="hero-pill" id="show-gathering-module" type="button">Excerpt gathering</button>
         <button class="hero-pill hero-pill--active" id="show-review-module" type="button">Review queue</button>
         <button class="hero-pill" id="show-weird-module" type="button">Extra review</button>
         <button class="hero-pill" id="show-corrections-module" type="button">Needs correction</button>
-        <button class="hero-pill hero-pill--graphics" id="show-graphics-module" type="button">Graphics queue</button>
+        <button class="hero-pill hero-pill--graphics" id="show-graphics-module" type="button">Graphics creation queue</button>
       </div>
     </header>
 
     <main class="grid">
-      <section class="panel panel--wide panel--compact" id="connection-panel-shell">
-        <details class="connection-panel">
-          <summary class="connection-panel__summary">
-            <span>Connection</span>
-            <span class="badge">Apps Script</span>
-          </summary>
-          <div class="connection-panel__body">
-            <label class="field">
-              <span>Apps Script Web App URL</span>
-              <input id="api-base-url" type="url" placeholder="Paste deployed Apps Script web app URL" />
-            </label>
-            <div class="toolbar">
-              <button id="save-api-url" class="button button--secondary">Save URL</button>
-              <button id="load-books" class="button">Load Books</button>
-            </div>
-            <p class="hint">
-              Weaver uses your spreadsheet Apps Script as the live backend for books, excerpts, and submit.
-            </p>
+      <section class="panel panel--wide module-panel" id="gathering-module">
+        <div class="panel__header">
+          <h2>Excerpt Gathering</h2>
+          <span class="badge badge--muted" id="gathering-mode-badge">Book Excerpts</span>
+        </div>
+        <div class="gathering-topline">
+          <div class="gathering-tabs" role="tablist" aria-label="Excerpt gathering lanes">
+            <button class="button button--secondary gathering-tab gathering-tab--active" id="gathering-tab-book" type="button">Book excerpts</button>
+            <button class="button button--secondary gathering-tab" id="gathering-tab-video" type="button">Video excerpts</button>
+            <button class="button button--secondary gathering-tab" id="gathering-tab-fix" type="button">Fix existing quote</button>
           </div>
-        </details>
+          <label class="field field--grow">
+            <span>Email</span>
+            <input id="gathering-email" type="email" placeholder="name@buttonpoetry.com" />
+          </label>
+        </div>
+        <select id="gathering-mode" hidden aria-hidden="true">
+          <option value="book">Add a quote from a book</option>
+          <option value="video">Add a quote from a video</option>
+          <option value="fix">Fix a quote in one of the quote tools</option>
+        </select>
+        <div class="gathering-guidance">
+          <p><strong>Working rule of thumb:</strong> copy and paste from the manuscript, capture only the strongest lines, and keep moving past maybes.</p>
+          <ul class="gathering-guidance__list">
+            <li>Prefer the best excerpts, not the most excerpts.</li>
+            <li>Stay under roughly 3 excerpts per poem and 30 per book.</li>
+            <li>Aim for plenty of excerpts in the 10–25 word range.</li>
+            <li>Use <kbd>Cmd/Ctrl</kbd> + <kbd>Enter</kbd> to submit quickly from a text box.</li>
+          </ul>
+        </div>
+        <div class="gathering-form">
+          <div class="gathering-fields gathering-fields--book" id="gathering-book-fields">
+            <label class="field field--span-5">
+              <span>Book Title</span>
+              <input id="gathering-book-book" list="gathering-book-options" type="text" placeholder="Choose a book or type one manually" />
+            </label>
+            <label class="field field--span-4">
+              <span>Poem Title</span>
+              <input id="gathering-book-title" list="gathering-book-poem-options" type="text" placeholder="Choose from EPUB list or type manually" />
+            </label>
+            <label class="field field--span-3">
+              <span>Author</span>
+              <input id="gathering-book-author" list="gathering-author-options" type="text" placeholder="Auto-filled from catalog or enter manually" />
+            </label>
+            <div class="gathering-inline-tools field--full">
+              <button id="gathering-prev-catalog-poem" class="button button--secondary" type="button" disabled>Previous Poem</button>
+              <button id="gathering-next-catalog-poem" class="button button--secondary" type="button" disabled>Next Poem</button>
+              <button id="gathering-view-catalog-poem" class="button button--secondary" type="button" disabled>View EPUB Context</button>
+              <p class="hint gathering-source-hint" id="gathering-book-source-hint">Select a book to load poem titles from the catalog/EPUB source, or keep going manually for non-EPUB titles.</p>
+            </div>
+            <label class="field field--full">
+              <span>Quote</span>
+              <textarea id="gathering-book-quote" rows="6" placeholder="Paste the quote exactly as it appears in the manuscript"></textarea>
+            </label>
+            <p class="gathering-quote-meta" id="gathering-book-quote-meta">Word count: 0. Rough sweet spot: 10–25 words.</p>
+            <label class="field field--full">
+              <span>Notes</span>
+              <textarea id="gathering-book-notes" rows="3" placeholder="Optional notes about formatting, italics, line breaks, or source context"></textarea>
+            </label>
+            <label class="field field--full">
+              <span>Full-Poem Reaction</span>
+              <textarea id="gathering-book-reaction" rows="2" placeholder="Optional: how did the full poem land for you while you were reading?"></textarea>
+            </label>
+          </div>
+
+          <div class="gathering-fields gathering-fields--video" id="gathering-video-fields" hidden>
+            <label class="field field--span-3">
+              <span>Author</span>
+              <input id="gathering-video-author" list="gathering-author-options" type="text" placeholder="Start typing an author name" />
+            </label>
+            <label class="field field--span-3">
+              <span>Poem Title</span>
+              <input id="gathering-video-title" type="text" placeholder="Enter the poem title if known" />
+            </label>
+            <label class="field field--span-3">
+              <span>Book / Collection Title</span>
+              <input id="gathering-video-book" list="gathering-book-options" type="text" placeholder="Optional book or collection title" />
+            </label>
+            <label class="field field--span-3">
+              <span>Event / Video Source</span>
+              <input id="gathering-video-event" type="text" placeholder="Paste the event name as it appears in curation" />
+            </label>
+            <label class="field field--full">
+              <span>Quote</span>
+              <textarea id="gathering-video-quote" rows="6" placeholder="Paste the quote exactly as it appears in the video transcript"></textarea>
+            </label>
+            <p class="gathering-quote-meta" id="gathering-video-quote-meta">Word count: 0. Rough sweet spot: 10–25 words.</p>
+          </div>
+
+          <div class="gathering-fields gathering-fields--fix" id="gathering-fix-fields" hidden>
+            <label class="field field--span-4">
+              <span>What part is wrong?</span>
+              <select id="gathering-fix-part">
+                <option value="">Choose one</option>
+                <option value="The Quote">The Quote</option>
+                <option value="The Poem Name">The Poem Name</option>
+                <option value="The Author Name">The Author Name</option>
+                <option value="The Book Title">The Book Title</option>
+                <option value="Other">Other</option>
+              </select>
+            </label>
+            <label class="field field--span-4">
+              <span>Author</span>
+              <input id="gathering-fix-author" list="gathering-author-options" type="text" placeholder="Optional author reference" />
+            </label>
+            <label class="field field--full">
+              <span>Incorrect Text</span>
+              <textarea id="gathering-fix-incorrect" rows="4" placeholder="Paste the incorrect text exactly as it appears now"></textarea>
+            </label>
+            <label class="field field--full">
+              <span>Corrected Text</span>
+              <textarea id="gathering-fix-correct" rows="4" placeholder="Paste the corrected text"></textarea>
+            </label>
+          </div>
+        </div>
+        <datalist id="gathering-author-options"></datalist>
+        <datalist id="gathering-book-options"></datalist>
+        <datalist id="gathering-book-poem-options"></datalist>
+        <p class="hint">
+          This is the first Weaver-side replacement for the excerpt gathering form. Book intake now aims at catalog/EPUB-backed metadata first, while video and fix lanes stay closer to the old form behavior for now.
+        </p>
+        <div class="toolbar">
+          <button id="load-gathering-options" class="button button--secondary" type="button">Refresh Intake Options</button>
+          <button id="submit-gathering" class="button button--accent" type="button">Submit Intake Row</button>
+        </div>
       </section>
 
       <section class="panel panel--wide module-panel module-panel--active" id="review-module">
@@ -73,6 +175,7 @@
           <label class="field">
             <span>Queue Mode</span>
             <select id="review-filter">
+              <option value="current_titles">2026 Titles</option>
               <option value="all">All pending</option>
               <option value="new_only">New to library only</option>
               <option value="exact_library">Exact library matches</option>
@@ -87,6 +190,7 @@
               <option value="batch">Batch review</option>
             </select>
           </label>
+          <button id="load-books" class="button button--secondary">Refresh Books</button>
           <button id="load-excerpts" class="button">Load Excerpts</button>
         </div>
         <p class="hint" id="book-selection-hint">
@@ -182,7 +286,7 @@
 
       <section class="panel panel--wide module-panel" id="graphics-module">
         <div class="panel__header">
-          <h2>Graphics Queue</h2>
+          <h2>Graphics Creation Queue</h2>
           <span class="badge badge--muted" id="graphics-book-count-badge">0 Books</span>
         </div>
         <div class="book-picker">
@@ -190,7 +294,15 @@
             <span>Mode</span>
             <select id="graphics-mode">
               <option value="queue">Needs graphics</option>
-              <option value="cleanup">Created / cleanup</option>
+              <option value="cleanup">Graphics QC</option>
+              <option value="handoff">Poetry Please handoff</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Queue Mode</span>
+            <select id="graphics-filter">
+              <option value="current_titles">2026 Titles</option>
+              <option value="all">All books</option>
             </select>
           </label>
           <label class="field field--grow">
@@ -200,17 +312,39 @@
             </select>
           </label>
           <button id="load-graphics-books" class="button button--secondary">Load Graphics Books</button>
-          <button id="load-graphics-records" class="button">Load Graphics Rows</button>
+          <button id="load-graphics-records" class="button">Load Queue Rows</button>
         </div>
         <p class="hint">
-          This replaces the old quote-image creation browser. `Needs graphics` shows approved rows that still need graphics. `Created / cleanup` shows rows already matched to existing graphics.
+          This replaces the old quote-image creation browser. `Needs graphics` is the true creation queue. `2026 Titles` narrows that queue to the current season. `Graphics QC` is for graphics that already exist and should be reviewed. `Poetry Please handoff` is for approved graphics and their downstream status.
         </p>
+        <details class="folder-import-panel" id="graphics-folder-import-panel">
+          <summary class="folder-import-panel__summary">Import Made Graphics From Drive</summary>
+          <div class="folder-import-panel__header">
+            <h3>Import Made Graphics From Drive</h3>
+            <p class="hint">Paste a Google Drive folder link or a single image link. Weaver will preview safe matches, then move those excerpts out of `Needs graphics` and into `Graphics QC` through the existing completion lane.</p>
+          </div>
+          <div class="book-picker book-picker--stacked">
+            <label class="field field--grow">
+              <span>Drive Folder or File Link</span>
+              <input id="graphics-folder-url" type="url" placeholder="https://drive.google.com/drive/folders/... or https://drive.google.com/file/d/..." />
+            </label>
+            <button id="preview-graphics-folder-import" class="button button--secondary" type="button">Preview Matches</button>
+            <button id="apply-graphics-folder-import" class="button button--accent" type="button" disabled>Import Matched Graphics</button>
+          </div>
+          <div id="graphics-folder-import-results" class="folder-import-results">
+            <p class="empty-state">Preview a Drive folder to see which open graphics requests can be matched safely.</p>
+          </div>
+        </details>
         <div class="panel__header module-panel__subheader">
-          <h3>Graphics Rows</h3>
+          <h3>Queue Rows</h3>
           <span class="badge badge--muted" id="graphics-count-badge">0 Rows</span>
         </div>
+        <div class="toolbar">
+          <button id="export-graphics-sheet" class="button button--secondary" hidden>Export Google Sheet</button>
+          <button id="submit-graphics-qc" class="button button--accent" hidden>Save QC Decisions</button>
+        </div>
         <div id="graphics-list" class="excerpt-list">
-          <p class="empty-state">Load graphics books to start browsing the downstream queue.</p>
+          <p class="empty-state">Load graphics books to start browsing the graphics creation or QC queue.</p>
         </div>
       </section>
 
@@ -224,6 +358,6 @@
     </main>
   </div>
 
-  <script src="/app.js?v=20260413a"></script>
+  <script src="/app.js?v=20260427a"></script>
 </body>
 </html>

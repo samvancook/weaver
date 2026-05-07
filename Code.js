@@ -6,9 +6,317 @@ function onOpen() {
     { name: "Check excerpt duplicates", functionName: "checkExcerptDuplicates" },
     { name: "Mark exact duplicate delete candidates", functionName: "markExactDuplicateDeleteCandidates" },
     { name: "Sync exact-duplicate excludes upstream", functionName: "syncExactDuplicateExclusionsToSource" },
-    { name: "Refresh duplicate review columns", functionName: "refreshDuplicateReviewColumns" }
+    { name: "Refresh duplicate review columns", functionName: "refreshDuplicateReviewColumns" },
+    { name: "Setup Legacy QI Backfill Helpers", functionName: "setupLegacyQiBackfillHelpers" },
+    { name: "Apply QI Graphic Catch-up Batch", functionName: "applyQiGraphicCatchupBatch" },
+    { name: "Apply Safe QI Catch-up Batch", functionName: "applySafeQiGraphicCatchupBatch" },
+    { name: "Rollback Wrong QI Catch-up Rows", functionName: "rollbackWrongQiGraphicCatchupRows" }
   ];
   sheet.addMenu("Custom Menu", menuEntries);
+}
+
+const LEGACY_QI_BACKFILL_CONFIG = {
+  reviewSheetName: "New - Quote Creation Tool Database",
+  sourceSheetName: "Excerpt Tool 1.20",
+  reviewFormulaColumn: 16, // P
+  reviewLegacyBackupColumn: 17, // Q
+  reviewSourceRowHelperColumn: 18, // R
+  sourceLegacyHelperColumn: 64, // BL
+  sourceMergedPreviewColumn: 65 // BM
+};
+
+const QI_CATCHUP_CONFIG = {
+  spreadsheetId: "1yTCRQKAavimDEJka1-Ice4xlJ1mCm8hq0-G1PTQkTLM",
+  sheetName: "Excerpt Tool 1.20",
+  startRow: 2,
+  approvedColumn: 35,
+  quoteCreatedQcColumn: 37,
+  excerptReviewDecisionColumn: 55
+};
+
+const QI_GRAPHIC_CATCHUP_SOURCE_ROWS = [
+  7651, 7658, 7660, 7661, 7663, 7666, 7673, 7674, 7678, 7680, 7689, 7690, 7692, 7693, 7695, 8993, 8994, 9000, 9002, 9006,
+  9007, 9013, 9014, 9017, 9019, 9027, 9028, 9032, 9033, 9038, 9039, 9044, 9049, 9050, 9051, 9054, 9058, 9060, 9063, 9066,
+  9071, 9072, 10156, 10168, 10184, 10194, 10201, 10207, 10210, 10225, 10228, 10232, 10263, 10282, 10291, 10292, 10297, 10311, 10320, 10353,
+  10382, 11840, 11841, 11842, 11845, 11853, 11854, 11855, 11905, 11906, 11907, 11910, 11911, 11912, 11914, 11915, 11947, 11949, 12017, 12018,
+  12063, 12117, 12118, 12120, 12121, 12229, 12230, 12231, 12232, 12252, 12255, 12257, 12314, 12334, 12335, 12355, 12357, 12472, 12521, 12529,
+  12539, 12576, 12579, 12612, 12623, 12637, 12638, 12666, 12671, 12682, 12688, 12691, 12695, 13255, 13261, 13263, 13264, 13273, 13279, 13282,
+  13298, 13305, 13307, 13342, 13345, 13346, 13347, 13354, 13355, 13366, 13374, 13379, 13381, 13408, 13426, 13436, 13439, 13440, 13443, 13450,
+  13981, 13991, 13998, 14004, 14015, 14020, 14031, 14032, 14034, 14043, 14056, 14057, 14058, 14061, 14066, 14067, 14071, 14078, 14093, 14100,
+  14102, 14115, 14116, 14117, 14124, 14130, 14131, 14133, 15129, 15130, 15131, 15135, 15136, 15138, 15139, 15140, 15144, 15147, 15149, 15150,
+  15152, 15157, 15158, 15159, 15160, 15162, 15164, 15168, 15170, 16807, 16814, 16815, 16820, 16826, 16831, 16832, 16834, 16835, 16836, 16837,
+  16838, 16839, 16847, 16848, 16850, 16853, 16861, 22399, 22403, 22409, 22415, 22419, 22431, 22433, 22453, 22465, 22468, 22543, 22544, 22560,
+  22561, 22575, 22578, 22579, 22594, 22603, 22617, 22675, 22680, 22707, 22709, 22713, 22721, 22733, 22736, 22801, 22804, 22814, 22815, 22816,
+  22881, 22882, 22976, 22981, 22991, 23017, 23041, 23044, 23134, 23139, 23159, 23163, 23168, 23169, 23180, 23183, 23195, 23201, 23209, 23211,
+  23216, 23224, 23225, 23227, 23233, 23239, 23241, 23251, 23254, 23257, 23262, 23267, 23269, 24639, 24643, 24644, 24645, 24646, 24647, 24653,
+  24654, 24657, 24659, 24660, 24664, 24666, 24668, 24669, 24670, 24671, 24673, 24677, 24678, 24679, 24681, 24683, 26848, 26849, 26853, 26856,
+  26857, 26861, 26862, 26864, 26866, 26867, 26871, 26872, 26874, 26888, 26889, 26893, 26894, 26896, 26900, 26901, 26902, 26903, 26904, 26905,
+  26910, 26911, 26912, 26916, 27732, 27768, 27772, 27853, 27854, 27870, 28310, 28427, 28574, 28907, 29832, 29849, 29859, 29918, 30123, 30133,
+  30137, 30200, 30228, 30233, 30678, 30709, 35837, 37103, 37629, 40427, 41658, 42617, 42636, 42644, 42650, 42653, 42659, 42694, 42698, 42723,
+  42801, 42829, 42832, 42852, 43106, 43121, 43127, 43130, 43131, 43133, 43134, 43137, 43158, 43161, 43166, 43173, 43175, 43180, 43181, 43186,
+  43187, 43193, 43195, 43232, 43329, 43534, 43535, 43540, 44383, 44430, 44750, 44751, 44752, 44753, 44754, 44755, 44756, 44757, 44758, 44759,
+  44760, 44761, 44762, 44763, 44764, 44765, 44766, 44767, 44768, 44769, 44770, 44771, 44772, 44773, 44774, 44775, 44776, 44777
+];
+
+const QI_GRAPHIC_BAD_REACHABLE_ROWS = [
+  7651, 7658, 7660, 7661, 7663, 7666, 7673, 7674, 7678, 7680, 7689, 7690, 7692, 7693, 7695,
+  8993, 8994, 9000, 9002, 9006, 9007, 9013, 9014, 9017, 9019, 9027, 9028, 9032, 9033, 9038,
+  9039, 9044, 9049, 9050, 9051, 9054, 9058, 9060, 9063, 9066, 9071, 9072
+];
+
+const SAFE_QI_GRAPHIC_CATCHUP_SOURCE_ROWS = [
+  6354, 6353, 6340, 4748, 4766, 4751, 6345, 6346, 4764, 4775, 6357, 6358, 4756, 6351, 6221, 6228, 6236, 6240, 6225, 6226,
+  6231, 6227, 6232, 6233, 6246, 6245, 6244, 6230, 6220, 6248, 6234, 6235, 6249, 6223, 6224, 2862, 2860, 2859, 2872, 6238,
+  6237, 6239, 4916, 4914, 4908, 4992, 5007, 5022, 4898, 4912, 5138, 4902, 5131, 4915, 4911, 4990, 4996, 4903, 4895, 5005,
+  4913, 5009, 5112, 5099, 4919, 4901, 2903, 2904, 2907, 2908, 2888, 2886, 5301, 5425, 5296, 5313, 5449, 4686, 5317, 5348,
+  4713, 5443, 5437, 5329, 5332, 4706, 4682, 5316, 5307, 5324, 5434, 5448, 5333, 5321, 5156, 5012, 7042, 7056, 7057, 7131,
+  7052, 7136, 7125, 7034, 7065, 7058, 7130, 7041, 7035, 7036, 7063, 7044, 7064, 7122, 7061, 7045, 7051, 7069, 7123, 7046,
+  7121, 7368, 7381, 7382, 7363, 7376, 7364, 7366, 7367, 7373, 7374, 7384, 7380, 7386, 7383, 6312, 6313, 6330, 6314, 6315,
+  6317, 6318, 6322, 6304, 6325, 6309, 6311, 6329, 6307, 6308, 6323, 6324, 6305, 6326, 6331, 6320, 4317, 4249, 4271, 4283,
+  4276, 4207, 4209, 4333, 4205, 4238, 4255, 4225, 4321, 4203, 4232, 4234, 4219, 4259, 4220, 6165, 6206, 6207, 6166, 6181,
+  6191, 6192, 2824, 2223, 2230, 3425, 2226, 2826, 2849, 2837, 2187, 2231, 2851, 3421, 2185, 2825, 2852, 2232, 2832, 2840,
+  6172, 6198, 6158, 6159, 6176, 6203, 6163, 6216, 6212, 6151, 6217, 6180, 6186, 6211, 6195, 6260, 6184, 6182, 6168, 6153,
+  6185, 6188, 6189, 5489, 5520, 5502, 5511, 5512, 5488, 5516, 5513, 5526, 5508, 5504, 5536, 5499, 5484, 5485, 5560, 5514,
+  2101, 5043, 2930, 2929, 2961, 2934, 2179, 494, 454, 1067, 1117, 1115, 2144, 2132, 2120, 1089, 1087, 2129, 1094, 1109,
+  2128, 351, 373, 260, 346, 5204, 5521, 5500, 5553, 5546, 5494, 5522, 6292, 6291, 6295, 6278, 6279, 6294, 6293, 6285,
+  6283, 6266, 6267, 6274, 6288, 6273, 6286, 6287, 6282
+];
+
+function doPost(e) {
+  var action = (e && e.parameter && e.parameter.action) || "";
+
+  if (action === "saveQiCatchupUpdates") {
+    var payloadText =
+      (e && e.postData && e.postData.contents) ||
+      (e && e.parameter && e.parameter.payload) ||
+      "{}";
+    var parsed = safeParseJson_(payloadText);
+    var result = saveQiCatchupUpdates_(parsed);
+
+    return ContentService
+      .createTextOutput(JSON.stringify(result))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+
+  return ContentService
+    .createTextOutput(JSON.stringify({ ok: false, error: "Unknown action" }))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function safeParseJson_(text) {
+  try {
+    return JSON.parse(text);
+  } catch (_error) {
+    return {};
+  }
+}
+
+function saveQiCatchupUpdates(payload) {
+  return saveQiCatchupUpdates_(payload);
+}
+
+function applyQiGraphicCatchupBatch() {
+  var result = saveQiCatchupUpdates_({
+    updates: QI_GRAPHIC_CATCHUP_SOURCE_ROWS.map(function(sourceRow) {
+      return { sourceRow: sourceRow };
+    })
+  });
+  Logger.log(JSON.stringify(result));
+  SpreadsheetApp.getActiveSpreadsheet().toast(
+    "QI catch-up batch complete. Updated " + (result.savedCount || 0) + " rows.",
+    "Excerpt Update Tool",
+    10
+  );
+  return result;
+}
+
+function applySafeQiGraphicCatchupBatch() {
+  var seen = {};
+  var dedupedRows = SAFE_QI_GRAPHIC_CATCHUP_SOURCE_ROWS.filter(function(sourceRow) {
+    if (seen[sourceRow]) return false;
+    seen[sourceRow] = true;
+    return true;
+  });
+  var result = saveQiCatchupUpdates_({
+    updates: dedupedRows.map(function(sourceRow) {
+      return { sourceRow: sourceRow };
+    })
+  });
+  Logger.log(JSON.stringify(result));
+  SpreadsheetApp.getActiveSpreadsheet().toast(
+    "Safe QI catch-up batch complete. Updated " + (result.savedCount || 0) + " rows.",
+    "Excerpt Update Tool",
+    10
+  );
+  return result;
+}
+
+function rollbackWrongQiGraphicCatchupRows() {
+  var spreadsheet = SpreadsheetApp.openById(QI_CATCHUP_CONFIG.spreadsheetId);
+  var sheet = spreadsheet.getSheetByName(QI_CATCHUP_CONFIG.sheetName);
+  if (!sheet) {
+    throw new Error('Source sheet "' + QI_CATCHUP_CONFIG.sheetName + '" not found.');
+  }
+
+  ensureQiCatchupHeaders_(sheet);
+
+  var lastRow = sheet.getLastRow();
+  if (lastRow < QI_CATCHUP_CONFIG.startRow) {
+    throw new Error("Source sheet has no data rows.");
+  }
+
+  var rowCount = lastRow - QI_CATCHUP_CONFIG.startRow + 1;
+  var stateRange = sheet.getRange(
+    QI_CATCHUP_CONFIG.startRow,
+    QI_CATCHUP_CONFIG.approvedColumn,
+    rowCount,
+    QI_CATCHUP_CONFIG.excerptReviewDecisionColumn - QI_CATCHUP_CONFIG.approvedColumn + 1
+  );
+  var stateValues = stateRange.getValues();
+  var rolledBackCount = 0;
+
+  QI_GRAPHIC_BAD_REACHABLE_ROWS.forEach(function(sourceRow) {
+    var sourceIndex = sourceRow - QI_CATCHUP_CONFIG.startRow;
+    if (sourceIndex < 0 || sourceIndex >= stateValues.length) return;
+
+    var row = stateValues[sourceIndex];
+    row[0] = "";
+    row[QI_CATCHUP_CONFIG.quoteCreatedQcColumn - QI_CATCHUP_CONFIG.approvedColumn] = "";
+    row[QI_CATCHUP_CONFIG.excerptReviewDecisionColumn - QI_CATCHUP_CONFIG.approvedColumn] = "";
+    rolledBackCount++;
+  });
+
+  stateRange.setValues(stateValues);
+  SpreadsheetApp.flush();
+
+  var result = {
+    ok: true,
+    rolledBackCount: rolledBackCount
+  };
+  Logger.log(JSON.stringify(result));
+  SpreadsheetApp.getActiveSpreadsheet().toast(
+    "Wrong QI catch-up rollback complete. Cleared " + rolledBackCount + " rows.",
+    "Excerpt Update Tool",
+    10
+  );
+  return result;
+}
+
+function saveQiCatchupUpdates_(payload) {
+  var updates = Array.isArray(payload && payload.updates) ? payload.updates : [];
+  if (!updates.length) {
+    return { ok: false, error: "No catch-up updates provided." };
+  }
+
+  var spreadsheet = SpreadsheetApp.openById(QI_CATCHUP_CONFIG.spreadsheetId);
+  var sheet = spreadsheet.getSheetByName(QI_CATCHUP_CONFIG.sheetName);
+  if (!sheet) {
+    return { ok: false, error: 'Source sheet "' + QI_CATCHUP_CONFIG.sheetName + '" not found.' };
+  }
+
+  ensureQiCatchupHeaders_(sheet);
+
+  var lastRow = sheet.getLastRow();
+  if (lastRow < QI_CATCHUP_CONFIG.startRow) {
+    return { ok: false, error: "Source sheet has no data rows." };
+  }
+
+  var rowCount = lastRow - QI_CATCHUP_CONFIG.startRow + 1;
+  var stateRange = sheet.getRange(
+    QI_CATCHUP_CONFIG.startRow,
+    QI_CATCHUP_CONFIG.approvedColumn,
+    rowCount,
+    QI_CATCHUP_CONFIG.excerptReviewDecisionColumn - QI_CATCHUP_CONFIG.approvedColumn + 1
+  );
+  var stateValues = stateRange.getValues();
+  var savedCount = 0;
+
+  updates.forEach(function(update) {
+    var sourceRow = parseInt(update && update.sourceRow, 10);
+    if (!sourceRow) return;
+
+    var sourceIndex = sourceRow - QI_CATCHUP_CONFIG.startRow;
+    if (sourceIndex < 0 || sourceIndex >= stateValues.length) return;
+
+    var row = stateValues[sourceIndex];
+    row[0] = "Y";
+    row[QI_CATCHUP_CONFIG.quoteCreatedQcColumn - QI_CATCHUP_CONFIG.approvedColumn] = "Y";
+    row[QI_CATCHUP_CONFIG.excerptReviewDecisionColumn - QI_CATCHUP_CONFIG.approvedColumn] = "ACCEPT";
+    savedCount++;
+  });
+
+  stateRange.setValues(stateValues);
+  SpreadsheetApp.flush();
+
+  return {
+    ok: true,
+    savedCount: savedCount
+  };
+}
+
+function ensureQiCatchupHeaders_(sheet) {
+  var headers = [
+    { column: QI_CATCHUP_CONFIG.approvedColumn, header: "approved_for_quote" },
+    { column: QI_CATCHUP_CONFIG.quoteCreatedQcColumn, header: "quote_created_qc" },
+    { column: QI_CATCHUP_CONFIG.excerptReviewDecisionColumn, header: "excerpt_review_decision" }
+  ];
+
+  headers.forEach(function(definition) {
+    var cell = sheet.getRange(1, definition.column);
+    var existing = (cell.getValue() || "").toString().trim();
+    if (!existing) {
+      cell.setValue(definition.header);
+    }
+  });
+}
+
+function setupLegacyQiBackfillHelpers() {
+  var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  var reviewSheet = spreadsheet.getSheetByName(LEGACY_QI_BACKFILL_CONFIG.reviewSheetName);
+  var sourceSheet = spreadsheet.getSheetByName(LEGACY_QI_BACKFILL_CONFIG.sourceSheetName);
+
+  if (!reviewSheet) {
+    throw new Error('Review sheet "' + LEGACY_QI_BACKFILL_CONFIG.reviewSheetName + '" not found.');
+  }
+  if (!sourceSheet) {
+    throw new Error('Source sheet "' + LEGACY_QI_BACKFILL_CONFIG.sourceSheetName + '" not found.');
+  }
+
+  ensureHeadersAreSafe_(reviewSheet, [
+    { column: LEGACY_QI_BACKFILL_CONFIG.reviewFormulaColumn, header: "Quote Created & QCed (Y/N)" },
+    { column: LEGACY_QI_BACKFILL_CONFIG.reviewLegacyBackupColumn, header: "Legacy Quote Created Backup" },
+    { column: LEGACY_QI_BACKFILL_CONFIG.reviewSourceRowHelperColumn, header: "Source Row" }
+  ]);
+  ensureHeadersAreSafe_(sourceSheet, [
+    { column: LEGACY_QI_BACKFILL_CONFIG.sourceLegacyHelperColumn, header: "Legacy QC From New Sheet" },
+    { column: LEGACY_QI_BACKFILL_CONFIG.sourceMergedPreviewColumn, header: "Merged QC Preview" }
+  ]);
+
+  reviewSheet.getRange(1, LEGACY_QI_BACKFILL_CONFIG.reviewFormulaColumn).setValue("Quote Created & QCed (Y/N)");
+  reviewSheet.getRange(1, LEGACY_QI_BACKFILL_CONFIG.reviewLegacyBackupColumn).setValue("Legacy Quote Created Backup");
+  reviewSheet.getRange(1, LEGACY_QI_BACKFILL_CONFIG.reviewSourceRowHelperColumn).setValue("Source Row");
+  sourceSheet.getRange(1, LEGACY_QI_BACKFILL_CONFIG.sourceLegacyHelperColumn).setValue("Legacy QC From New Sheet");
+  sourceSheet.getRange(1, LEGACY_QI_BACKFILL_CONFIG.sourceMergedPreviewColumn).setValue("Merged QC Preview");
+
+  reviewSheet.getRange(2, LEGACY_QI_BACKFILL_CONFIG.reviewFormulaColumn).setFormula(
+    '={"Quote Created & QCed (Y/N)";FILTER(\'Excerpt Tool 1.20\'!AK2:AK,\'Excerpt Tool 1.20\'!AB2:AB<>"",\'Excerpt Tool 1.20\'!AD2:AD<>"Y")}'
+  );
+  reviewSheet.getRange(2, LEGACY_QI_BACKFILL_CONFIG.reviewSourceRowHelperColumn).setFormula(
+    '={"Source Row";FILTER(ROW(\'Excerpt Tool 1.20\'!AK2:AK),\'Excerpt Tool 1.20\'!AB2:AB<>"",\'Excerpt Tool 1.20\'!AD2:AD<>"Y")}'
+  );
+  sourceSheet.getRange(2, LEGACY_QI_BACKFILL_CONFIG.sourceLegacyHelperColumn).setFormula(
+    '={"Legacy QC From New Sheet";ARRAYFORMULA(IFERROR(VLOOKUP(ROW(A2:A),{\'New - Quote Creation Tool Database\'!R2:R,\'New - Quote Creation Tool Database\'!Q2:Q},2,FALSE),""))}'
+  );
+  sourceSheet.getRange(2, LEGACY_QI_BACKFILL_CONFIG.sourceMergedPreviewColumn).setFormula(
+    '={"Merged QC Preview";ARRAYFORMULA(IF(AK2:AK<>"",AK2:AK,BL2:BL))}'
+  );
+
+  SpreadsheetApp.flush();
+  spreadsheet.toast(
+    "Legacy QI backfill helpers set up in P/Q/R and BL/BM.",
+    "Excerpt Update Tool",
+    8
+  );
 }
 
 function copyRowsWithBlankQ() {
