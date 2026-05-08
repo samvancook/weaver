@@ -10,6 +10,7 @@ from weaver_runtime_db import (
     ensure_runtime_schema,
     claim_graphics_handoff,
     get_graphics_handoff,
+    get_graphics_handoffs,
     get_graphics_handoff_queue,
     get_latest_graphics_qc_reviews,
     get_latest_poetry_please_handoffs,
@@ -141,9 +142,11 @@ def sync_qc_reviews(connection, payload: dict[str, Any]) -> dict[str, Any]:
         request_id = normalize_text(review.get("graphicsRequestId"))
         decision = normalize_text(review.get("qcDecision")).lower()
         if request_id:
+            revision_reject = decision == "reject" and is_revision_reject(review)
             update_graphics_handoff(connection, request_id, {
                 "handoffStatus": "approved" if decision == "approve" else "rejected",
-                "qcStatus": "approved" if decision == "approve" else "rejected",
+                "pigStatus": "not_started" if revision_reject else None,
+                "qcStatus": "approved" if decision == "approve" else ("needs_revision" if revision_reject else "rejected"),
                 "qcPayload": review,
             })
         written += 1
@@ -153,6 +156,16 @@ def sync_qc_reviews(connection, payload: dict[str, Any]) -> dict[str, Any]:
         "written": written,
         "skipped": skipped,
     }
+
+
+def is_revision_reject(review: dict[str, Any]) -> bool:
+    reject_reason = normalize_text(
+        review.get("rejectReason")
+        or review.get("qcRejectReason")
+        or review.get("revisionReason")
+        or review.get("qcStatus")
+    ).lower()
+    return reject_reason in {"needs_revision", "correct_and_recreate"}
 
 
 def sync_poetry_please_handoffs(connection, payload: dict[str, Any]) -> dict[str, Any]:
@@ -237,6 +250,16 @@ def fetch_handoff_request(connection, payload: dict[str, Any]) -> dict[str, Any]
     return {"ok": bool(record), "record": record, "error": "" if record else "not_found"}
 
 
+def fetch_handoff_requests(connection, payload: dict[str, Any]) -> dict[str, Any]:
+    request_ids = [
+        normalize_text(value)
+        for value in (payload.get("graphicsRequestIds") or payload.get("requestIds") or [])
+        if normalize_text(value)
+    ]
+    records = get_graphics_handoffs(connection, request_ids)
+    return {"ok": True, "records": records, "count": len(records)}
+
+
 def main() -> int:
     payload = load_payload()
     action = normalize_text(payload.get("action"))
@@ -261,6 +284,8 @@ def main() -> int:
             result = patch_handoff_request(connection, payload)
         elif action == "get_handoff_request":
             result = fetch_handoff_request(connection, payload)
+        elif action == "get_handoff_requests":
+            result = fetch_handoff_requests(connection, payload)
         else:
             result = {
                 "ok": False,

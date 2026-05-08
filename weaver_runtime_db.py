@@ -206,6 +206,18 @@ def get_graphics_handoff(connection: sqlite3.Connection, graphics_request_id: st
     return row_to_handoff(row) if row else None
 
 
+def get_graphics_handoffs(connection: sqlite3.Connection, graphics_request_ids: list[str]) -> list[dict[str, Any]]:
+    ids = [str(value or "").strip() for value in graphics_request_ids if str(value or "").strip()]
+    if not ids:
+        return []
+    placeholders = ",".join("?" for _ in ids)
+    rows = connection.execute(
+        f"SELECT * FROM graphics_handoff_ledger WHERE graphics_request_id IN ({placeholders})",
+        ids,
+    ).fetchall()
+    return [row_to_handoff(row) for row in rows]
+
+
 def upsert_graphics_handoff_request(connection: sqlite3.Connection, request: dict[str, Any]) -> dict[str, Any]:
     graphics_request_id = str(request.get("graphicsRequestId") or request.get("id") or "").strip()
     if not graphics_request_id:

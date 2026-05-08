@@ -332,10 +332,21 @@ function buildDriveImportShortenerVariants(shortener) {
   if (!cleaned) {
     return [];
   }
-  return Array.from(new Set([
+  const baseVariants = [
     normalizeDriveMatchText(cleaned),
     normalizeDriveMatchText(cleaned.replace(/[^a-zA-Z0-9]/g, ""))
-  ].filter(Boolean)));
+  ].filter(Boolean);
+  const allVariants = new Set(baseVariants);
+  baseVariants.forEach(variant => {
+    if (variant.length < 4) return;
+    for (let index = 0; index < variant.length; index += 1) {
+      const oneCharDropped = variant.slice(0, index) + variant.slice(index + 1);
+      if (oneCharDropped.length >= 3) {
+        allVariants.add(oneCharDropped);
+      }
+    }
+  });
+  return Array.from(allVariants);
 }
 
 async function loadDriveImportBookMetadata() {
@@ -1164,13 +1175,46 @@ async function listDriveFolderImageFiles(folderId) {
   return files;
 }
 
-function chooseDriveFolderImportMatch(files, openRequests, metadata = {}) {
+function chooseDriveFolderImportMatch(files, openRequests, metadata = {}, completedRecords = []) {
   const usedRequestIds = new Set();
   const matches = [];
   const unmatched = [];
+  const duplicates = [];
   const booksByAuthor = buildAuthorBookCardinality(openRequests);
+  const completedBooksByAuthor = buildAuthorBookCardinality(completedRecords);
+  const completedByDriveFileId = new Map();
+
+  completedRecords.forEach(record => {
+    const assetFileId = extractGoogleDriveFileId(record.assetLinkUrl || "");
+    if (!assetFileId || completedByDriveFileId.has(assetFileId)) return;
+    completedByDriveFileId.set(assetFileId, record);
+  });
 
   files.forEach(file => {
+    const exactCompletedRecord = cleanSheetWhitespace(file.id)
+      ? completedByDriveFileId.get(cleanSheetWhitespace(file.id)) || null
+      : null;
+    if (exactCompletedRecord) {
+      duplicates.push({
+        fileId: file.id,
+        fileName: file.name,
+        mimeType: file.mimeType || "",
+        assetUrl: cleanSheetWhitespace(file.webViewLink) || `https://drive.google.com/file/d/${encodeURIComponent(file.id)}/view`,
+        assetPreviewUrl: cleanSheetWhitespace(file.thumbnailLink) || buildDrivePreviewUrl(file.id),
+        graphicsRequestId: exactCompletedRecord.graphicsRequestId,
+        queueSheetRow: exactCompletedRecord.queueSheetRow || "",
+        recordId: exactCompletedRecord.recordId || "",
+        author: exactCompletedRecord.author,
+        poemTitle: exactCompletedRecord.poemTitle,
+        bookTitle: exactCompletedRecord.bookTitle,
+        quoteText: exactCompletedRecord.quoteText || "",
+        reason: "This exact Drive file is already returned to Weaver.",
+        existingAssetUrl: exactCompletedRecord.assetLinkUrl || "",
+        existingAssetPreviewUrl: exactCompletedRecord.assetPreviewUrl || ""
+      });
+      return;
+    }
+
     const scoredCandidates = openRequests
       .map(record => ({
         record,
@@ -1195,6 +1239,39 @@ function chooseDriveFolderImportMatch(files, openRequests, metadata = {}) {
     const candidates = Array.from(byRequestId.values()).sort((left, right) => right.score - left.score);
 
     if (!candidates.length) {
+      const completedCandidates = completedRecords
+        .map(record => ({
+          record,
+          ...scoreDriveFolderFileAgainstRequest(file.name, record, {
+            shortenerByBookKey: metadata.shortenerByBookKey,
+            booksByAuthor: completedBooksByAuthor
+          })
+        }))
+        .filter(candidate => candidate.score > 0)
+        .sort((left, right) => right.score - left.score);
+      const bestCompleted = completedCandidates[0] || null;
+      const runnerUpCompleted = completedCandidates[1] || null;
+      const clearlyBestCompleted = !runnerUpCompleted || (bestCompleted.score - runnerUpCompleted.score >= 15);
+      if (bestCompleted && bestCompleted.score >= 45 && clearlyBestCompleted) {
+        duplicates.push({
+          fileId: file.id,
+          fileName: file.name,
+          mimeType: file.mimeType || "",
+          assetUrl: cleanSheetWhitespace(file.webViewLink) || `https://drive.google.com/file/d/${encodeURIComponent(file.id)}/view`,
+          assetPreviewUrl: cleanSheetWhitespace(file.thumbnailLink) || buildDrivePreviewUrl(file.id),
+          graphicsRequestId: bestCompleted.record.graphicsRequestId,
+          queueSheetRow: bestCompleted.record.queueSheetRow || "",
+          recordId: bestCompleted.record.recordId || "",
+          author: bestCompleted.record.author,
+          poemTitle: bestCompleted.record.poemTitle,
+          bookTitle: bestCompleted.record.bookTitle,
+          quoteText: bestCompleted.record.quoteText || "",
+          reason: "Already returned to Weaver under another matching graphic file.",
+          existingAssetUrl: bestCompleted.record.assetLinkUrl || "",
+          existingAssetPreviewUrl: bestCompleted.record.assetPreviewUrl || ""
+        });
+        return;
+      }
       unmatched.push({
         fileId: file.id,
         fileName: file.name,
@@ -1311,11 +1388,15 @@ async function previewDriveFolderImport(folderUrl) {
     files = [file];
   }
 
-  const [openRequests, metadata] = await Promise.all([
+  const [openRequests, completionRows, metadata] = await Promise.all([
     getPigGraphicsRequests("all"),
+    readPigCompletedGraphicsRows(),
     loadDriveImportBookMetadata()
   ]);
-  const { matches, unmatched, unmatchedRequests } = chooseDriveFolderImportMatch(files, openRequests, metadata);
+  const completedRecords = completionRows
+    .map((row, index) => buildPigQcRecordFromSheetRow(row, index))
+    .filter(Boolean);
+  const { matches, unmatched, unmatchedRequests, duplicates } = chooseDriveFolderImportMatch(files, openRequests, metadata, completedRecords);
 
   return {
     ok: true,
@@ -1327,6 +1408,7 @@ async function previewDriveFolderImport(folderUrl) {
     folderUrl: cleanSheetWhitespace(folderUrl),
     imageCount: files.length,
     matches,
+    duplicates,
     unmatched,
     unmatchedRequests
   };
@@ -2357,6 +2439,44 @@ async function getPigGraphicsRequests(filterMode = "all", { includeCompleted = f
         && (!sourceRow || !completedLookup.sourceSheetRows.has(sourceRow))
         && (!recordId || !completedLookup.sourceRecordIds.has(recordId));
     });
+
+  const queueLedgerRequests = records.map(record => ({
+    graphicsRequestId: record.graphicsRequestId,
+    sourceSystem: "weaver",
+    sourceStatus: record.requestStatus || "open",
+    sourcePayload: {
+      graphicsRequestId: record.graphicsRequestId,
+      queueSheetRow: record.queueSheetRow,
+      recordId: record.recordId,
+      author: record.author,
+      poemTitle: record.poemTitle,
+      bookTitle: record.bookTitle,
+      quoteText: record.quoteText
+    }
+  }));
+  if (queueLedgerRequests.length) {
+    await syncWeaverRuntimeDb("upsert_handoff_requests", { requests: queueLedgerRequests }).catch(() => null);
+    const ledgerResult = await syncWeaverRuntimeDb("get_handoff_requests", {
+      graphicsRequestIds: queueLedgerRequests.map(request => request.graphicsRequestId)
+    }).catch(() => ({ ok: false, records: [] }));
+    const ledgerByRequestId = new Map(
+      (Array.isArray(ledgerResult.records) ? ledgerResult.records : [])
+        .map(record => [cleanSheetWhitespace(record.graphicsRequestId), record])
+        .filter(([requestId]) => requestId)
+    );
+    records = records.filter(record => {
+      const ledger = ledgerByRequestId.get(cleanSheetWhitespace(record.graphicsRequestId));
+      if (!ledger) return true;
+      const handoffStatus = cleanSheetWhitespace(ledger.handoffStatus).toLowerCase();
+      const pigStatus = cleanSheetWhitespace(ledger.pigStatus).toLowerCase();
+      const qcStatus = cleanSheetWhitespace(ledger.qcStatus).toLowerCase();
+      return (
+        (handoffStatus === "requested" || handoffStatus === "claimed" || handoffStatus === "rejected")
+        && !["generated", "exported", "uploaded", "failed"].includes(pigStatus)
+        && (qcStatus === "not_sent" || qcStatus === "needs_revision")
+      );
+    });
+  }
 
   if (cleanSheetWhitespace(filterMode).toLowerCase() === "current_titles") {
     const allowed = getReviewQueueIncludeSet();
