@@ -63,6 +63,43 @@ CREATE TABLE IF NOT EXISTS graphics_completions (
 CREATE INDEX IF NOT EXISTS idx_graphics_completions_request
     ON graphics_completions(graphics_request_id);
 
+CREATE TABLE IF NOT EXISTS graphics_handoff_ledger (
+    graphics_request_id TEXT PRIMARY KEY,
+    source_system TEXT NOT NULL DEFAULT 'weaver',
+    source_status TEXT NOT NULL DEFAULT 'needs_graphics',
+    pig_status TEXT NOT NULL DEFAULT 'not_started',
+    handoff_status TEXT NOT NULL DEFAULT 'requested',
+    qc_status TEXT NOT NULL DEFAULT 'not_sent',
+    asset_url TEXT NOT NULL DEFAULT '',
+    asset_preview_url TEXT NOT NULL DEFAULT '',
+    drive_file_id TEXT NOT NULL DEFAULT '',
+    drive_file_name TEXT NOT NULL DEFAULT '',
+    mime_type TEXT NOT NULL DEFAULT '',
+    export_type TEXT NOT NULL DEFAULT '',
+    variant TEXT NOT NULL DEFAULT '',
+    version TEXT NOT NULL DEFAULT '',
+    claimed_by TEXT NOT NULL DEFAULT '',
+    error_message TEXT NOT NULL DEFAULT '',
+    blocked_reason TEXT NOT NULL DEFAULT '',
+    source_payload_json TEXT NOT NULL DEFAULT '{}',
+    pig_payload_json TEXT NOT NULL DEFAULT '{}',
+    qc_payload_json TEXT NOT NULL DEFAULT '{}',
+    transition_log_json TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    claimed_at TEXT,
+    generated_at TEXT,
+    uploaded_at TEXT,
+    sent_to_qc_at TEXT,
+    approved_at TEXT,
+    rejected_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_graphics_handoff_ledger_queue
+    ON graphics_handoff_ledger(handoff_status, pig_status, qc_status, updated_at);
+CREATE INDEX IF NOT EXISTS idx_graphics_handoff_ledger_source_status
+    ON graphics_handoff_ledger(source_system, source_status);
+
 CREATE TABLE IF NOT EXISTS graphics_qc_reviews (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     graphics_completion_id TEXT NOT NULL,

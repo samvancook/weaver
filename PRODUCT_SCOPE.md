@@ -748,6 +748,7 @@ Build this as a standalone internal tool first, but keep the stack compatible wi
 - keep tightening Drive import matching, naming, and manual pairing polish
 - move more graphics request, completion, QC, and handoff reads onto the runtime DB
 - keep improving the EPUB-backed excerpt gathering flow and metadata source-of-truth decisions
+- add an explicit catalog DB sync step from the source EPUB/catalog project into Weaver's `data/formal_catalog.db`, followed by build + deploy, so catalog updates reliably reach the live app
 - complete the `Correct and recreate` rework loop back through P.I.G. with cleaner state visibility
 - expand safe auto-fixes in `Needs correction` for high-confidence metadata and formatting cases, while keeping ambiguous rows quarantined for human review
 

@@ -2298,8 +2298,10 @@ async function getPigMismatchRecords(filterMode = "all") {
   return records;
 }
 
-function buildCompletedRequestIdSet(rows = []) {
+function buildCompletedRequestLookup(rows = []) {
   const requestIds = new Set();
+  const sourceSheetRows = new Set();
+  const sourceRecordIds = new Set();
   rows.forEach((row, index) => {
     const completion = buildPigQcRecordFromSheetRow(row, index);
     if (!completion) return;
@@ -2307,8 +2309,20 @@ function buildCompletedRequestIdSet(rows = []) {
     if (requestId) {
       requestIds.add(requestId);
     }
+    const pigRequestId = cleanSheetWhitespace(completion.pigRequestId);
+    if (pigRequestId) {
+      requestIds.add(pigRequestId);
+    }
+    if (completion.sourceSheetRow) {
+      sourceSheetRows.add(String(completion.sourceSheetRow));
+      requestIds.add(`weaver:row-${completion.sourceSheetRow}`);
+    }
+    const sourceRecordId = cleanSheetWhitespace(completion.sourceRecordId);
+    if (sourceRecordId) {
+      sourceRecordIds.add(sourceRecordId);
+    }
     const sourceRowRequestId = buildWeaverGraphicsRequestId({
-      recordId: cleanSheetWhitespace(completion.sourceRecordId),
+      recordId: sourceRecordId,
       sheetRow: completion.sourceSheetRow,
       author: completion.author,
       poemTitle: completion.poemTitle,
@@ -2318,7 +2332,7 @@ function buildCompletedRequestIdSet(rows = []) {
       requestIds.add(sourceRowRequestId);
     }
   });
-  return requestIds;
+  return { requestIds, sourceSheetRows, sourceRecordIds };
 }
 
 async function getPigGraphicsRequests(filterMode = "all", { includeCompleted = false } = {}) {
@@ -2329,14 +2343,19 @@ async function getPigGraphicsRequests(filterMode = "all", { includeCompleted = f
     getPigReworkRequests(filterMode),
     getCanonicalGraphicsBookAuthorMap()
   ]);
-  const completedRequestIds = buildCompletedRequestIdSet(completionRows);
+  const completedLookup = buildCompletedRequestLookup(completionRows);
   let records = rows
     .map((row, index) => buildGraphicsRequestRecordFromQueueRow(row, index, canonicalBookAuthorMap))
     .filter(Boolean)
     .filter(record => {
       if (includeCompleted) return true;
       const requestId = cleanSheetWhitespace(record.graphicsRequestId);
-      return requestId && !completedRequestIds.has(requestId);
+      const sourceRow = record.queueSheetRow ? String(record.queueSheetRow) : "";
+      const recordId = cleanSheetWhitespace(record.recordId);
+      return requestId
+        && !completedLookup.requestIds.has(requestId)
+        && (!sourceRow || !completedLookup.sourceSheetRows.has(sourceRow))
+        && (!recordId || !completedLookup.sourceRecordIds.has(recordId));
     });
 
   if (cleanSheetWhitespace(filterMode).toLowerCase() === "current_titles") {
@@ -3287,6 +3306,116 @@ const server = http.createServer(async (req, res) => {
         filter: cleanSheetWhitespace(filterMode).toLowerCase() || "all",
         requests
       });
+    } catch (error) {
+      return sendJson(res, 500, {
+        ok: false,
+        error: error.message
+      });
+    }
+  }
+
+  if (url.pathname === "/graphics-handoff/requests" && req.method === "POST") {
+    try {
+      const body = await readRequestBody(req);
+      const parsed = JSON.parse(body || "{}");
+      const requests = Array.isArray(parsed.requests)
+        ? parsed.requests
+        : (parsed.graphicsRequestId || parsed.request ? [parsed.request || parsed] : []);
+      const result = await syncWeaverRuntimeDb("upsert_handoff_requests", { requests });
+      console.log("[graphics-handoff] upsert", {
+        count: Number(result.count || 0),
+        requestIds: (result.records || []).map(record => record.graphicsRequestId)
+      });
+      return sendJson(res, result.ok ? 200 : 400, result);
+    } catch (error) {
+      return sendJson(res, 500, {
+        ok: false,
+        error: error.message
+      });
+    }
+  }
+
+  if (url.pathname === "/graphics-handoff/queue" && req.method === "GET") {
+    try {
+      const result = await syncWeaverRuntimeDb("get_handoff_queue", {
+        limit: parseInt(url.searchParams.get("limit") || "100", 10) || 100
+      });
+      return sendJson(res, result.ok ? 200 : 400, result);
+    } catch (error) {
+      return sendJson(res, 500, {
+        ok: false,
+        error: error.message
+      });
+    }
+  }
+
+  if (url.pathname === "/graphics-handoff/status" && req.method === "GET") {
+    try {
+      const result = await syncWeaverRuntimeDb("get_handoff_queue", { limit: 25 });
+      return sendJson(res, result.ok ? 200 : 400, {
+        ok: result.ok,
+        version: `${appVersion}-service-account`,
+        openCount: Array.isArray(result.records) ? result.records.length : 0,
+        sample: result.records || []
+      });
+    } catch (error) {
+      return sendJson(res, 500, {
+        ok: false,
+        error: error.message
+      });
+    }
+  }
+
+  const handoffMatch = url.pathname.match(/^\/graphics-handoff\/([^/]+)(?:\/(claim))?$/);
+  if (handoffMatch && req.method === "GET" && !handoffMatch[2]) {
+    try {
+      const result = await syncWeaverRuntimeDb("get_handoff_request", {
+        graphicsRequestId: decodeURIComponent(handoffMatch[1])
+      });
+      return sendJson(res, result.ok ? 200 : 404, result);
+    } catch (error) {
+      return sendJson(res, 500, {
+        ok: false,
+        error: error.message
+      });
+    }
+  }
+
+  if (handoffMatch && req.method === "POST" && handoffMatch[2] === "claim") {
+    try {
+      const body = await readRequestBody(req);
+      const parsed = JSON.parse(body || "{}");
+      const graphicsRequestId = decodeURIComponent(handoffMatch[1]);
+      const result = await syncWeaverRuntimeDb("claim_handoff_request", {
+        graphicsRequestId,
+        claimedBy: parsed.claimedBy || parsed.worker || "P.I.G."
+      });
+      console.log("[graphics-handoff] claim", { graphicsRequestId, ok: result.ok });
+      return sendJson(res, result.ok ? 200 : 400, result);
+    } catch (error) {
+      return sendJson(res, 500, {
+        ok: false,
+        error: error.message
+      });
+    }
+  }
+
+  if (handoffMatch && req.method === "PATCH" && !handoffMatch[2]) {
+    try {
+      const body = await readRequestBody(req);
+      const parsed = JSON.parse(body || "{}");
+      const graphicsRequestId = decodeURIComponent(handoffMatch[1]);
+      const result = await syncWeaverRuntimeDb("patch_handoff_request", {
+        graphicsRequestId,
+        update: parsed.update && typeof parsed.update === "object" ? parsed.update : parsed
+      });
+      console.log("[graphics-handoff] update", {
+        graphicsRequestId,
+        handoffStatus: result.record?.handoffStatus,
+        pigStatus: result.record?.pigStatus,
+        qcStatus: result.record?.qcStatus
+      });
+      return sendJson(res, result.ok ? 200 : 400, result);
     } catch (error) {
       return sendJson(res, 500, {
         ok: false,

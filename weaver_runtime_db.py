@@ -42,6 +42,7 @@ def get_runtime_db_summary(connection: sqlite3.Connection) -> dict[str, Any]:
         "graphics_requests",
         "graphics_request_items",
         "graphics_completions",
+        "graphics_handoff_ledger",
         "graphics_qc_reviews",
         "poetry_please_handoffs",
     ]
@@ -116,6 +117,287 @@ def upsert_graphics_request(connection: sqlite3.Connection, request: dict[str, A
     )
     connection.commit()
     return request_id
+
+
+HANDOFF_STATUSES = {
+    "requested",
+    "claimed",
+    "generated",
+    "uploaded",
+    "sent_to_weaver_qc",
+    "approved",
+    "rejected",
+    "blocked",
+    "errored",
+}
+PIG_STATUSES = {
+    "not_started",
+    "claimed",
+    "generating",
+    "generated",
+    "exported",
+    "uploaded",
+    "failed",
+}
+QC_STATUSES = {
+    "not_sent",
+    "pending",
+    "approved",
+    "rejected",
+    "needs_revision",
+}
+
+
+def normalize_enum(value: Any, allowed: set[str], default: str) -> str:
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in allowed else default
+
+
+def row_to_handoff(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "graphicsRequestId": str(row["graphics_request_id"] or ""),
+        "sourceSystem": str(row["source_system"] or ""),
+        "sourceStatus": str(row["source_status"] or ""),
+        "pigStatus": str(row["pig_status"] or ""),
+        "handoffStatus": str(row["handoff_status"] or ""),
+        "qcStatus": str(row["qc_status"] or ""),
+        "assetUrl": str(row["asset_url"] or ""),
+        "assetPreviewUrl": str(row["asset_preview_url"] or ""),
+        "driveFileId": str(row["drive_file_id"] or ""),
+        "driveFileName": str(row["drive_file_name"] or ""),
+        "mimeType": str(row["mime_type"] or ""),
+        "exportType": str(row["export_type"] or ""),
+        "variant": str(row["variant"] or ""),
+        "version": str(row["version"] or ""),
+        "claimedBy": str(row["claimed_by"] or ""),
+        "errorMessage": str(row["error_message"] or ""),
+        "blockedReason": str(row["blocked_reason"] or ""),
+        "sourcePayload": json.loads(row["source_payload_json"] or "{}"),
+        "pigPayload": json.loads(row["pig_payload_json"] or "{}"),
+        "qcPayload": json.loads(row["qc_payload_json"] or "{}"),
+        "transitionLog": json.loads(row["transition_log_json"] or "[]"),
+        "createdAt": str(row["created_at"] or ""),
+        "updatedAt": str(row["updated_at"] or ""),
+        "claimedAt": str(row["claimed_at"] or ""),
+        "generatedAt": str(row["generated_at"] or ""),
+        "uploadedAt": str(row["uploaded_at"] or ""),
+        "sentToQcAt": str(row["sent_to_qc_at"] or ""),
+        "approvedAt": str(row["approved_at"] or ""),
+        "rejectedAt": str(row["rejected_at"] or ""),
+    }
+
+
+def append_transition_log(existing_json: str, event: dict[str, Any]) -> str:
+    try:
+        entries = json.loads(existing_json or "[]")
+        if not isinstance(entries, list):
+            entries = []
+    except json.JSONDecodeError:
+        entries = []
+    entries.append(event)
+    return json.dumps(entries[-50:], ensure_ascii=True, sort_keys=True)
+
+
+def get_graphics_handoff(connection: sqlite3.Connection, graphics_request_id: str) -> dict[str, Any] | None:
+    row = connection.execute(
+        "SELECT * FROM graphics_handoff_ledger WHERE graphics_request_id = ?",
+        (graphics_request_id,),
+    ).fetchone()
+    return row_to_handoff(row) if row else None
+
+
+def upsert_graphics_handoff_request(connection: sqlite3.Connection, request: dict[str, Any]) -> dict[str, Any]:
+    graphics_request_id = str(request.get("graphicsRequestId") or request.get("id") or "").strip()
+    if not graphics_request_id:
+        raise ValueError("graphicsRequestId is required")
+
+    now = utc_now_iso()
+    existing = connection.execute(
+        "SELECT * FROM graphics_handoff_ledger WHERE graphics_request_id = ?",
+        (graphics_request_id,),
+    ).fetchone()
+    source_payload = request.get("sourcePayload") or request.get("payload") or request
+    log_json = append_transition_log(
+        existing["transition_log_json"] if existing else "[]",
+        {
+            "at": now,
+            "event": "request_upserted",
+            "handoffStatus": request.get("handoffStatus") or "requested",
+            "pigStatus": request.get("pigStatus") or "not_started",
+            "qcStatus": request.get("qcStatus") or "not_sent",
+        },
+    )
+
+    connection.execute(
+        """
+        INSERT INTO graphics_handoff_ledger (
+            graphics_request_id, source_system, source_status, pig_status, handoff_status, qc_status,
+            source_payload_json, transition_log_json, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(graphics_request_id) DO UPDATE SET
+            source_system = excluded.source_system,
+            source_status = excluded.source_status,
+            source_payload_json = excluded.source_payload_json,
+            transition_log_json = excluded.transition_log_json,
+            updated_at = excluded.updated_at
+        """,
+        (
+            graphics_request_id,
+            str(request.get("sourceSystem") or "weaver"),
+            str(request.get("sourceStatus") or "needs_graphics"),
+            normalize_enum(request.get("pigStatus"), PIG_STATUSES, "not_started"),
+            normalize_enum(request.get("handoffStatus"), HANDOFF_STATUSES, "requested"),
+            normalize_enum(request.get("qcStatus"), QC_STATUSES, "not_sent"),
+            json.dumps(source_payload, ensure_ascii=True, sort_keys=True),
+            log_json,
+            existing["created_at"] if existing else now,
+            now,
+        ),
+    )
+    connection.commit()
+    return get_graphics_handoff(connection, graphics_request_id) or {}
+
+
+def claim_graphics_handoff(connection: sqlite3.Connection, graphics_request_id: str, claimed_by: str = "") -> dict[str, Any]:
+    existing = get_graphics_handoff(connection, graphics_request_id)
+    if not existing:
+        raise KeyError(f"Unknown graphicsRequestId: {graphics_request_id}")
+    if existing["handoffStatus"] in {"generated", "uploaded", "sent_to_weaver_qc", "approved"}:
+        return existing
+
+    now = utc_now_iso()
+    row = connection.execute(
+        "SELECT transition_log_json FROM graphics_handoff_ledger WHERE graphics_request_id = ?",
+        (graphics_request_id,),
+    ).fetchone()
+    connection.execute(
+        """
+        UPDATE graphics_handoff_ledger
+        SET pig_status = 'claimed',
+            handoff_status = 'claimed',
+            claimed_by = ?,
+            claimed_at = COALESCE(claimed_at, ?),
+            updated_at = ?,
+            transition_log_json = ?
+        WHERE graphics_request_id = ?
+        """,
+        (
+            claimed_by,
+            now,
+            now,
+            append_transition_log(row["transition_log_json"], {"at": now, "event": "claimed", "claimedBy": claimed_by}),
+            graphics_request_id,
+        ),
+    )
+    connection.commit()
+    return get_graphics_handoff(connection, graphics_request_id) or {}
+
+
+def update_graphics_handoff(connection: sqlite3.Connection, graphics_request_id: str, update: dict[str, Any]) -> dict[str, Any]:
+    existing = get_graphics_handoff(connection, graphics_request_id)
+    if not existing:
+        raise KeyError(f"Unknown graphicsRequestId: {graphics_request_id}")
+
+    now = utc_now_iso()
+    handoff_status = normalize_enum(update.get("handoffStatus"), HANDOFF_STATUSES, existing["handoffStatus"])
+    pig_status = normalize_enum(update.get("pigStatus"), PIG_STATUSES, existing["pigStatus"])
+    qc_status = normalize_enum(update.get("qcStatus"), QC_STATUSES, existing["qcStatus"])
+    asset_url = str(update.get("assetUrl") or update.get("assetLinkUrl") or update.get("driveUrl") or existing["assetUrl"] or "")
+    uploaded = handoff_status in {"uploaded", "sent_to_weaver_qc", "approved"} or pig_status == "uploaded" or bool(asset_url)
+    generated = uploaded or handoff_status in {"generated", "sent_to_weaver_qc", "approved"} or pig_status in {"generated", "exported", "uploaded"}
+    sent_to_qc = handoff_status in {"sent_to_weaver_qc", "approved", "rejected"} or qc_status in {"pending", "approved", "rejected", "needs_revision"}
+    approved = handoff_status == "approved" or qc_status == "approved"
+    rejected = handoff_status == "rejected" or qc_status in {"rejected", "needs_revision"}
+
+    row = connection.execute(
+        "SELECT transition_log_json FROM graphics_handoff_ledger WHERE graphics_request_id = ?",
+        (graphics_request_id,),
+    ).fetchone()
+    event = {
+        "at": now,
+        "event": "updated",
+        "handoffStatus": handoff_status,
+        "pigStatus": pig_status,
+        "qcStatus": qc_status,
+    }
+    connection.execute(
+        """
+        UPDATE graphics_handoff_ledger
+        SET source_status = ?,
+            pig_status = ?,
+            handoff_status = ?,
+            qc_status = ?,
+            asset_url = ?,
+            asset_preview_url = ?,
+            drive_file_id = ?,
+            drive_file_name = ?,
+            mime_type = ?,
+            export_type = ?,
+            variant = ?,
+            version = ?,
+            error_message = ?,
+            blocked_reason = ?,
+            pig_payload_json = ?,
+            qc_payload_json = ?,
+            updated_at = ?,
+            generated_at = CASE WHEN ? THEN COALESCE(generated_at, ?) ELSE generated_at END,
+            uploaded_at = CASE WHEN ? THEN COALESCE(uploaded_at, ?) ELSE uploaded_at END,
+            sent_to_qc_at = CASE WHEN ? THEN COALESCE(sent_to_qc_at, ?) ELSE sent_to_qc_at END,
+            approved_at = CASE WHEN ? THEN COALESCE(approved_at, ?) ELSE approved_at END,
+            rejected_at = CASE WHEN ? THEN COALESCE(rejected_at, ?) ELSE rejected_at END,
+            transition_log_json = ?
+        WHERE graphics_request_id = ?
+        """,
+        (
+            str(update.get("sourceStatus") or existing["sourceStatus"]),
+            pig_status,
+            handoff_status,
+            qc_status,
+            asset_url,
+            str(update.get("assetPreviewUrl") or update.get("previewUrl") or update.get("thumbnailUrl") or existing["assetPreviewUrl"] or ""),
+            str(update.get("driveFileId") or update.get("fileId") or existing["driveFileId"] or ""),
+            str(update.get("driveFileName") or update.get("fileName") or existing["driveFileName"] or ""),
+            str(update.get("mimeType") or existing["mimeType"] or ""),
+            str(update.get("exportType") or existing["exportType"] or ""),
+            str(update.get("variant") or existing["variant"] or ""),
+            str(update.get("version") or existing["version"] or ""),
+            str(update.get("errorMessage") or existing["errorMessage"] or ""),
+            str(update.get("blockedReason") or existing["blockedReason"] or ""),
+            json.dumps(update.get("pigPayload") or update, ensure_ascii=True, sort_keys=True),
+            json.dumps(update.get("qcPayload") or update, ensure_ascii=True, sort_keys=True),
+            now,
+            generated,
+            now,
+            uploaded,
+            now,
+            sent_to_qc,
+            now,
+            approved,
+            now,
+            rejected,
+            now,
+            append_transition_log(row["transition_log_json"], event),
+            graphics_request_id,
+        ),
+    )
+    connection.commit()
+    return get_graphics_handoff(connection, graphics_request_id) or {}
+
+
+def get_graphics_handoff_queue(connection: sqlite3.Connection, limit: int = 100) -> list[dict[str, Any]]:
+    rows = connection.execute(
+        """
+        SELECT *
+        FROM graphics_handoff_ledger
+        WHERE handoff_status IN ('requested', 'claimed', 'rejected')
+          AND pig_status NOT IN ('generated', 'exported', 'uploaded', 'failed')
+          AND qc_status IN ('not_sent', 'needs_revision')
+        ORDER BY created_at ASC
+        LIMIT ?
+        """,
+        (max(1, min(int(limit or 100), 500)),),
+    ).fetchall()
+    return [row_to_handoff(row) for row in rows]
 
 
 def replace_graphics_request_items(connection: sqlite3.Connection, graphics_request_id: str, items: list[dict[str, Any]]) -> None:

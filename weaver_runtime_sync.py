@@ -8,12 +8,17 @@ from typing import Any
 from weaver_runtime_db import (
     connect_runtime_db,
     ensure_runtime_schema,
+    claim_graphics_handoff,
+    get_graphics_handoff,
+    get_graphics_handoff_queue,
     get_latest_graphics_qc_reviews,
     get_latest_poetry_please_handoffs,
     insert_graphics_completion,
     insert_graphics_qc_review,
     insert_poetry_please_handoff,
     replace_graphics_request_items,
+    update_graphics_handoff,
+    upsert_graphics_handoff_request,
     upsert_graphics_request,
     utc_now_iso,
 )
@@ -77,6 +82,26 @@ def sync_completions(connection, payload: dict[str, Any]) -> dict[str, Any]:
             "completed_at": normalize_text(completion.get("completedAt")) or utc_now_iso(),
             "source_payload": completion,
         })
+        upsert_graphics_handoff_request(connection, {
+            "graphicsRequestId": request_id,
+            "sourceSystem": "weaver",
+            "sourceStatus": "needs_graphics",
+            "sourcePayload": request_record,
+        })
+        update_graphics_handoff(connection, request_id, {
+            "pigStatus": "uploaded",
+            "handoffStatus": "sent_to_weaver_qc",
+            "qcStatus": "pending",
+            "assetUrl": completion.get("assetUrl") or completion.get("assetLinkUrl") or completion.get("driveUrl"),
+            "assetPreviewUrl": completion.get("assetPreviewUrl") or completion.get("previewUrl") or completion.get("thumbnailUrl"),
+            "driveFileId": completion.get("driveFileId") or completion.get("fileId"),
+            "driveFileName": completion.get("driveFileName") or completion.get("fileName"),
+            "mimeType": completion.get("mimeType"),
+            "exportType": completion.get("exportType"),
+            "variant": completion.get("variant"),
+            "version": completion.get("version"),
+            "pigPayload": completion,
+        })
         written += 1
         request_ids.append(request_id)
 
@@ -113,6 +138,14 @@ def sync_qc_reviews(connection, payload: dict[str, Any]) -> dict[str, Any]:
             "reviewed_at": utc_now_iso(),
             "source_payload": review,
         })
+        request_id = normalize_text(review.get("graphicsRequestId"))
+        decision = normalize_text(review.get("qcDecision")).lower()
+        if request_id:
+            update_graphics_handoff(connection, request_id, {
+                "handoffStatus": "approved" if decision == "approve" else "rejected",
+                "qcStatus": "approved" if decision == "approve" else "rejected",
+                "qcPayload": review,
+            })
         written += 1
 
     return {
@@ -160,6 +193,50 @@ def fetch_graphics_state(connection, payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def upsert_handoff_requests(connection, payload: dict[str, Any]) -> dict[str, Any]:
+    requests = payload.get("requests") or []
+    if payload.get("request"):
+        requests = [payload["request"]]
+    records = [upsert_graphics_handoff_request(connection, request) for request in requests]
+    return {"ok": True, "records": records, "count": len(records)}
+
+
+def fetch_handoff_queue(connection, payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "ok": True,
+        "records": get_graphics_handoff_queue(connection, int(payload.get("limit") or 100)),
+    }
+
+
+def claim_handoff_request(connection, payload: dict[str, Any]) -> dict[str, Any]:
+    graphics_request_id = normalize_text(payload.get("graphicsRequestId"))
+    if not graphics_request_id:
+        return {"ok": False, "error": "graphicsRequestId is required"}
+    return {
+        "ok": True,
+        "record": claim_graphics_handoff(connection, graphics_request_id, normalize_text(payload.get("claimedBy"))),
+    }
+
+
+def patch_handoff_request(connection, payload: dict[str, Any]) -> dict[str, Any]:
+    graphics_request_id = normalize_text(payload.get("graphicsRequestId"))
+    if not graphics_request_id:
+        return {"ok": False, "error": "graphicsRequestId is required"}
+    update = payload.get("update") or {}
+    return {
+        "ok": True,
+        "record": update_graphics_handoff(connection, graphics_request_id, update),
+    }
+
+
+def fetch_handoff_request(connection, payload: dict[str, Any]) -> dict[str, Any]:
+    graphics_request_id = normalize_text(payload.get("graphicsRequestId"))
+    if not graphics_request_id:
+        return {"ok": False, "error": "graphicsRequestId is required"}
+    record = get_graphics_handoff(connection, graphics_request_id)
+    return {"ok": bool(record), "record": record, "error": "" if record else "not_found"}
+
+
 def main() -> int:
     payload = load_payload()
     action = normalize_text(payload.get("action"))
@@ -174,6 +251,16 @@ def main() -> int:
             result = sync_poetry_please_handoffs(connection, payload)
         elif action == "get_graphics_state":
             result = fetch_graphics_state(connection, payload)
+        elif action == "upsert_handoff_requests":
+            result = upsert_handoff_requests(connection, payload)
+        elif action == "get_handoff_queue":
+            result = fetch_handoff_queue(connection, payload)
+        elif action == "claim_handoff_request":
+            result = claim_handoff_request(connection, payload)
+        elif action == "patch_handoff_request":
+            result = patch_handoff_request(connection, payload)
+        elif action == "get_handoff_request":
+            result = fetch_handoff_request(connection, payload)
         else:
             result = {
                 "ok": False,
