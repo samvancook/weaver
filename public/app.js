@@ -32,6 +32,7 @@ const elements = {
   correctionBookSelect: document.getElementById("correction-book-select"),
   loadCorrections: document.getElementById("load-corrections"),
   submitCorrections: document.getElementById("submit-corrections"),
+  autoApplyCorrections: document.getElementById("auto-apply-corrections"),
   correctionList: document.getElementById("correction-list"),
   graphicsMode: document.getElementById("graphics-mode"),
   graphicsFilter: document.getElementById("graphics-filter"),
@@ -59,6 +60,7 @@ const elements = {
   gatheringNextCatalogPoem: document.getElementById("gathering-next-catalog-poem"),
   gatheringViewCatalogPoem: document.getElementById("gathering-view-catalog-poem"),
   gatheringBookNotes: document.getElementById("gathering-book-notes"),
+  gatheringBookItalics: document.getElementById("gathering-book-italics"),
   gatheringBookReaction: document.getElementById("gathering-book-reaction"),
   gatheringVideoFields: document.getElementById("gathering-video-fields"),
   gatheringVideoAuthor: document.getElementById("gathering-video-author"),
@@ -359,6 +361,9 @@ function setSubmitState(isBusy, label) {
   if (elements.submitCorrections) {
     elements.submitCorrections.disabled = isBusy;
   }
+  if (elements.autoApplyCorrections) {
+    elements.autoApplyCorrections.disabled = isBusy;
+  }
   if (elements.submitGraphicsQc) {
     elements.submitGraphicsQc.disabled = isBusy;
   }
@@ -368,6 +373,9 @@ function setSubmitState(isBusy, label) {
   }
   if (elements.submitCorrections) {
     elements.submitCorrections.textContent = label || (isBusy ? "Saving..." : "Save Corrections");
+  }
+  if (elements.autoApplyCorrections) {
+    elements.autoApplyCorrections.textContent = isBusy ? "Applying..." : "Apply Auto-Fixes";
   }
   if (elements.submitGraphicsQc) {
     elements.submitGraphicsQc.textContent = label || (isBusy ? "Saving..." : "Save QC Decisions");
@@ -1202,6 +1210,7 @@ function resetGatheringForm() {
     elements.gatheringBookBook,
     elements.gatheringBookQuote,
     elements.gatheringBookNotes,
+    elements.gatheringBookItalics,
     elements.gatheringVideoAuthor,
     elements.gatheringVideoTitle,
     elements.gatheringVideoBook,
@@ -1224,6 +1233,7 @@ function resetGatheringAfterSubmit(mode) {
   if (mode === "book") {
     if (elements.gatheringBookQuote) elements.gatheringBookQuote.value = "";
     if (elements.gatheringBookNotes) elements.gatheringBookNotes.value = "";
+    if (elements.gatheringBookItalics) elements.gatheringBookItalics.value = "";
     if (elements.gatheringBookReaction) elements.gatheringBookReaction.value = "";
     updateGatheringCatalogPreviewState();
     updateGatheringQuoteMeta();
@@ -1289,11 +1299,16 @@ function buildGatheringPayload() {
     const quote = elements.gatheringBookQuote?.value.trim() || "";
     const bookTitle = elements.gatheringBookBook?.value.trim() || "";
     const notes = elements.gatheringBookNotes?.value.trim() || "";
+    const italicsMarkup = elements.gatheringBookItalics?.value.trim() || "";
     const reaction = elements.gatheringBookReaction?.value.trim() || "";
     if (!author || !title || !quote) {
       throw new Error("Book intake needs an author, poem title, and quote.");
     }
-    const combinedNotes = [notes, reaction ? `Full-poem reaction: ${reaction}` : ""]
+    const combinedNotes = [
+      notes,
+      italicsMarkup ? `Italics markup: ${italicsMarkup}` : "",
+      reaction ? `Full-poem reaction: ${reaction}` : ""
+    ]
       .filter(Boolean)
       .join("\n\n");
     return {
@@ -1871,6 +1886,7 @@ function getSelectedGraphicsFilter() {
 
 function getGraphicsModeLabel(mode = getSelectedGraphicsMode()) {
   if (mode === "cleanup") return "graphics QC";
+  if (mode === "mismatch") return "mismatch pairing";
   if (mode === "handoff") return "Poetry Please handoff";
   return "graphics creation";
 }
@@ -2500,6 +2516,8 @@ function renderGraphicsRecords(records) {
     empty.className = "empty-state";
     empty.textContent = getSelectedGraphicsMode() === "cleanup"
       ? "No QC rows remain for this book."
+      : getSelectedGraphicsMode() === "mismatch"
+        ? "No mismatched graphics remain for this book."
       : "No graphics creation rows remain for this book.";
     elements.graphicsList.appendChild(empty);
     return;
@@ -3099,6 +3117,7 @@ function buildGraphicsCard(record) {
   const assetLinkLabel = assetMatch?.fileName || (assetMatch?.folderLink ? "View Drive folder" : "View graphic on Drive");
   const assetPreviewUrl = record.assetPreviewUrl || buildGraphicsPreviewUrl(assetMatch);
   const isQcMode = getSelectedGraphicsMode() === "cleanup";
+  const isMismatchMode = getSelectedGraphicsMode() === "mismatch";
   const isHandoffMode = getSelectedGraphicsMode() === "handoff";
   const currentQcDecision = normalizeGraphicsQcDecisionClient(record.graphicsQcDecision || "");
   const currentQcNote = record.graphicsQcNote || "";
@@ -3127,7 +3146,7 @@ function buildGraphicsCard(record) {
       <span class="excerpt-card__author">${escapeHtml(displayAuthor || "Unknown author")}</span>
     </div>
     <blockquote class="excerpt-card__quote">${escapeHtml(record.quoteText || "")}</blockquote>
-    ${(isQcMode || isHandoffMode) && assetPreviewUrl ? `
+    ${(isQcMode || isHandoffMode || isMismatchMode) && assetPreviewUrl ? `
       <figure class="graphics-preview">
         <img class="graphics-preview__image" src="${escapeAttribute(assetPreviewUrl)}" alt="Existing graphic preview for ${escapeAttribute(record.poemTitle || "this excerpt")}" loading="lazy" />
       </figure>
@@ -3143,6 +3162,7 @@ function buildGraphicsCard(record) {
       ${isHandoffMode ? `<div><strong>Handoff</strong><span>${escapeHtml(poetryPleaseStatus || "Pending")}</span></div>` : ""}
     </div>
     ${assetLinkUrl ? `<p class="hint"><a href="${escapeAttribute(assetLinkUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(assetLinkLabel)}</a>${assetMatch?.matchType === "cleanup_override" ? " · matched from cleanup override" : ""}${card.dataset.storageTarget === "pig_sheet" ? " · returned from P.I.G." : ""}</p>` : ""}
+    ${isMismatchMode ? `<p class="hint">Mismatch reason: ${escapeHtml(record.rejectReason || "mismatched_graphic")}${record.graphicsQcUpdatedAt ? ` · ${escapeHtml(record.graphicsQcUpdatedAt)}` : ""}</p>` : ""}
     ${isHandoffMode && (poetryPleaseUpdatedAt || poetryPleaseNote) ? `<p class="hint">Poetry Please: ${escapeHtml(poetryPleaseStatus || "Pending")}${poetryPleaseUpdatedAt ? ` · ${escapeHtml(poetryPleaseUpdatedAt)}` : ""}${poetryPleaseNote ? ` · ${escapeHtml(poetryPleaseNote)}` : ""}</p>` : ""}
     ${isQcMode ? `
       <fieldset class="graphics-qc-controls">
@@ -3635,6 +3655,109 @@ function collectCorrectionUpdates() {
   return collectUpdatesFromContainer(elements.correctionList);
 }
 
+function getAutoCorrectionProposal(excerpt) {
+  const validation =
+    currentValidationByRecordId.get(excerpt.recordId || String(excerpt.sourceRow)) || null;
+  if (!validation) {
+    return null;
+  }
+
+  const proposal = {
+    correctedAuthor: "",
+    correctedTitle: "",
+    correctedBookTitle: "",
+    correctedExcerpt: "",
+    reasonParts: []
+  };
+
+  const canonicalAuthor = cleanSheetWhitespace(validation.bookCanonicalAuthor || "");
+  const canonicalTitle = cleanSheetWhitespace(validation.matchedPoemTitle || "");
+  const canonicalBookTitle = cleanSheetWhitespace(validation.bookCanonicalTitle || "");
+  const libraryMatch = validation.libraryExcerptMatch || null;
+  const exactLibraryMatch = libraryMatch?.matchType === "exact" ? libraryMatch : null;
+  const libraryAuthor = cleanSheetWhitespace(exactLibraryMatch?.author || "");
+  const libraryTitle = cleanSheetWhitespace(exactLibraryMatch?.poemTitle || "");
+  const libraryBookTitle = cleanSheetWhitespace(exactLibraryMatch?.bookTitle || "");
+  const currentAuthor = cleanSheetWhitespace(excerpt.author || excerpt.rawAuthor || "");
+  const currentTitle = cleanSheetWhitespace(excerpt.title || excerpt.rawTitle || "");
+  const currentBookTitle = cleanSheetWhitespace(excerpt.bookTitle || excerpt.rawBookTitle || "");
+
+  if (validation.status === "author_mismatch" && canonicalAuthor && canonicalAuthor !== currentAuthor) {
+    proposal.correctedAuthor = canonicalAuthor;
+    proposal.reasonParts.push("author");
+  }
+
+  if (validation.status === "title_mismatch" && canonicalTitle && canonicalTitle !== currentTitle) {
+    proposal.correctedTitle = canonicalTitle;
+    proposal.reasonParts.push("poem title");
+  }
+
+  if ((validation.status === "author_mismatch" || validation.status === "title_mismatch" || validation.status === "catalog_match") && canonicalBookTitle && canonicalBookTitle !== currentBookTitle) {
+    proposal.correctedBookTitle = canonicalBookTitle;
+    proposal.reasonParts.push("book title");
+  }
+
+  if (!proposal.correctedAuthor && exactLibraryMatch && libraryAuthor && libraryAuthor !== currentAuthor) {
+    proposal.correctedAuthor = libraryAuthor;
+    proposal.reasonParts.push("author");
+  }
+
+  if (!proposal.correctedTitle && exactLibraryMatch && libraryTitle && libraryTitle !== currentTitle) {
+    proposal.correctedTitle = libraryTitle;
+    proposal.reasonParts.push("poem title");
+  }
+
+  if (!proposal.correctedBookTitle && exactLibraryMatch && libraryBookTitle && libraryBookTitle !== currentBookTitle) {
+    proposal.correctedBookTitle = libraryBookTitle;
+    proposal.reasonParts.push("book title");
+  }
+
+  if (!proposal.reasonParts.length) {
+    return null;
+  }
+
+  return proposal;
+}
+
+function applyAutoCorrectionsToLoadedQueue() {
+  if (!currentCorrectionExcerpts.length || !elements.correctionList) {
+    setStatus("Load correction records before applying auto-fixes.");
+    return;
+  }
+
+  let appliedCount = 0;
+
+  currentCorrectionExcerpts.forEach(excerpt => {
+    const proposal = getAutoCorrectionProposal(excerpt);
+    if (!proposal) return;
+
+    const card = elements.correctionList.querySelector(`.excerpt-card[data-source-row="${CSS.escape(String(excerpt.sourceRow))}"]`);
+    if (!card) return;
+
+    const correctedAuthor = card.querySelector(".corrected-author");
+    const correctedTitle = card.querySelector(".corrected-title");
+    const correctedBookTitle = card.querySelector(".corrected-book-title");
+    const noDecisionRadio = card.querySelector(`input[type="radio"][value=""]`);
+
+    if (proposal.correctedAuthor && correctedAuthor) correctedAuthor.value = proposal.correctedAuthor;
+    if (proposal.correctedTitle && correctedTitle) correctedTitle.value = proposal.correctedTitle;
+    if (proposal.correctedBookTitle && correctedBookTitle) correctedBookTitle.value = proposal.correctedBookTitle;
+    if (noDecisionRadio) {
+      noDecisionRadio.checked = true;
+      noDecisionRadio.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+
+    appliedCount += 1;
+  });
+
+  if (!appliedCount) {
+    setStatus("No loaded correction rows had a safe automatic metadata fix.");
+    return;
+  }
+
+  setStatus(`Applied ${appliedCount} safe auto-fix${appliedCount === 1 ? "" : "es"}. Save Corrections to move them back into review.`);
+}
+
 function collectWeirdUpdates() {
   return collectUpdatesFromContainer(elements.weirdExcerptList);
 }
@@ -3991,6 +4114,7 @@ elements.submitReview.addEventListener("click", submitReview);
 elements.submitWeirdReview?.addEventListener("click", submitWeirdReview);
 elements.loadCorrectionBooks?.addEventListener("click", loadCorrectionBooks);
 elements.loadCorrections?.addEventListener("click", loadCorrections);
+elements.autoApplyCorrections?.addEventListener("click", applyAutoCorrectionsToLoadedQueue);
 elements.submitCorrections?.addEventListener("click", submitCorrections);
 elements.showGatheringModule?.addEventListener("click", () => {
   setActiveModule("gathering");
@@ -4073,6 +4197,7 @@ elements.gatheringVideoQuote?.addEventListener("input", updateGatheringQuoteMeta
 [
     elements.gatheringBookQuote,
     elements.gatheringBookNotes,
+    elements.gatheringBookItalics,
     elements.gatheringBookReaction,
     elements.gatheringVideoQuote,
   elements.gatheringFixIncorrect,

@@ -93,6 +93,10 @@
               <textarea id="gathering-book-notes" rows="3" placeholder="Optional notes about formatting, italics, line breaks, or source context"></textarea>
             </label>
             <label class="field field--full">
+              <span>Italics Markup</span>
+              <textarea id="gathering-book-italics" rows="2" placeholder="Optional: note italicized words or phrases here if the plain text field cannot capture them cleanly"></textarea>
+            </label>
+            <label class="field field--full">
               <span>Full-Poem Reaction</span>
               <textarea id="gathering-book-reaction" rows="2" placeholder="Optional: how did the full poem land for you while you were reading?"></textarea>
             </label>
@@ -277,6 +281,7 @@
           <span class="badge badge--muted" id="correction-excerpt-count-badge">0 Excerpts</span>
         </div>
         <div class="toolbar">
+          <button id="auto-apply-corrections" class="button button--secondary">Apply Auto-Fixes</button>
           <button id="submit-corrections" class="button button--accent">Save Corrections</button>
         </div>
         <div id="correction-list" class="excerpt-list">
@@ -295,6 +300,7 @@
             <select id="graphics-mode">
               <option value="queue">Needs graphics</option>
               <option value="cleanup">Graphics QC</option>
+              <option value="mismatch">Mismatch pairing</option>
               <option value="handoff">Poetry Please handoff</option>
             </select>
           </label>
@@ -315,7 +321,7 @@
           <button id="load-graphics-records" class="button">Load Queue Rows</button>
         </div>
         <p class="hint">
-          This replaces the old quote-image creation browser. `Needs graphics` is the true creation queue. `2026 Titles` narrows that queue to the current season. `Graphics QC` is for graphics that already exist and should be reviewed. `Poetry Please handoff` is for approved graphics and their downstream status.
+          This replaces the old quote-image creation browser. `Needs graphics` is the true creation queue. `2026 Titles` narrows that queue to the current season. `Graphics QC` is for graphics that already exist and should be reviewed. `Mismatch pairing` is for QC-rejected graphics that need to be matched to the correct excerpt. `Poetry Please handoff` is for approved graphics and their downstream status.
         </p>
         <details class="folder-import-panel" id="graphics-folder-import-panel">
           <summary class="folder-import-panel__summary">Import Made Graphics From Drive</summary>

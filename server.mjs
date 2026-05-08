@@ -1024,6 +1024,9 @@ function buildPigQcRecordFromSheetRow(row, index, canonicalBookAuthorMap = null)
     graphicsQcDecision: qcDecision,
     graphicsQcNote: qcNote,
     graphicsQcUpdatedAt: qcUpdatedAt,
+    rejectReason: "",
+    metadataIssue: "",
+    aestheticIssue: "",
     sourceTool,
     poetryPleaseStatus,
     poetryPleaseUpdatedAt,
@@ -1038,12 +1041,16 @@ function overlayRuntimeGraphicsState(record, runtimeState = null) {
 
   const qc = runtimeState.qc_reviews?.[completionId] || null;
   const handoff = runtimeState.handoffs?.[completionId] || null;
+  const parsedNote = parseGraphicsQcStructuredNoteServer(qc?.note ?? record.graphicsQcNote);
 
   return {
     ...record,
     graphicsQcDecision: cleanSheetWhitespace(qc?.decision) || record.graphicsQcDecision,
     graphicsQcNote: qc?.note ?? record.graphicsQcNote,
     graphicsQcUpdatedAt: cleanSheetWhitespace(qc?.reviewed_at) || record.graphicsQcUpdatedAt,
+    rejectReason: parsedNote.rejectReason || record.rejectReason || "",
+    metadataIssue: cleanSheetWhitespace(qc?.metadata_issue) || parsedNote.metadataIssue || record.metadataIssue || "",
+    aestheticIssue: cleanSheetWhitespace(qc?.aesthetic_issue) || parsedNote.aestheticIssue || record.aestheticIssue || "",
     poetryPleaseStatus: cleanSheetWhitespace(handoff?.handoff_status) || record.poetryPleaseStatus,
     poetryPleaseUpdatedAt: cleanSheetWhitespace(handoff?.handed_off_at) || record.poetryPleaseUpdatedAt,
     poetryPleaseNote: cleanSheetWhitespace(handoff?.poetry_please_item_id)
@@ -2203,10 +2210,12 @@ function buildGraphicsReworkRequestRecord(completion) {
   }
 
   const parsedNote = parseGraphicsQcStructuredNoteServer(completion.graphicsQcNote || "");
+  const metadataIssue = completion.metadataIssue || parsedNote.metadataIssue;
+  const aestheticIssue = completion.aestheticIssue || parsedNote.aestheticIssue;
   const reworkNotes = [
     "QC requested rework.",
-    parsedNote.metadataIssue ? `Metadata issue: ${parsedNote.metadataIssue}` : "",
-    parsedNote.aestheticIssue ? `Aesthetic issue: ${parsedNote.aestheticIssue}` : "",
+    metadataIssue ? `Metadata issue: ${metadataIssue}` : "",
+    aestheticIssue ? `Aesthetic issue: ${aestheticIssue}` : "",
     parsedNote.details ? `Details: ${parsedNote.details}` : ""
   ].filter(Boolean).join(" ");
 
@@ -2223,10 +2232,31 @@ function buildGraphicsReworkRequestRecord(completion) {
     recordId: `rework:${cleanSheetWhitespace(completion.pigCompletionId)}`,
     graphicsRequestId: buildGraphicsReworkRequestId(completion),
     rejectReason,
-    metadataIssue: parsedNote.metadataIssue,
-    aestheticIssue: parsedNote.aestheticIssue,
+    metadataIssue,
+    aestheticIssue,
     qcNote: completion.graphicsQcNote || "",
     source: "weaver_qc_rework",
+    sourceRequestId: cleanSheetWhitespace(completion.graphicsRequestId),
+    sourceCompletionId: cleanSheetWhitespace(completion.pigCompletionId)
+  };
+}
+
+function buildGraphicsMismatchRecord(completion) {
+  const rejectReason = getGraphicsQcRejectReason(completion);
+  if (normalizeGraphicsQcDecision(completion?.graphicsQcDecision) !== "REJECT" || rejectReason !== "mismatched_graphic") {
+    return null;
+  }
+
+  const parsedNote = parseGraphicsQcStructuredNoteServer(completion.graphicsQcNote || "");
+
+  return {
+    ...completion,
+    workflowStatus: "QC flagged mismatch",
+    notes: parsedNote.details ? `Mismatch note: ${parsedNote.details}` : (completion.notes || ""),
+    rejectReason,
+    metadataIssue: completion.metadataIssue || parsedNote.metadataIssue || "",
+    aestheticIssue: completion.aestheticIssue || parsedNote.aestheticIssue || "",
+    source: "weaver_qc_mismatch",
     sourceRequestId: cleanSheetWhitespace(completion.graphicsRequestId),
     sourceCompletionId: cleanSheetWhitespace(completion.pigCompletionId)
   };
@@ -2240,6 +2270,24 @@ async function getPigReworkRequests(filterMode = "all") {
     .map((row, index) => overlayRuntimeGraphicsState(buildPigQcRecordFromSheetRow(row, index, canonicalBookAuthorMap), runtimeState))
     .filter(Boolean)
     .map(buildGraphicsReworkRequestRecord)
+    .filter(Boolean);
+
+  if (cleanSheetWhitespace(filterMode).toLowerCase() === "current_titles") {
+    const allowed = getReviewQueueIncludeSet();
+    records = records.filter(record => allowed.has(normalizeBookKey(record.bookTitle)));
+  }
+
+  return records;
+}
+
+async function getPigMismatchRecords(filterMode = "all") {
+  const rows = await readPigCompletedGraphicsRows();
+  const canonicalBookAuthorMap = await getCanonicalGraphicsBookAuthorMap();
+  const runtimeState = await getRuntimeGraphicsState(rows.map(row => row[PIG_COMPLETION_COLUMNS.completionId - 1]));
+  let records = rows
+    .map((row, index) => overlayRuntimeGraphicsState(buildPigQcRecordFromSheetRow(row, index, canonicalBookAuthorMap), runtimeState))
+    .filter(Boolean)
+    .map(buildGraphicsMismatchRecord)
     .filter(Boolean);
 
   if (cleanSheetWhitespace(filterMode).toLowerCase() === "current_titles") {
@@ -2445,6 +2493,9 @@ async function getGraphicsBooksFromSheets(mode) {
   if (resolvedMode === "cleanup") {
     const pendingRecords = await getPendingGraphicsQcRecords();
     books = summarizeBooks(pendingRecords.map(record => ({ bookTitle: record.bookTitle })));
+  } else if (resolvedMode === "mismatch") {
+    const mismatchRecords = await getPigMismatchRecords("all");
+    books = summarizeBooks(mismatchRecords.map(record => ({ bookTitle: record.bookTitle })));
   } else if (resolvedMode === "handoff") {
     const handoffRecords = await getPoetryPleaseHandoffRecords();
     books = summarizeBooks(handoffRecords.map(record => ({ bookTitle: record.bookTitle })));
@@ -2469,6 +2520,9 @@ async function getGraphicsRecordsForBookFromSheets(bookTitle, mode) {
 
   if (resolvedMode === "cleanup") {
     records = (await getPendingGraphicsQcRecords())
+      .filter(record => normalizeBookKey(record.bookTitle) === requestedKey);
+  } else if (resolvedMode === "mismatch") {
+    records = (await getPigMismatchRecords("all"))
       .filter(record => normalizeBookKey(record.bookTitle) === requestedKey);
   } else if (resolvedMode === "handoff") {
     records = await getPoetryPleaseHandoffRecords(bookTitle);

@@ -734,3 +734,26 @@ If those answers are not written down, the release should be treated as unverifi
 ## Recommendation
 
 Build this as a standalone internal tool first, but keep the stack compatible with Poetry Please so it can be folded in later if that proves useful.
+
+## Now / Soon / Later
+
+### Now
+
+- finish the mismatched graphic pairing lane so QC-rejected mismatch records have a dedicated place in Weaver instead of disappearing into notes only
+- continue the runtime DB cutover for graphics QC and Poetry Please handoff state so sheet columns are no longer the only operational truth
+- improve excerpt gathering so italicized phrases can be captured intentionally instead of relying on ad hoc `*...*` workarounds
+
+### Soon
+
+- keep tightening Drive import matching, naming, and manual pairing polish
+- move more graphics request, completion, QC, and handoff reads onto the runtime DB
+- keep improving the EPUB-backed excerpt gathering flow and metadata source-of-truth decisions
+- complete the `Correct and recreate` rework loop back through P.I.G. with cleaner state visibility
+- expand safe auto-fixes in `Needs correction` for high-confidence metadata and formatting cases, while keeping ambiguous rows quarantined for human review
+
+### Later
+
+- fully replace the legacy excerpt gathering form
+- sync approved excerpts from Weaver and the old tool into the canonical excerpt database
+- move more spreadsheet-owned workflow state into Weaver-owned storage
+- keep refining Poetry Please downstream visibility and retry/state management
