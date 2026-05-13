@@ -746,6 +746,7 @@ Build this as a standalone internal tool first, but keep the stack compatible wi
 ### Soon
 
 - keep tightening Drive import matching, naming, and manual pairing polish
+- add a `QC Sweep` mode in `Graphics QC` that serves one reviewable graphic at a time and auto-advances after save
 - move more graphics request, completion, QC, and handoff reads onto the runtime DB
 - keep improving the EPUB-backed excerpt gathering flow and metadata source-of-truth decisions
 - add an explicit catalog DB sync step from the source EPUB/catalog project into Weaver's `data/formal_catalog.db`, followed by build + deploy, so catalog updates reliably reach the live app
@@ -757,4 +758,5 @@ Build this as a standalone internal tool first, but keep the stack compatible wi
 - fully replace the legacy excerpt gathering form
 - sync approved excerpts from Weaver and the old tool into the canonical excerpt database
 - move more spreadsheet-owned workflow state into Weaver-owned storage
+- add release-date weighting and optional quick-win ranking to `QC Sweep` once release metadata is wired into the graphics QC path
 - keep refining Poetry Please downstream visibility and retry/state management

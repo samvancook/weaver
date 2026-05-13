@@ -123,6 +123,7 @@ HANDOFF_STATUSES = {
     "requested",
     "claimed",
     "generated",
+    "exported",
     "uploaded",
     "sent_to_weaver_qc",
     "approved",
@@ -315,8 +316,8 @@ def update_graphics_handoff(connection: sqlite3.Connection, graphics_request_id:
     pig_status = normalize_enum(update.get("pigStatus"), PIG_STATUSES, existing["pigStatus"])
     qc_status = normalize_enum(update.get("qcStatus"), QC_STATUSES, existing["qcStatus"])
     asset_url = str(update.get("assetUrl") or update.get("assetLinkUrl") or update.get("driveUrl") or existing["assetUrl"] or "")
-    uploaded = handoff_status in {"uploaded", "sent_to_weaver_qc", "approved"} or pig_status == "uploaded" or bool(asset_url)
-    generated = uploaded or handoff_status in {"generated", "sent_to_weaver_qc", "approved"} or pig_status in {"generated", "exported", "uploaded"}
+    uploaded = handoff_status in {"uploaded", "sent_to_weaver_qc", "approved"} or pig_status == "uploaded"
+    generated = uploaded or handoff_status in {"generated", "exported", "sent_to_weaver_qc", "approved"} or pig_status in {"generated", "exported", "uploaded"}
     sent_to_qc = handoff_status in {"sent_to_weaver_qc", "approved", "rejected"} or qc_status in {"pending", "approved", "rejected", "needs_revision"}
     approved = handoff_status == "approved" or qc_status == "approved"
     rejected = handoff_status == "rejected" or qc_status in {"rejected", "needs_revision"}

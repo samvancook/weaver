@@ -46,6 +46,7 @@ const elements = {
   graphicsFolderImportResults: document.getElementById("graphics-folder-import-results"),
   exportGraphicsSheet: document.getElementById("export-graphics-sheet"),
   submitGraphicsQc: document.getElementById("submit-graphics-qc"),
+  submitGraphicsQcBottom: document.getElementById("submit-graphics-qc-bottom"),
   graphicsList: document.getElementById("graphics-list"),
   gatheringMode: document.getElementById("gathering-mode"),
   gatheringEmail: document.getElementById("gathering-email"),
@@ -364,9 +365,11 @@ function setSubmitState(isBusy, label) {
   if (elements.autoApplyCorrections) {
     elements.autoApplyCorrections.disabled = isBusy;
   }
-  if (elements.submitGraphicsQc) {
-    elements.submitGraphicsQc.disabled = isBusy;
-  }
+  [elements.submitGraphicsQc, elements.submitGraphicsQcBottom].forEach(button => {
+    if (button) {
+      button.disabled = isBusy;
+    }
+  });
   elements.submitReview.textContent = label || (isBusy ? "Saving..." : "Submit Decisions");
   if (elements.submitWeirdReview) {
     elements.submitWeirdReview.textContent = label || (isBusy ? "Saving..." : "Submit Decisions");
@@ -377,9 +380,11 @@ function setSubmitState(isBusy, label) {
   if (elements.autoApplyCorrections) {
     elements.autoApplyCorrections.textContent = isBusy ? "Applying..." : "Apply Auto-Fixes";
   }
-  if (elements.submitGraphicsQc) {
-    elements.submitGraphicsQc.textContent = label || (isBusy ? "Saving..." : "Save QC Decisions");
-  }
+  [elements.submitGraphicsQc, elements.submitGraphicsQcBottom].forEach(button => {
+    if (button) {
+      button.textContent = label || (isBusy ? "Saving..." : "Save QC Decisions");
+    }
+  });
 }
 
 function getSelectedReviewDisplayMode() {
@@ -957,6 +962,7 @@ async function requestReviewApi(path, params = {}) {
   });
 
   const response = await fetch(url, {
+    cache: "no-store",
     headers: {
       Accept: "application/json"
     }
@@ -1653,12 +1659,21 @@ function buildGraphicsPreviewUrl(assetMatch) {
   if (!assetMatch) return "";
 
   const directUrl = assetMatch.lowResLinkUrl || assetMatch.linkUrl || "";
-  const driveFileId = extractGoogleDriveFileId(directUrl);
+  const fallbackUrl = assetMatch.linkUrl || assetMatch.lowResLinkUrl || "";
+  return normalizeGraphicsPreviewUrl(directUrl, fallbackUrl);
+}
+
+function normalizeGraphicsPreviewUrl(url, fallbackUrl = "") {
+  const directUrl = String(url || "").trim();
+  const fallbackDirectUrl = String(fallbackUrl || "").trim();
+  if (!directUrl && !fallbackDirectUrl) return "";
+
+  const driveFileId = extractGoogleDriveFileId(directUrl) || extractGoogleDriveFileId(fallbackDirectUrl);
   if (driveFileId) {
     return `/api/drive-image?fileId=${encodeURIComponent(driveFileId)}`;
   }
 
-  return directUrl;
+  return directUrl || fallbackDirectUrl;
 }
 
 function buildReviewSavePayload(update) {
@@ -1904,15 +1919,27 @@ function getVisibleGraphicsBookSummaries() {
   return currentGraphicsBookSummaries.filter(book => reviewQueueIncludeSet.has(normalizeBookKey(book.title)));
 }
 
+function isGraphicsQcSweepSelection(value = elements.graphicsBookSelect?.value || "") {
+  return value === "__qc_sweep__";
+}
+
 function refreshGraphicsBookSelect(preserveSelection = true) {
   const previousSelection = preserveSelection ? elements.graphicsBookSelect?.value || "" : "";
-  const visibleBooks = getVisibleGraphicsBookSummaries();
+  let visibleBooks = getVisibleGraphicsBookSummaries();
+
+  if (getSelectedGraphicsMode() === "cleanup") {
+    const totalCount = visibleBooks.reduce((sum, book) => sum + Number(book.count || 0), 0);
+    visibleBooks = [
+      { title: "QC Sweep", count: totalCount, key: "__qc_sweep__" },
+      ...visibleBooks
+    ];
+  }
 
   populateBookSelect(
     elements.graphicsBookSelect,
-    visibleBooks.map(book => ({ ...book, key: normalizeBookKey(book.title) })),
+    visibleBooks.map(book => ({ ...book, key: book.key || normalizeBookKey(book.title) })),
     previousSelection,
-    book => `${book.title} (${book.count})`
+    book => book.key === "__qc_sweep__" ? `${book.title} (${book.count} remaining)` : `${book.title} (${book.count})`
   );
 
   if (elements.graphicsBookCountBadge) {
@@ -1924,6 +1951,10 @@ function setGraphicsFolderImportApplyEnabled(enabled) {
   if (elements.applyGraphicsFolderImport) {
     elements.applyGraphicsFolderImport.disabled = !enabled;
   }
+}
+
+function wait(ms) {
+  return new Promise(resolve => window.setTimeout(resolve, ms));
 }
 
 function hasGraphicsFolderManualSelections() {
@@ -2246,10 +2277,11 @@ async function loadGraphicsRecords() {
   }
 
   const summary = graphicsBookSummaryByKey.get(bookKey);
-  const bookTitle = summary?.title || bookKey;
+  const bookTitle = isGraphicsQcSweepSelection(bookKey) ? "__qc_sweep__" : (summary?.title || bookKey);
+  const statusLabel = isGraphicsQcSweepSelection(bookKey) ? "QC Sweep" : bookTitle;
 
   try {
-    setStatus(`Loading ${getGraphicsModeLabel(mode)} rows for "${bookTitle}"...`);
+    setStatus(`Loading ${getGraphicsModeLabel(mode)} rows for "${statusLabel}"...`);
     let data;
     try {
       data = await requestReviewApi("/api/review/graphics-records", { mode, bookTitle });
@@ -2267,7 +2299,7 @@ async function loadGraphicsRecords() {
     currentGraphicsAssetMatches = await loadGraphicsAssetMatches(currentGraphicsRecords);
     renderGraphicsRecords(currentGraphicsRecords);
     setStatus(
-      `Loaded ${currentGraphicsRecords.length} ${getGraphicsModeLabel(mode)} rows for "${bookTitle}".`,
+      `Loaded ${currentGraphicsRecords.length} ${getGraphicsModeLabel(mode)} rows for "${statusLabel}".`,
       currentGraphicsRecords.slice(0, 5)
     );
   } catch (error) {
@@ -2498,9 +2530,11 @@ function renderGraphicsRecords(records) {
   if (elements.graphicsCountBadge) {
     elements.graphicsCountBadge.textContent = `${records.length} Rows`;
   }
-  if (elements.submitGraphicsQc) {
-    elements.submitGraphicsQc.hidden = getSelectedGraphicsMode() !== "cleanup";
-  }
+  [elements.submitGraphicsQc, elements.submitGraphicsQcBottom].forEach(button => {
+    if (button) {
+      button.hidden = getSelectedGraphicsMode() !== "cleanup";
+    }
+  });
   if (elements.exportGraphicsSheet) {
     elements.exportGraphicsSheet.hidden = !runtimeConfig.graphicsExportEnabled || getSelectedGraphicsMode() !== "queue";
   }
@@ -3115,7 +3149,7 @@ function buildGraphicsCard(record) {
   const displayAuthor = record.author || assetMatch?.author || "";
   const assetLinkUrl = record.assetLinkUrl || assetMatch?.linkUrl || assetMatch?.lowResLinkUrl || assetMatch?.folderLink || "";
   const assetLinkLabel = assetMatch?.fileName || (assetMatch?.folderLink ? "View Drive folder" : "View graphic on Drive");
-  const assetPreviewUrl = record.assetPreviewUrl || buildGraphicsPreviewUrl(assetMatch);
+  const assetPreviewUrl = normalizeGraphicsPreviewUrl(assetLinkUrl || record.assetPreviewUrl, assetLinkUrl || record.assetPreviewUrl) || buildGraphicsPreviewUrl(assetMatch);
   const isQcMode = getSelectedGraphicsMode() === "cleanup";
   const isMismatchMode = getSelectedGraphicsMode() === "mismatch";
   const isHandoffMode = getSelectedGraphicsMode() === "handoff";
@@ -3353,12 +3387,28 @@ async function submitGraphicsQc() {
       throw new Error(result.error || `/api/save-graphics-qc returned ${response.status}`);
     }
 
-    await loadGraphicsRecords();
+    const qcSweepMode = isGraphicsQcSweepSelection();
+    await loadGraphicsBooks();
+    if (elements.graphicsBookSelect?.value) {
+      await loadGraphicsRecords();
+      if (qcSweepMode) {
+        await wait(1200);
+        await loadGraphicsBooks();
+        if (elements.graphicsBookSelect?.value) {
+          await loadGraphicsRecords();
+        }
+      }
+    } else {
+      currentGraphicsRecords = [];
+      currentGraphicsAssetMatches = new Map();
+      renderGraphicsRecords([]);
+    }
     const handoff = result.poetryPlease || {};
     const handoffMessage = handoff.ok && !handoff.skipped
       ? ` Sent ${Number(handoff.createdCount || 0) + Number(handoff.updatedCount || 0)} approved graphic${(Number(handoff.createdCount || 0) + Number(handoff.updatedCount || 0)) === 1 ? "" : "s"} to Poetry Please.`
       : (!handoff.ok && handoff.error ? ` Poetry Please handoff needs attention: ${handoff.error}` : "");
-    setStatus(`Saved ${updates.length} QC decisions.${handoffMessage}`);
+    const sweepMessage = qcSweepMode ? " Loaded the next QC sweep item." : "";
+    setStatus(`Saved ${updates.length} QC decisions.${handoffMessage}${sweepMessage}`);
   } catch (error) {
     setStatus(`Graphics QC save failed: ${error.message}`);
   } finally {
@@ -4160,6 +4210,7 @@ elements.graphicsFolderImportResults?.addEventListener("change", event => {
 });
 elements.exportGraphicsSheet?.addEventListener("click", exportGraphicsSheet);
 elements.submitGraphicsQc?.addEventListener("click", submitGraphicsQc);
+elements.submitGraphicsQcBottom?.addEventListener("click", submitGraphicsQc);
 elements.loadGatheringOptions?.addEventListener("click", () => {
   loadGatheringOptions({ force: true }).catch(error => {
     setStatus(`Excerpt gathering option load failed: ${error.message}`);

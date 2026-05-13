@@ -186,6 +186,21 @@ class GraphicsHandoffLedgerTest(unittest.TestCase):
         self.assertEqual(queue, [])
         self.assertEqual(get_graphics_handoff(connection, "weaver:row-2130")["pigStatus"], "uploaded")
 
+    def test_generated_exported_uploaded_or_sent_records_leave_handoff_queue(self):
+        terminal_updates = [
+            ("weaver:generated", {"handoffStatus": "generated", "pigStatus": "generated"}),
+            ("weaver:exported", {"handoffStatus": "exported", "pigStatus": "exported", "exportType": "download_png"}),
+            ("weaver:uploaded", {"handoffStatus": "uploaded", "pigStatus": "uploaded"}),
+            ("weaver:sent", {"handoffStatus": "sent_to_weaver_qc", "pigStatus": "uploaded", "qcStatus": "pending"}),
+        ]
+        with memory_db() as connection:
+            for request_id, update in terminal_updates:
+                seed_request(connection, request_id)
+                update_graphics_handoff(connection, request_id, update)
+            queue = get_graphics_handoff_queue(connection)
+
+        self.assertEqual(queue, [])
+
     def test_only_revision_rejects_return_to_pig_queue(self):
         with memory_db() as connection:
             for request_id, completion_id in [

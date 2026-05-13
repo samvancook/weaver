@@ -627,6 +627,36 @@ function mergeRecordCollections(recordSets = []) {
   return Array.from(byKey.values());
 }
 
+function collapsePendingGraphicsQcRecords(records = []) {
+  const groups = new Map();
+
+  records.forEach(record => {
+    const key = cleanSheetWhitespace(record?.graphicsRequestId)
+      || cleanSheetWhitespace(record?.recordId)
+      || String(record?.sheetRow || "");
+    if (!key) return;
+    if (!groups.has(key)) {
+      groups.set(key, []);
+    }
+    groups.get(key).push(record);
+  });
+
+  return Array.from(groups.values()).flatMap(group => {
+    if (group.some(record => hasResolvedGraphicsQcDecision(record))) {
+      return [];
+    }
+
+    return [group.slice().sort((left, right) => {
+      const leftTime = Date.parse(left.completedAt || left.graphicsQcUpdatedAt || "") || 0;
+      const rightTime = Date.parse(right.completedAt || right.graphicsQcUpdatedAt || "") || 0;
+      if (leftTime !== rightTime) {
+        return rightTime - leftTime;
+      }
+      return Number(right.sheetRow || 0) - Number(left.sheetRow || 0);
+    })[0]];
+  });
+}
+
 let canonicalGraphicsBookAuthorMapPromise = null;
 
 async function getCanonicalGraphicsBookAuthorMap() {
@@ -1135,6 +1165,13 @@ async function fetchDriveFileResponse(fileId) {
       Authorization: `Bearer ${token}`
     }
   });
+}
+
+async function fetchDriveThumbnailResponse(fileId) {
+  const url = new URL("https://drive.google.com/thumbnail");
+  url.searchParams.set("id", fileId);
+  url.searchParams.set("sz", "w1600");
+  return fetch(url);
 }
 
 async function getDriveFolderMetadata(folderId) {
@@ -1999,11 +2036,36 @@ async function appendExcerptGatheringRow(payload = {}) {
   const response = await appendSheetValuesServer(`'${sourceSheetName.replace(/'/g, "''")}'!A:S`, [rowValues]);
   const updatedRange = cleanSheetWhitespace(response?.updates?.updatedRange || "");
   const rowMatch = updatedRange.match(/![A-Z]+(\d+):/);
+  const rowNumber = rowMatch ? Number(rowMatch[1]) : 0;
+  const mode = cleanSheetWhitespace(payload.mode).toLowerCase();
+
+  if (rowNumber && mode === "book") {
+    const config = SHEET_SOURCE_CONFIG.columnMap;
+    await batchUpdateSheetValuesServer([
+      {
+        range: `'${sourceSheetName.replace(/'/g, "''")}'!${toA1Column(config.author)}${rowNumber}`,
+        values: [[cleanSheetWhitespace(payload.author)]]
+      },
+      {
+        range: `'${sourceSheetName.replace(/'/g, "''")}'!${toA1Column(config.title)}${rowNumber}`,
+        values: [[cleanSheetWhitespace(payload.title)]]
+      },
+      {
+        range: `'${sourceSheetName.replace(/'/g, "''")}'!${toA1Column(config.excerpt)}${rowNumber}`,
+        values: [[String(payload.quote || "").trim()]]
+      },
+      {
+        range: `'${sourceSheetName.replace(/'/g, "''")}'!${toA1Column(config.bookTitle)}${rowNumber}`,
+        values: [[cleanSheetWhitespace(payload.bookTitle)]]
+      }
+    ]);
+  }
+
   return {
     ok: true,
     version: `${appVersion}-service-account`,
-    rowNumber: rowMatch ? Number(rowMatch[1]) : 0,
-    intakeMode: cleanSheetWhitespace(payload.mode).toLowerCase(),
+    rowNumber,
+    intakeMode: mode,
     updatedRange
   };
 }
@@ -2275,8 +2337,9 @@ async function getPendingGraphicsQcRecords() {
     .map((row, index) => overlayRuntimeGraphicsState(buildPigQcRecordFromSheetRow(row, index, canonicalBookAuthorMap), runtimeState))
     .filter(Boolean);
 
-  return mergeRecordCollections([cleanupRecords, pigRecords])
-    .filter(record => !hasResolvedGraphicsQcDecision(record));
+  return collapsePendingGraphicsQcRecords(
+    mergeRecordCollections([cleanupRecords, pigRecords])
+  ).filter(record => !hasResolvedGraphicsQcDecision(record));
 }
 
 function buildGraphicsReworkRequestId(completion) {
@@ -2652,14 +2715,31 @@ async function getGraphicsBooksFromSheets(mode) {
 }
 
 async function getGraphicsRecordsForBookFromSheets(bookTitle, mode) {
+  const qcSweepBatchSize = 5;
   const requestedKey = normalizeBookKey(bookTitle);
   const resolvedMode = cleanSheetWhitespace(mode).toLowerCase() || "queue";
+  const isQcSweep = resolvedMode === "cleanup" && cleanSheetWhitespace(bookTitle) === "__qc_sweep__";
   let preferredBookTitle = cleanSheetWhitespace(bookTitle);
   let records = [];
 
   if (resolvedMode === "cleanup") {
-    records = (await getPendingGraphicsQcRecords())
-      .filter(record => normalizeBookKey(record.bookTitle) === requestedKey);
+    records = await getPendingGraphicsQcRecords();
+    if (isQcSweep) {
+      records = records
+        .slice()
+        .sort((left, right) => {
+          const leftTime = Date.parse(left.completedAt || left.graphicsQcUpdatedAt || "") || 0;
+          const rightTime = Date.parse(right.completedAt || right.graphicsQcUpdatedAt || "") || 0;
+          if (leftTime !== rightTime) {
+            return leftTime - rightTime;
+          }
+          return Number(left.sheetRow || 0) - Number(right.sheetRow || 0);
+        })
+        .slice(0, qcSweepBatchSize);
+      preferredBookTitle = "QC Sweep";
+    } else {
+      records = records.filter(record => normalizeBookKey(record.bookTitle) === requestedKey);
+    }
   } else if (resolvedMode === "mismatch") {
     records = (await getPigMismatchRecords("all"))
       .filter(record => normalizeBookKey(record.bookTitle) === requestedKey);
@@ -3668,7 +3748,11 @@ const server = http.createServer(async (req, res) => {
         });
       }
 
-      const response = await fetchDriveFileResponse(fileId);
+      let response = await fetchDriveFileResponse(fileId);
+      if (!response.ok) {
+        response = await fetchDriveThumbnailResponse(fileId);
+      }
+
       const body = await response.arrayBuffer();
       if (!response.ok) {
         const text = Buffer.from(body).toString("utf8");
