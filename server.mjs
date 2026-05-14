@@ -1124,6 +1124,54 @@ async function getRuntimeGraphicsState(completionIds = []) {
   }
 }
 
+async function getRuntimeGraphicsHandoffState(graphicsRequestIds = []) {
+  const ids = Array.isArray(graphicsRequestIds)
+    ? graphicsRequestIds.map(value => cleanSheetWhitespace(value)).filter(Boolean)
+    : [];
+  if (!ids.length) {
+    return {};
+  }
+  try {
+    const result = await syncWeaverRuntimeDb("get_handoff_requests", { graphicsRequestIds: ids });
+    return Object.fromEntries(
+      (Array.isArray(result?.records) ? result.records : [])
+        .map(record => [cleanSheetWhitespace(record.graphicsRequestId), record])
+        .filter(([requestId]) => requestId)
+    );
+  } catch {
+    return {};
+  }
+}
+
+function overlayRuntimeHandoffState(record, handoffStateByRequestId = null) {
+  if (!record || !handoffStateByRequestId) return record;
+  const requestId = cleanSheetWhitespace(record.graphicsRequestId);
+  if (!requestId) return record;
+  const handoff = handoffStateByRequestId[requestId];
+  if (!handoff) return record;
+
+  const qcStatus = cleanSheetWhitespace(handoff.qcStatus).toLowerCase();
+  const qcPayload = handoff.qcPayload && typeof handoff.qcPayload === "object" ? handoff.qcPayload : {};
+
+  return {
+    ...record,
+    graphicsQcDecision: (
+      qcStatus === "approved"
+        ? "APPROVE"
+        : (qcStatus === "rejected" || qcStatus === "needs_revision" ? "REJECT" : cleanSheetWhitespace(record.graphicsQcDecision))
+    ) || record.graphicsQcDecision,
+    graphicsQcNote: String(qcPayload.qcNote || qcPayload.note || record.graphicsQcNote || ""),
+    rejectReason: cleanSheetWhitespace(qcPayload.rejectReason || qcPayload.qcRejectReason || record.rejectReason),
+    metadataIssue: cleanSheetWhitespace(qcPayload.metadataIssue || record.metadataIssue),
+    aestheticIssue: cleanSheetWhitespace(qcPayload.aestheticIssue || record.aestheticIssue),
+    assetLinkUrl: cleanSheetWhitespace(handoff.assetUrl) || record.assetLinkUrl,
+    assetPreviewUrl: cleanSheetWhitespace(handoff.assetPreviewUrl) || record.assetPreviewUrl,
+    ledgerHandoffStatus: cleanSheetWhitespace(handoff.handoffStatus),
+    ledgerPigStatus: cleanSheetWhitespace(handoff.pigStatus),
+    ledgerQcStatus: cleanSheetWhitespace(handoff.qcStatus)
+  };
+}
+
 async function fetchDriveJson(url) {
   const token = await getServiceAccountAccessToken();
   const response = await fetch(url, {
@@ -2171,8 +2219,14 @@ async function getPigCompletedGraphicsBooks() {
   const rows = await readPigCompletedGraphicsRows();
   const canonicalBookAuthorMap = await getCanonicalGraphicsBookAuthorMap();
   const runtimeState = await getRuntimeGraphicsState(rows.map(row => row[PIG_COMPLETION_COLUMNS.completionId - 1]));
+  const handoffState = await getRuntimeGraphicsHandoffState(
+    rows.map(row => cleanSheetWhitespace(row[PIG_COMPLETION_COLUMNS.requestId - 1]))
+  );
   const records = rows
-    .map((row, index) => overlayRuntimeGraphicsState(buildPigQcRecordFromSheetRow(row, index, canonicalBookAuthorMap), runtimeState))
+    .map((row, index) => overlayRuntimeHandoffState(
+      overlayRuntimeGraphicsState(buildPigQcRecordFromSheetRow(row, index, canonicalBookAuthorMap), runtimeState),
+      handoffState
+    ))
     .filter(Boolean);
 
   return summarizeBooks(records);
@@ -2183,8 +2237,14 @@ async function getPigCompletedGraphicsRecordsForBook(bookTitle) {
   const rows = await readPigCompletedGraphicsRows();
   const canonicalBookAuthorMap = await getCanonicalGraphicsBookAuthorMap();
   const runtimeState = await getRuntimeGraphicsState(rows.map(row => row[PIG_COMPLETION_COLUMNS.completionId - 1]));
+  const handoffState = await getRuntimeGraphicsHandoffState(
+    rows.map(row => cleanSheetWhitespace(row[PIG_COMPLETION_COLUMNS.requestId - 1]))
+  );
   return rows
-    .map((row, index) => overlayRuntimeGraphicsState(buildPigQcRecordFromSheetRow(row, index, canonicalBookAuthorMap), runtimeState))
+    .map((row, index) => overlayRuntimeHandoffState(
+      overlayRuntimeGraphicsState(buildPigQcRecordFromSheetRow(row, index, canonicalBookAuthorMap), runtimeState),
+      handoffState
+    ))
     .filter(record => record && normalizeBookKey(record.bookTitle) === requestedKey);
 }
 
@@ -2221,8 +2281,14 @@ async function getPoetryPleaseApprovedGraphics(bookTitle = "") {
   const rows = await readPigCompletedGraphicsRows();
   const canonicalBookAuthorMap = await getCanonicalGraphicsBookAuthorMap();
   const runtimeState = await getRuntimeGraphicsState(rows.map(row => row[PIG_COMPLETION_COLUMNS.completionId - 1]));
+  const handoffState = await getRuntimeGraphicsHandoffState(
+    rows.map(row => cleanSheetWhitespace(row[PIG_COMPLETION_COLUMNS.requestId - 1]))
+  );
   return rows
-    .map((row, index) => overlayRuntimeGraphicsState(buildPigQcRecordFromSheetRow(row, index, canonicalBookAuthorMap), runtimeState))
+    .map((row, index) => overlayRuntimeHandoffState(
+      overlayRuntimeGraphicsState(buildPigQcRecordFromSheetRow(row, index, canonicalBookAuthorMap), runtimeState),
+      handoffState
+    ))
     .filter(Boolean)
     .map(buildPoetryPleaseGraphicRecord)
     .filter(Boolean)
@@ -2239,8 +2305,14 @@ async function getPoetryPleaseHandoffRecords(bookTitle = "") {
   const rows = await readPigCompletedGraphicsRows();
   const canonicalBookAuthorMap = await getCanonicalGraphicsBookAuthorMap();
   const runtimeState = await getRuntimeGraphicsState(rows.map(row => row[PIG_COMPLETION_COLUMNS.completionId - 1]));
+  const handoffState = await getRuntimeGraphicsHandoffState(
+    rows.map(row => cleanSheetWhitespace(row[PIG_COMPLETION_COLUMNS.requestId - 1]))
+  );
   return rows
-    .map((row, index) => overlayRuntimeGraphicsState(buildPigQcRecordFromSheetRow(row, index, canonicalBookAuthorMap), runtimeState))
+    .map((row, index) => overlayRuntimeHandoffState(
+      overlayRuntimeGraphicsState(buildPigQcRecordFromSheetRow(row, index, canonicalBookAuthorMap), runtimeState),
+      handoffState
+    ))
     .filter(Boolean)
     .filter(record => normalizeGraphicsQcDecision(record.graphicsQcDecision) === "APPROVE")
     .filter(record => !requestedKey || normalizeBookKey(record.bookTitle) === requestedKey);
@@ -2331,10 +2403,16 @@ async function getPendingGraphicsQcRecords() {
     getCanonicalGraphicsBookAuthorMap()
   ]);
   const runtimeState = await getRuntimeGraphicsState(pigRows.map(row => row[PIG_COMPLETION_COLUMNS.completionId - 1]));
+  const handoffState = await getRuntimeGraphicsHandoffState(
+    pigRows.map(row => cleanSheetWhitespace(row[PIG_COMPLETION_COLUMNS.requestId - 1]))
+  );
 
   const cleanupRecords = buildCleanupSheetGraphicsRecords(values, qcState, canonicalBookAuthorMap);
   const pigRecords = pigRows
-    .map((row, index) => overlayRuntimeGraphicsState(buildPigQcRecordFromSheetRow(row, index, canonicalBookAuthorMap), runtimeState))
+    .map((row, index) => overlayRuntimeHandoffState(
+      overlayRuntimeGraphicsState(buildPigQcRecordFromSheetRow(row, index, canonicalBookAuthorMap), runtimeState),
+      handoffState
+    ))
     .filter(Boolean);
 
   return collapsePendingGraphicsQcRecords(
@@ -2411,8 +2489,14 @@ async function getPigReworkRequests(filterMode = "all") {
   const rows = await readPigCompletedGraphicsRows();
   const canonicalBookAuthorMap = await getCanonicalGraphicsBookAuthorMap();
   const runtimeState = await getRuntimeGraphicsState(rows.map(row => row[PIG_COMPLETION_COLUMNS.completionId - 1]));
+  const handoffState = await getRuntimeGraphicsHandoffState(
+    rows.map(row => cleanSheetWhitespace(row[PIG_COMPLETION_COLUMNS.requestId - 1]))
+  );
   let records = rows
-    .map((row, index) => overlayRuntimeGraphicsState(buildPigQcRecordFromSheetRow(row, index, canonicalBookAuthorMap), runtimeState))
+    .map((row, index) => overlayRuntimeHandoffState(
+      overlayRuntimeGraphicsState(buildPigQcRecordFromSheetRow(row, index, canonicalBookAuthorMap), runtimeState),
+      handoffState
+    ))
     .filter(Boolean)
     .map(buildGraphicsReworkRequestRecord)
     .filter(Boolean);
@@ -2429,8 +2513,14 @@ async function getPigMismatchRecords(filterMode = "all") {
   const rows = await readPigCompletedGraphicsRows();
   const canonicalBookAuthorMap = await getCanonicalGraphicsBookAuthorMap();
   const runtimeState = await getRuntimeGraphicsState(rows.map(row => row[PIG_COMPLETION_COLUMNS.completionId - 1]));
+  const handoffState = await getRuntimeGraphicsHandoffState(
+    rows.map(row => cleanSheetWhitespace(row[PIG_COMPLETION_COLUMNS.requestId - 1]))
+  );
   let records = rows
-    .map((row, index) => overlayRuntimeGraphicsState(buildPigQcRecordFromSheetRow(row, index, canonicalBookAuthorMap), runtimeState))
+    .map((row, index) => overlayRuntimeHandoffState(
+      overlayRuntimeGraphicsState(buildPigQcRecordFromSheetRow(row, index, canonicalBookAuthorMap), runtimeState),
+      handoffState
+    ))
     .filter(Boolean)
     .map(buildGraphicsMismatchRecord)
     .filter(Boolean);
@@ -2519,16 +2609,11 @@ async function getPigGraphicsRequests(filterMode = "all", { includeCompleted = f
   }));
   if (queueLedgerRequests.length) {
     await syncWeaverRuntimeDb("upsert_handoff_requests", { requests: queueLedgerRequests }).catch(() => null);
-    const ledgerResult = await syncWeaverRuntimeDb("get_handoff_requests", {
-      graphicsRequestIds: queueLedgerRequests.map(request => request.graphicsRequestId)
-    }).catch(() => ({ ok: false, records: [] }));
-    const ledgerByRequestId = new Map(
-      (Array.isArray(ledgerResult.records) ? ledgerResult.records : [])
-        .map(record => [cleanSheetWhitespace(record.graphicsRequestId), record])
-        .filter(([requestId]) => requestId)
+    const ledgerByRequestId = await getRuntimeGraphicsHandoffState(
+      queueLedgerRequests.map(request => request.graphicsRequestId)
     );
     records = records.filter(record => {
-      const ledger = ledgerByRequestId.get(cleanSheetWhitespace(record.graphicsRequestId));
+      const ledger = ledgerByRequestId[cleanSheetWhitespace(record.graphicsRequestId)];
       if (!ledger) return true;
       const handoffStatus = cleanSheetWhitespace(ledger.handoffStatus).toLowerCase();
       const pigStatus = cleanSheetWhitespace(ledger.pigStatus).toLowerCase();
@@ -2794,25 +2879,35 @@ async function upsertPigCompletedGraphics(completions) {
     appendRows.push(rowValues);
   });
 
-  if (updates.length) {
-    await batchUpdateSheetValuesServer(updates);
-  }
-  if (appendRows.length) {
-    await appendSheetValuesServer(`'${pigCompletedGraphicsSheetName.replace(/'/g, "''")}'!A:S`, appendRows);
-  }
-
   let runtimeDb = { ok: false, skipped: true };
   try {
     runtimeDb = await syncWeaverRuntimeDb("upsert_completions", { completions });
   } catch (error) {
     runtimeDb = { ok: false, error: error.message };
   }
+  if (!runtimeDb?.ok) {
+    throw new Error(runtimeDb?.error || "Runtime DB ledger write failed.");
+  }
+
+  const sheetSync = { ok: true, wroteUpdates: updates.length, wroteAppends: appendRows.length };
+  try {
+    if (updates.length) {
+      await batchUpdateSheetValuesServer(updates);
+    }
+    if (appendRows.length) {
+      await appendSheetValuesServer(`'${pigCompletedGraphicsSheetName.replace(/'/g, "''")}'!A:S`, appendRows);
+    }
+  } catch (error) {
+    sheetSync.ok = false;
+    sheetSync.error = error.message;
+  }
 
   return {
     ok: true,
     version: `${appVersion}-service-account`,
     savedCount: completions.length,
-    runtimeDb
+    runtimeDb,
+    sheetSync
   };
 }
 
@@ -3019,22 +3114,32 @@ async function saveGraphicsQcToSheets(updates) {
     return { ok: false, error: "No matching graphics QC rows found." };
   }
 
-  if (cleanupRequests.length) {
-    await batchUpdateSheetValuesServer(cleanupRequests);
-  }
-  if (pigRequests.length) {
-    await batchUpdateSheetValuesServer(pigRequests);
-  }
-
   let runtimeDb = { ok: false, skipped: true };
+  if (pigRequests.length) {
+    try {
+      runtimeDb = await syncWeaverRuntimeDb("insert_qc_reviews", { reviews: updates });
+    } catch (error) {
+      runtimeDb = { ok: false, error: error.message };
+    }
+    if (!runtimeDb?.ok) {
+      throw new Error(runtimeDb?.error || "Runtime DB QC ledger write failed.");
+    }
+  }
+  const sheetSync = { ok: true, cleanupWrites: cleanupRequests.length, pigWrites: pigRequests.length };
   try {
-    runtimeDb = await syncWeaverRuntimeDb("insert_qc_reviews", { reviews: updates });
+    if (cleanupRequests.length) {
+      await batchUpdateSheetValuesServer(cleanupRequests);
+    }
+    if (pigRequests.length) {
+      await batchUpdateSheetValuesServer(pigRequests);
+    }
   } catch (error) {
-    runtimeDb = { ok: false, error: error.message };
+    sheetSync.ok = false;
+    sheetSync.error = error.message;
   }
 
   let poetryPlease = { ok: true, skipped: true, reason: "no_new_approvals" };
-  if (approvedPigSheetRows.length) {
+  if (approvedPigSheetRows.length && sheetSync.ok) {
     const approvedRowSet = new Set(approvedPigSheetRows.map(value => String(value)));
     const approvedRecords = (await readPigCompletedGraphicsRows())
       .map((row, index) => buildPigQcRecordFromSheetRow(row, index))
@@ -3100,7 +3205,8 @@ async function saveGraphicsQcToSheets(updates) {
     version: `${appVersion}-service-account`,
     savedCount,
     runtimeDb,
-    poetryPlease
+    poetryPlease,
+    sheetSync
   };
 }
 

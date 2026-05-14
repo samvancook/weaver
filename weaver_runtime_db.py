@@ -154,7 +154,17 @@ def normalize_enum(value: Any, allowed: set[str], default: str) -> str:
     return normalized if normalized in allowed else default
 
 
+def extract_handoff_text(payload: dict[str, Any]) -> str:
+    for key in ("quoteText", "quote_text", "sourceText", "source_text", "text", "excerpt", "correctedExcerpt"):
+        value = str(payload.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
 def row_to_handoff(row: sqlite3.Row) -> dict[str, Any]:
+    source_payload = json.loads(row["source_payload_json"] or "{}")
+    quote_text = extract_handoff_text(source_payload)
     return {
         "graphicsRequestId": str(row["graphics_request_id"] or ""),
         "sourceSystem": str(row["source_system"] or ""),
@@ -173,7 +183,14 @@ def row_to_handoff(row: sqlite3.Row) -> dict[str, Any]:
         "claimedBy": str(row["claimed_by"] or ""),
         "errorMessage": str(row["error_message"] or ""),
         "blockedReason": str(row["blocked_reason"] or ""),
-        "sourcePayload": json.loads(row["source_payload_json"] or "{}"),
+        "sourceSheetRow": source_payload.get("sourceSheetRow") or source_payload.get("source_sheet_row") or source_payload.get("sheetRow") or "",
+        "queueSheetRow": source_payload.get("queueSheetRow") or source_payload.get("sourceSheetRow") or source_payload.get("sheetRow") or "",
+        "author": str(source_payload.get("author") or ""),
+        "poemTitle": str(source_payload.get("poemTitle") or source_payload.get("title") or ""),
+        "bookTitle": str(source_payload.get("bookTitle") or ""),
+        "quoteText": quote_text,
+        "text": quote_text,
+        "sourcePayload": source_payload,
         "pigPayload": json.loads(row["pig_payload_json"] or "{}"),
         "qcPayload": json.loads(row["qc_payload_json"] or "{}"),
         "transitionLog": json.loads(row["transition_log_json"] or "[]"),
@@ -230,14 +247,24 @@ def upsert_graphics_handoff_request(connection: sqlite3.Connection, request: dic
         (graphics_request_id,),
     ).fetchone()
     source_payload = request.get("sourcePayload") or request.get("payload") or request
+    has_text = bool(extract_handoff_text(source_payload))
+    handoff_status = normalize_enum(request.get("handoffStatus"), HANDOFF_STATUSES, "requested")
+    pig_status = normalize_enum(request.get("pigStatus"), PIG_STATUSES, "not_started")
+    qc_status = normalize_enum(request.get("qcStatus"), QC_STATUSES, "not_sent")
+    blocked_reason = str(request.get("blockedReason") or "")
+    if not has_text and handoff_status in {"requested", "claimed"}:
+        handoff_status = "blocked"
+        pig_status = "failed"
+        blocked_reason = blocked_reason or "blank_request_text"
     log_json = append_transition_log(
         existing["transition_log_json"] if existing else "[]",
         {
             "at": now,
             "event": "request_upserted",
-            "handoffStatus": request.get("handoffStatus") or "requested",
-            "pigStatus": request.get("pigStatus") or "not_started",
-            "qcStatus": request.get("qcStatus") or "not_sent",
+            "handoffStatus": handoff_status,
+            "pigStatus": pig_status,
+            "qcStatus": qc_status,
+            "blockedReason": blocked_reason,
         },
     )
 
@@ -245,12 +272,16 @@ def upsert_graphics_handoff_request(connection: sqlite3.Connection, request: dic
         """
         INSERT INTO graphics_handoff_ledger (
             graphics_request_id, source_system, source_status, pig_status, handoff_status, qc_status,
-            source_payload_json, transition_log_json, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            source_payload_json, blocked_reason, transition_log_json, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(graphics_request_id) DO UPDATE SET
             source_system = excluded.source_system,
             source_status = excluded.source_status,
+            pig_status = excluded.pig_status,
+            handoff_status = excluded.handoff_status,
+            qc_status = excluded.qc_status,
             source_payload_json = excluded.source_payload_json,
+            blocked_reason = excluded.blocked_reason,
             transition_log_json = excluded.transition_log_json,
             updated_at = excluded.updated_at
         """,
@@ -258,10 +289,11 @@ def upsert_graphics_handoff_request(connection: sqlite3.Connection, request: dic
             graphics_request_id,
             str(request.get("sourceSystem") or "weaver"),
             str(request.get("sourceStatus") or "needs_graphics"),
-            normalize_enum(request.get("pigStatus"), PIG_STATUSES, "not_started"),
-            normalize_enum(request.get("handoffStatus"), HANDOFF_STATUSES, "requested"),
-            normalize_enum(request.get("qcStatus"), QC_STATUSES, "not_sent"),
+            pig_status,
+            handoff_status,
+            qc_status,
             json.dumps(source_payload, ensure_ascii=True, sort_keys=True),
+            blocked_reason,
             log_json,
             existing["created_at"] if existing else now,
             now,
@@ -275,7 +307,7 @@ def claim_graphics_handoff(connection: sqlite3.Connection, graphics_request_id: 
     existing = get_graphics_handoff(connection, graphics_request_id)
     if not existing:
         raise KeyError(f"Unknown graphicsRequestId: {graphics_request_id}")
-    if existing["handoffStatus"] in {"generated", "uploaded", "sent_to_weaver_qc", "approved"}:
+    if existing["handoffStatus"] in {"generated", "exported", "uploaded", "sent_to_weaver_qc", "approved", "blocked", "errored"}:
         return existing
 
     now = utc_now_iso()
@@ -410,7 +442,11 @@ def get_graphics_handoff_queue(connection: sqlite3.Connection, limit: int = 100)
         """,
         (max(1, min(int(limit or 100), 500)),),
     ).fetchall()
-    return [row_to_handoff(row) for row in rows]
+    return [
+        record
+        for record in (row_to_handoff(row) for row in rows)
+        if record["quoteText"].strip()
+    ]
 
 
 def replace_graphics_request_items(connection: sqlite3.Connection, graphics_request_id: str, items: list[dict[str, Any]]) -> None:

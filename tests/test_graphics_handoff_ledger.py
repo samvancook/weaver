@@ -39,6 +39,7 @@ def seed_request(connection: sqlite3.Connection, request_id: str = "weaver:row-2
                 "sourceSheetRow": 2130,
                 "bookTitle": "Test Book",
                 "poemTitle": "Test Poem",
+                "quoteText": "Test quote",
             },
         },
     )
@@ -206,6 +207,7 @@ class GraphicsHandoffLedgerTest(unittest.TestCase):
             for request_id, completion_id in [
                 ("weaver:revision", "pig-revision"),
                 ("weaver:final", "pig-final"),
+                ("weaver:mismatch", "pig-mismatch"),
             ]:
                 upsert_graphics_request(
                     connection,
@@ -255,18 +257,106 @@ class GraphicsHandoffLedgerTest(unittest.TestCase):
                             "qcDecision": "reject",
                             "rejectReason": "final_reject",
                         },
+                        {
+                            "storageTarget": "pig_sheet",
+                            "graphicsRequestId": "weaver:mismatch",
+                            "pigCompletionId": "pig-mismatch",
+                            "qcDecision": "reject",
+                            "rejectReason": "mismatched_graphic",
+                        },
                     ]
                 },
             )
             queue_ids = {record["graphicsRequestId"] for record in get_graphics_handoff_queue(connection)}
             revision = get_graphics_handoff(connection, "weaver:revision")
             final = get_graphics_handoff(connection, "weaver:final")
+            mismatch = get_graphics_handoff(connection, "weaver:mismatch")
 
         self.assertIn("weaver:revision", queue_ids)
         self.assertNotIn("weaver:final", queue_ids)
+        self.assertNotIn("weaver:mismatch", queue_ids)
         self.assertEqual(revision["qcStatus"], "needs_revision")
         self.assertEqual(revision["pigStatus"], "not_started")
         self.assertEqual(final["qcStatus"], "rejected")
+        self.assertEqual(mismatch["qcStatus"], "rejected")
+
+    def test_qc_approve_removes_request_from_queue(self):
+        with memory_db() as connection:
+            upsert_graphics_request(
+                connection,
+                {
+                    "id": "weaver:approve",
+                    "book_title": "Test Book",
+                    "poem_title": "Test Poem",
+                    "author": "Test Author",
+                    "quote_text": "Test quote",
+                },
+            )
+            seed_request(connection, "weaver:approve")
+            insert_graphics_completion(
+                connection,
+                {
+                    "id": "pig-approve",
+                    "graphics_request_id": "weaver:approve",
+                    "asset_url": "https://drive.google.com/file/d/abc/view",
+                },
+            )
+            update_graphics_handoff(
+                connection,
+                "weaver:approve",
+                {
+                    "handoffStatus": "sent_to_weaver_qc",
+                    "pigStatus": "uploaded",
+                    "qcStatus": "pending",
+                    "assetUrl": "https://drive.google.com/file/d/abc/view",
+                },
+            )
+
+            sync_qc_reviews(
+                connection,
+                {
+                    "reviews": [
+                        {
+                            "storageTarget": "pig_sheet",
+                            "graphicsRequestId": "weaver:approve",
+                            "pigCompletionId": "pig-approve",
+                            "qcDecision": "approve",
+                        }
+                    ]
+                },
+            )
+            queue_ids = {record["graphicsRequestId"] for record in get_graphics_handoff_queue(connection)}
+            approved = get_graphics_handoff(connection, "weaver:approve")
+
+        self.assertNotIn("weaver:approve", queue_ids)
+        self.assertEqual(approved["handoffStatus"], "approved")
+        self.assertEqual(approved["qcStatus"], "approved")
+        self.assertTrue(approved["approvedAt"])
+
+    def test_blank_request_text_never_appears_in_handoff_queue(self):
+        with memory_db() as connection:
+            record = upsert_graphics_handoff_request(
+                connection,
+                {
+                    "graphicsRequestId": "weaver:row-3",
+                    "sourceSystem": "weaver",
+                    "sourceStatus": "needs_graphics",
+                    "sourcePayload": {
+                        "sourceSheetRow": 3,
+                        "bookTitle": "Blank Book",
+                        "poemTitle": "Blank Poem",
+                        "quoteText": "",
+                    },
+                },
+            )
+            queue_ids = {item["graphicsRequestId"] for item in get_graphics_handoff_queue(connection)}
+            claimed = claim_graphics_handoff(connection, "weaver:row-3", "pig-worker")
+
+        self.assertEqual(record["handoffStatus"], "blocked")
+        self.assertEqual(record["pigStatus"], "failed")
+        self.assertEqual(record["blockedReason"], "blank_request_text")
+        self.assertNotIn("weaver:row-3", queue_ids)
+        self.assertEqual(claimed["handoffStatus"], "blocked")
 
 
 if __name__ == "__main__":
