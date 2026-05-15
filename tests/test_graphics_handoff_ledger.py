@@ -9,15 +9,17 @@ sys.path.insert(0, str(ROOT))
 from weaver_runtime_db import (  # noqa: E402
     claim_graphics_handoff,
     ensure_runtime_schema,
+    get_excerpt_handoff,
     get_graphics_handoff,
     get_graphics_handoff_queue,
     insert_graphics_completion,
     insert_graphics_qc_review,
     update_graphics_handoff,
+    upsert_excerpt_handoff,
     upsert_graphics_handoff_request,
     upsert_graphics_request,
 )
-from weaver_runtime_sync import sync_qc_reviews  # noqa: E402
+from weaver_runtime_sync import sync_excerpt_handoffs, sync_qc_reviews  # noqa: E402
 
 
 def memory_db() -> sqlite3.Connection:
@@ -357,6 +359,67 @@ class GraphicsHandoffLedgerTest(unittest.TestCase):
         self.assertEqual(record["blockedReason"], "blank_request_text")
         self.assertNotIn("weaver:row-3", queue_ids)
         self.assertEqual(claimed["handoffStatus"], "blocked")
+
+    def test_excerpt_handoff_uses_stable_record_id(self):
+        with memory_db() as connection:
+            record = upsert_excerpt_handoff(
+                connection,
+                {
+                    "recordId": "weaver-exc-8722",
+                    "sourceRecordId": "20260514131148-8722",
+                    "author": "Buddy Wakefield",
+                    "bookTitle": "Stunt Water",
+                    "poemTitle": "Flockprinter",
+                    "excerpt": "Even before we met.",
+                    "bookShortener": "SWTWOB",
+                    "handoffStatus": "queued",
+                },
+            )
+            again = upsert_excerpt_handoff(
+                connection,
+                {
+                    "recordId": "weaver-exc-8722",
+                    "sourceRecordId": "20260514131148-8722",
+                    "author": "Buddy Wakefield",
+                    "bookTitle": "Stunt Water",
+                    "poemTitle": "Flockprinter",
+                    "excerpt": "Even before we met.",
+                    "handoffStatus": "sent",
+                },
+            )
+            count = connection.execute("SELECT COUNT(*) FROM excerpt_handoff_ledger").fetchone()[0]
+
+        self.assertEqual(count, 1)
+        self.assertEqual(record["recordId"], "weaver-exc-8722")
+        self.assertEqual(again["handoffStatus"], "sent")
+
+    def test_excerpt_handoff_sync_roundtrip(self):
+        with memory_db() as connection:
+            sync_excerpt_handoffs(
+                connection,
+                {
+                    "handoff": {
+                        "recordId": "weaver-exc-row-77",
+                        "contentType": "EXC",
+                        "sourceSystem": "weaver",
+                        "sourceRecordId": "weaver:row-77",
+                        "author": "Gigi Bella",
+                        "bookTitle": "Without the Frills",
+                        "poemTitle": "the ikea poem",
+                        "excerpt": "only as long as i remember",
+                        "approvedAt": "2026-05-15T10:00:00Z",
+                        "payload": {"sourceRow": 77},
+                    }
+                },
+            )
+            record = get_excerpt_handoff(connection, "weaver-exc-row-77")
+
+        self.assertIsNotNone(record)
+        assert record is not None
+        self.assertEqual(record["contentType"], "EXC")
+        self.assertEqual(record["sourceRecordId"], "weaver:row-77")
+        self.assertEqual(record["poemTitle"], "the ikea poem")
+        self.assertEqual(record["payload"], {"sourceRow": 77})
 
 
 if __name__ == "__main__":

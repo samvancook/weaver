@@ -639,6 +639,10 @@ Plan:
   - release catalog / season context
 - near-term: keep reading book shorteners from publishing-order / catalog sources
 - long-term: move book shortener authority into a Weaver-owned metadata source so import/export logic is not depending on scattered spreadsheets
+- excerpt gathering follow-up:
+  - for EPUB-backed books, consider poem-title lists in table-of-contents order instead of alphabetical order
+  - keep title finding easy with typeahead filtering as the user types
+  - keep non-EPUB / publishing-order books clearly in manual-entry mode so the UI does not imply EPUB navigation is available
 - Drive import matching should prefer this order of confidence:
   1. poem title
   2. book shortener
@@ -739,9 +743,11 @@ Build this as a standalone internal tool first, but keep the stack compatible wi
 
 ### Now
 
+- confirm exactly which excerpts from the old collection system successfully made it into Weaver’s live pipeline, and run narrow reconciliation/backfill passes for any missing books or batches
 - finish the mismatched graphic pairing lane so QC-rejected mismatch records have a dedicated place in Weaver instead of disappearing into notes only
 - continue the runtime DB cutover for graphics QC and Poetry Please handoff state so sheet columns are no longer the only operational truth
 - improve excerpt gathering so italicized phrases can be captured intentionally instead of relying on ad hoc `*...*` workarounds
+- start the EXC handoff path from Weaver to Poetry Please with stable excerpt record IDs, runtime-backed handoff storage, and a later backfill pass for already-approved excerpts
 
 ### Soon
 
@@ -752,6 +758,7 @@ Build this as a standalone internal tool first, but keep the stack compatible wi
 - add an explicit catalog DB sync step from the source EPUB/catalog project into Weaver's `data/formal_catalog.db`, followed by build + deploy, so catalog updates reliably reach the live app
 - complete the `Correct and recreate` rework loop back through P.I.G. with cleaner state visibility
 - expand safe auto-fixes in `Needs correction` for high-confidence metadata and formatting cases, while keeping ambiguous rows quarantined for human review
+- define whether the graphics handoff ledger and the new EXC handoff ledger should stay parallel long-term or merge into one generalized downstream handoff model once both flows are stable
 
 ### Later
 
@@ -760,3 +767,21 @@ Build this as a standalone internal tool first, but keep the stack compatible wi
 - move more spreadsheet-owned workflow state into Weaver-owned storage
 - add release-date weighting and optional quick-win ranking to `QC Sweep` once release metadata is wired into the graphics QC path
 - keep refining Poetry Please downstream visibility and retry/state management
+- consider TOC order instead of alphabetical order for EPUB poem lists, while keeping typeahead filtering so specific titles are still easy to find
+
+## Handoff Ledger Notes
+
+- Weaver now needs two related downstream ledgers:
+  - a graphics handoff ledger for Weaver <-> P.I.G. lifecycle state
+  - an EXC handoff ledger for Weaver -> Poetry Please excerpt delivery
+- In the near term, they should stay parallel:
+  - graphics and EXC have different source events, payloads, and retry semantics
+  - keeping them separate reduces migration risk while both contracts settle
+- In a later pass, we should evaluate whether they want to converge into one generalized downstream handoff model with:
+  - stable record identity
+  - content type (`QI`, `EXC`, later others)
+  - source system / source record id
+  - handoff status
+  - target system
+  - retry / error metadata
+- We should not merge them early just for elegance; the better test is whether the operational states and replay/backfill rules actually align.

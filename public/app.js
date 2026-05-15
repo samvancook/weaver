@@ -1135,6 +1135,7 @@ function updateGatheringCatalogPreviewState() {
 
   if (elements.gatheringViewCatalogPoem) {
     elements.gatheringViewCatalogPoem.disabled = !(hasCatalogBook && bookTitle && poemTitle);
+    elements.gatheringViewCatalogPoem.textContent = hasCatalogBook ? "View EPUB Context" : "EPUB Not Available";
   }
   if (elements.gatheringPrevCatalogPoem) {
     elements.gatheringPrevCatalogPoem.disabled = !(hasCatalogBook && hasIndexedPoem && currentIndex > 0);
@@ -1147,6 +1148,9 @@ function updateGatheringCatalogPreviewState() {
 function setGatheringBookManualMode(bookTitle) {
   populateDatalist(elements.gatheringBookPoemOptions, []);
   currentGatheringBookPoems = [];
+  if (elements.gatheringBookTitle) {
+    elements.gatheringBookTitle.placeholder = "Type poem title manually";
+  }
   if (elements.gatheringBookSourceHint) {
     const cleanedBookTitle = cleanSheetWhitespace(bookTitle);
     const normalizedBook = normalizeBookKey(cleanedBookTitle);
@@ -1207,6 +1211,9 @@ async function handleGatheringBookSelectionChange({ preserveTitle = false } = {}
     return;
   }
 
+  if (elements.gatheringBookTitle) {
+    elements.gatheringBookTitle.placeholder = "Start typing to filter EPUB poem titles";
+  }
   await loadGatheringPoemsForBook(catalogBook.title, { preserveTitle });
 }
 

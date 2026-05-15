@@ -130,6 +130,37 @@ CREATE TABLE IF NOT EXISTS poetry_please_handoffs (
 CREATE INDEX IF NOT EXISTS idx_poetry_please_handoffs_completion
     ON poetry_please_handoffs(graphics_completion_id, handed_off_at DESC);
 
+CREATE TABLE IF NOT EXISTS excerpt_handoff_ledger (
+    record_id TEXT PRIMARY KEY,
+    content_type TEXT NOT NULL DEFAULT 'EXC',
+    source_system TEXT NOT NULL DEFAULT 'weaver',
+    source_record_id TEXT NOT NULL DEFAULT '',
+    author TEXT NOT NULL DEFAULT '',
+    book_title TEXT NOT NULL DEFAULT '',
+    poem_title TEXT NOT NULL DEFAULT '',
+    excerpt_text TEXT NOT NULL DEFAULT '',
+    page_number TEXT NOT NULL DEFAULT '',
+    book_link TEXT NOT NULL DEFAULT '',
+    release_catalog TEXT NOT NULL DEFAULT '',
+    book_shortener TEXT NOT NULL DEFAULT '',
+    drive_link TEXT NOT NULL DEFAULT '',
+    source_url TEXT NOT NULL DEFAULT '',
+    handoff_status TEXT NOT NULL DEFAULT 'queued',
+    handoff_mode TEXT NOT NULL DEFAULT 'auto',
+    approved_at TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT '',
+    handed_off_at TEXT NOT NULL DEFAULT '',
+    poetry_please_item_id TEXT NOT NULL DEFAULT '',
+    error_message TEXT NOT NULL DEFAULT '',
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_excerpt_handoff_ledger_status
+    ON excerpt_handoff_ledger(handoff_status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_excerpt_handoff_ledger_source
+    ON excerpt_handoff_ledger(source_system, source_record_id);
+
 CREATE VIEW IF NOT EXISTS v_latest_graphics_qc_reviews AS
 SELECT review.*
 FROM graphics_qc_reviews AS review

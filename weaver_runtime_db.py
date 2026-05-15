@@ -45,6 +45,7 @@ def get_runtime_db_summary(connection: sqlite3.Connection) -> dict[str, Any]:
         "graphics_handoff_ledger",
         "graphics_qc_reviews",
         "poetry_please_handoffs",
+        "excerpt_handoff_ledger",
     ]
     counts = {
         table: int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
@@ -164,7 +165,10 @@ def extract_handoff_text(payload: dict[str, Any]) -> str:
 
 def row_to_handoff(row: sqlite3.Row) -> dict[str, Any]:
     source_payload = json.loads(row["source_payload_json"] or "{}")
+    nested_source = source_payload.get("source_payload") if isinstance(source_payload.get("source_payload"), dict) else {}
     quote_text = extract_handoff_text(source_payload)
+    if not quote_text and nested_source:
+        quote_text = extract_handoff_text(nested_source)
     return {
         "graphicsRequestId": str(row["graphics_request_id"] or ""),
         "sourceSystem": str(row["source_system"] or ""),
@@ -183,11 +187,11 @@ def row_to_handoff(row: sqlite3.Row) -> dict[str, Any]:
         "claimedBy": str(row["claimed_by"] or ""),
         "errorMessage": str(row["error_message"] or ""),
         "blockedReason": str(row["blocked_reason"] or ""),
-        "sourceSheetRow": source_payload.get("sourceSheetRow") or source_payload.get("source_sheet_row") or source_payload.get("sheetRow") or "",
-        "queueSheetRow": source_payload.get("queueSheetRow") or source_payload.get("sourceSheetRow") or source_payload.get("sheetRow") or "",
-        "author": str(source_payload.get("author") or ""),
-        "poemTitle": str(source_payload.get("poemTitle") or source_payload.get("title") or ""),
-        "bookTitle": str(source_payload.get("bookTitle") or ""),
+        "sourceSheetRow": source_payload.get("sourceSheetRow") or source_payload.get("source_sheet_row") or source_payload.get("sheetRow") or nested_source.get("sourceSheetRow") or nested_source.get("source_sheet_row") or nested_source.get("sheetRow") or "",
+        "queueSheetRow": source_payload.get("queueSheetRow") or source_payload.get("sourceSheetRow") or source_payload.get("sheetRow") or nested_source.get("queueSheetRow") or nested_source.get("sourceSheetRow") or nested_source.get("sheetRow") or "",
+        "author": str(source_payload.get("author") or source_payload.get("author_name") or nested_source.get("author") or nested_source.get("author_name") or ""),
+        "poemTitle": str(source_payload.get("poemTitle") or source_payload.get("title") or source_payload.get("poem_title") or nested_source.get("poemTitle") or nested_source.get("title") or nested_source.get("poem_title") or ""),
+        "bookTitle": str(source_payload.get("bookTitle") or source_payload.get("book_title") or nested_source.get("bookTitle") or nested_source.get("book_title") or ""),
         "quoteText": quote_text,
         "text": quote_text,
         "sourcePayload": source_payload,
@@ -569,6 +573,130 @@ def insert_poetry_please_handoff(connection: sqlite3.Connection, handoff: dict[s
     )
     connection.commit()
     return int(cursor.lastrowid)
+
+
+def row_to_excerpt_handoff(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "recordId": str(row["record_id"] or ""),
+        "contentType": str(row["content_type"] or ""),
+        "sourceSystem": str(row["source_system"] or ""),
+        "sourceRecordId": str(row["source_record_id"] or ""),
+        "author": str(row["author"] or ""),
+        "bookTitle": str(row["book_title"] or ""),
+        "poemTitle": str(row["poem_title"] or ""),
+        "excerpt": str(row["excerpt_text"] or ""),
+        "pageNumber": str(row["page_number"] or ""),
+        "bookLink": str(row["book_link"] or ""),
+        "releaseCatalog": str(row["release_catalog"] or ""),
+        "bookShortener": str(row["book_shortener"] or ""),
+        "driveLink": str(row["drive_link"] or ""),
+        "sourceUrl": str(row["source_url"] or ""),
+        "handoffStatus": str(row["handoff_status"] or ""),
+        "handoffMode": str(row["handoff_mode"] or ""),
+        "approvedAt": str(row["approved_at"] or ""),
+        "updatedAt": str(row["updated_at"] or ""),
+        "handedOffAt": str(row["handed_off_at"] or ""),
+        "poetryPleaseItemId": str(row["poetry_please_item_id"] or ""),
+        "errorMessage": str(row["error_message"] or ""),
+        "payload": json.loads(row["payload_json"] or "{}"),
+        "createdAt": str(row["created_at"] or ""),
+    }
+
+
+def upsert_excerpt_handoff(connection: sqlite3.Connection, handoff: dict[str, Any]) -> dict[str, Any]:
+    record_id = str(handoff.get("recordId") or "").strip()
+    if not record_id:
+        raise ValueError("recordId is required")
+
+    existing = connection.execute(
+        "SELECT created_at FROM excerpt_handoff_ledger WHERE record_id = ?",
+        (record_id,),
+    ).fetchone()
+    created_at = str(existing["created_at"] or "") if existing else utc_now_iso()
+    updated_at = str(handoff.get("updatedAt") or utc_now_iso())
+
+    connection.execute(
+        """
+        INSERT INTO excerpt_handoff_ledger (
+            record_id, content_type, source_system, source_record_id, author, book_title, poem_title,
+            excerpt_text, page_number, book_link, release_catalog, book_shortener, drive_link, source_url,
+            handoff_status, handoff_mode, approved_at, updated_at, handed_off_at, poetry_please_item_id,
+            error_message, payload_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(record_id) DO UPDATE SET
+            content_type = excluded.content_type,
+            source_system = excluded.source_system,
+            source_record_id = excluded.source_record_id,
+            author = excluded.author,
+            book_title = excluded.book_title,
+            poem_title = excluded.poem_title,
+            excerpt_text = excluded.excerpt_text,
+            page_number = excluded.page_number,
+            book_link = excluded.book_link,
+            release_catalog = excluded.release_catalog,
+            book_shortener = excluded.book_shortener,
+            drive_link = excluded.drive_link,
+            source_url = excluded.source_url,
+            handoff_status = excluded.handoff_status,
+            handoff_mode = excluded.handoff_mode,
+            approved_at = excluded.approved_at,
+            updated_at = excluded.updated_at,
+            handed_off_at = excluded.handed_off_at,
+            poetry_please_item_id = excluded.poetry_please_item_id,
+            error_message = excluded.error_message,
+            payload_json = excluded.payload_json
+        """,
+        (
+            record_id,
+            str(handoff.get("contentType") or "EXC"),
+            str(handoff.get("sourceSystem") or "weaver"),
+            str(handoff.get("sourceRecordId") or ""),
+            str(handoff.get("author") or ""),
+            str(handoff.get("bookTitle") or ""),
+            str(handoff.get("poemTitle") or ""),
+            str(handoff.get("excerpt") or handoff.get("quoteText") or ""),
+            str(handoff.get("pageNumber") or ""),
+            str(handoff.get("bookLink") or ""),
+            str(handoff.get("releaseCatalog") or ""),
+            str(handoff.get("bookShortener") or ""),
+            str(handoff.get("driveLink") or ""),
+            str(handoff.get("sourceUrl") or ""),
+            str(handoff.get("handoffStatus") or "queued"),
+            str(handoff.get("handoffMode") or "auto"),
+            str(handoff.get("approvedAt") or ""),
+            updated_at,
+            str(handoff.get("handedOffAt") or ""),
+            str(handoff.get("poetryPleaseItemId") or ""),
+            str(handoff.get("errorMessage") or ""),
+            json.dumps(handoff.get("payload") or {}, ensure_ascii=True, sort_keys=True),
+            created_at,
+        ),
+    )
+    connection.commit()
+    return get_excerpt_handoff(connection, record_id) or {}
+
+
+def get_excerpt_handoff(connection: sqlite3.Connection, record_id: str) -> dict[str, Any] | None:
+    row = connection.execute(
+        "SELECT * FROM excerpt_handoff_ledger WHERE record_id = ?",
+        (record_id,),
+    ).fetchone()
+    return row_to_excerpt_handoff(row) if row else None
+
+
+def get_excerpt_handoffs(connection: sqlite3.Connection, record_ids: list[str] | None = None) -> list[dict[str, Any]]:
+    params: list[Any] = []
+    sql = "SELECT * FROM excerpt_handoff_ledger"
+    if record_ids:
+        ids = [str(value or "").strip() for value in record_ids if str(value or "").strip()]
+        if not ids:
+            return []
+        placeholders = ",".join("?" for _ in ids)
+        sql += f" WHERE record_id IN ({placeholders})"
+        params.extend(ids)
+    sql += " ORDER BY updated_at DESC, created_at DESC"
+    rows = connection.execute(sql, params).fetchall()
+    return [row_to_excerpt_handoff(row) for row in rows]
 
 
 def get_latest_graphics_qc_reviews(

@@ -9,6 +9,7 @@ from weaver_runtime_db import (
     connect_runtime_db,
     ensure_runtime_schema,
     claim_graphics_handoff,
+    get_excerpt_handoffs,
     get_graphics_handoff,
     get_graphics_handoffs,
     get_graphics_handoff_queue,
@@ -18,6 +19,7 @@ from weaver_runtime_db import (
     insert_graphics_qc_review,
     insert_poetry_please_handoff,
     replace_graphics_request_items,
+    upsert_excerpt_handoff,
     update_graphics_handoff,
     upsert_graphics_handoff_request,
     upsert_graphics_request,
@@ -193,6 +195,22 @@ def sync_poetry_please_handoffs(connection, payload: dict[str, Any]) -> dict[str
     }
 
 
+def sync_excerpt_handoffs(connection, payload: dict[str, Any]) -> dict[str, Any]:
+    handoffs = payload.get("handoffs") or []
+    if payload.get("handoff"):
+        handoffs = [payload["handoff"]]
+    records = [upsert_excerpt_handoff(connection, handoff) for handoff in handoffs]
+    return {"ok": True, "records": records, "count": len(records)}
+
+
+def fetch_excerpt_handoffs(connection, payload: dict[str, Any]) -> dict[str, Any]:
+    record_ids = payload.get("recordIds") or []
+    return {
+        "ok": True,
+        "records": get_excerpt_handoffs(connection, record_ids),
+    }
+
+
 def fetch_graphics_state(connection, payload: dict[str, Any]) -> dict[str, Any]:
     completion_ids = [
         normalize_text(value)
@@ -272,6 +290,10 @@ def main() -> int:
             result = sync_qc_reviews(connection, payload)
         elif action == "insert_poetry_please_handoffs":
             result = sync_poetry_please_handoffs(connection, payload)
+        elif action == "upsert_excerpt_handoffs":
+            result = sync_excerpt_handoffs(connection, payload)
+        elif action == "get_excerpt_handoffs":
+            result = fetch_excerpt_handoffs(connection, payload)
         elif action == "get_graphics_state":
             result = fetch_graphics_state(connection, payload)
         elif action == "upsert_handoff_requests":
