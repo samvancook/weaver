@@ -1089,7 +1089,7 @@ async function loadGatheringOptions({ force = false } = {}) {
   const publishingStatusNote = data.publishingBooksError
     ? " Publishing-order titles are temporarily unavailable until that sheet is shared with Weaver."
     : "";
-  setStatus(`Loaded ${data.authors?.length || 0} legacy author suggestions, ${currentIntakeLegacyBooks.length} legacy book suggestions, ${currentIntakePublishingBooks.length} publishing-order books, and ${currentIntakeCatalogBooks.length} EPUB-backed catalog books for intake.${publishingStatusNote}`);
+  setStatus(`Loaded ${data.authors?.length || 0} legacy author suggestions, ${currentIntakeLegacyBooks.length} legacy book suggestions, ${currentIntakePublishingBooks.length} publishing-order books, and ${currentIntakeCatalogBooks.length} catalog-backed books for intake.${publishingStatusNote}`);
 }
 
 async function loadGatheringPoemsForBook(bookTitle, { preserveTitle = false } = {}) {
@@ -1098,7 +1098,7 @@ async function loadGatheringPoemsForBook(bookTitle, { preserveTitle = false } = 
     populateDatalist(elements.gatheringBookPoemOptions, []);
     currentGatheringBookPoems = [];
     if (elements.gatheringBookSourceHint) {
-      elements.gatheringBookSourceHint.textContent = "Select a book to load poem titles from the catalog/EPUB source, or keep going manually for non-EPUB titles.";
+      elements.gatheringBookSourceHint.textContent = "Select a book to load poem titles from a catalog-backed source, or keep going manually when no catalog source is available.";
     }
     updateGatheringCatalogPreviewState();
     return;
@@ -1135,7 +1135,7 @@ function updateGatheringCatalogPreviewState() {
 
   if (elements.gatheringViewCatalogPoem) {
     elements.gatheringViewCatalogPoem.disabled = !(hasCatalogBook && bookTitle && poemTitle);
-    elements.gatheringViewCatalogPoem.textContent = hasCatalogBook ? "View EPUB Context" : "EPUB Not Available";
+    elements.gatheringViewCatalogPoem.textContent = hasCatalogBook ? "View Catalog Context" : "Catalog Context Unavailable";
   }
   if (elements.gatheringPrevCatalogPoem) {
     elements.gatheringPrevCatalogPoem.disabled = !(hasCatalogBook && hasIndexedPoem && currentIndex > 0);
@@ -1161,13 +1161,13 @@ function setGatheringBookManualMode(bookTitle) {
     }
     if (publishingBook) {
       const catalogLabel = publishingBook.releaseCatalog || "Publishing order";
-      elements.gatheringBookSourceHint.textContent = `${cleanedBookTitle} is coming from the publishing-order sheet (${catalogLabel}) and does not have EPUB support yet. Author is prefilled when available; enter the poem title manually.`;
+      elements.gatheringBookSourceHint.textContent = `${cleanedBookTitle} is coming from the publishing-order sheet (${catalogLabel}) and does not have a readable catalog source in Weaver yet. Author is prefilled when available; enter the poem title manually.`;
     } else if (cleanedBookTitle && isLegacySuggested) {
-      elements.gatheringBookSourceHint.textContent = `${cleanedBookTitle} is available from the older intake suggestions, but not from an EPUB-backed catalog source yet. Enter the poem title and author manually.`;
+      elements.gatheringBookSourceHint.textContent = `${cleanedBookTitle} is available from the older intake suggestions, but not from a readable catalog-backed source yet. Enter the poem title and author manually.`;
     } else if (cleanedBookTitle) {
-      elements.gatheringBookSourceHint.textContent = `${cleanedBookTitle} is not EPUB-backed in Weaver yet. You can still enter the author, poem title, and quote manually.`;
+      elements.gatheringBookSourceHint.textContent = `${cleanedBookTitle} is not catalog-backed in Weaver yet. You can still enter the author, poem title, and quote manually.`;
     } else {
-      elements.gatheringBookSourceHint.textContent = "Select a book to load poem titles from the catalog/EPUB source, or keep going manually for non-EPUB titles.";
+      elements.gatheringBookSourceHint.textContent = "Select a book to load poem titles from a catalog-backed source, or keep going manually when no catalog source is available.";
     }
   }
   if (elements.gatheringViewCatalogPoem) {
@@ -1212,7 +1212,7 @@ async function handleGatheringBookSelectionChange({ preserveTitle = false } = {}
   }
 
   if (elements.gatheringBookTitle) {
-    elements.gatheringBookTitle.placeholder = "Start typing to filter EPUB poem titles";
+    elements.gatheringBookTitle.placeholder = "Start typing to filter catalog poem titles";
   }
   await loadGatheringPoemsForBook(catalogBook.title, { preserveTitle });
 }
@@ -1392,7 +1392,7 @@ function openGatheringCatalogPoem() {
   const poemTitle = elements.gatheringBookTitle?.value.trim() || "";
   const excerptText = elements.gatheringBookQuote?.value.trim() || "";
   if (!bookTitle || !poemTitle) {
-    setStatus("Choose a catalog-backed book and poem before opening EPUB context.");
+    setStatus("Choose a catalog-backed book and poem before opening catalog context.");
     return;
   }
   const url = new URL("/catalog-poem", window.location.origin);
@@ -1687,6 +1687,10 @@ function buildReviewSavePayload(update) {
   return {
     sourceRow: update.sourceRow,
     recordId: update.recordId,
+    author: update.author,
+    bookTitle: update.bookTitle,
+    poemTitle: update.title,
+    excerptText: update.excerptText,
     approval: update.reviewDecision,
     reviewDecision: update.reviewDecision,
     correctionNote: update.correctionNote,
@@ -1715,6 +1719,10 @@ function buildBatchReviewSavePayload(update) {
   return {
     sourceRow: update.sourceRow,
     recordId: update.recordId,
+    author: update.author,
+    bookTitle: update.bookTitle,
+    poemTitle: update.title,
+    excerptText: update.excerptText,
     approval: update.reviewDecision,
     reviewDecision: update.reviewDecision,
     correctionNote: update.correctionNote,

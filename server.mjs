@@ -2961,10 +2961,12 @@ async function saveReviewsToSheets(updates) {
   }
 
   await batchUpdateSheetValuesServer(requests);
+  const excerptHandoffs = await syncAcceptedExcerptHandoffs(updates);
   return {
     ok: true,
     version: `${appVersion}-service-account`,
-    savedCount: updates.length
+    savedCount: updates.length,
+    excerptHandoffs
   };
 }
 
@@ -2975,12 +2977,74 @@ async function saveSingleReviewToSheets(update) {
   }
 
   await batchUpdateSheetValuesServer(requests);
+  const excerptHandoffs = await syncAcceptedExcerptHandoffs([update]);
   return {
     ok: true,
     version: `${appVersion}-service-account`,
     sourceRow: parseInt(update.sourceRow, 10) || 0,
-    recordId: String(update.recordId || "")
+    recordId: String(update.recordId || ""),
+    excerptHandoffs
   };
+}
+
+function buildAcceptedExcerptHandoff(update) {
+  const reviewDecision = normalizeReviewDecisionValue(update?.reviewDecision || update?.approval);
+  if (reviewDecision !== "ACCEPT") {
+    return null;
+  }
+
+  const sourceRow = parseInt(update?.sourceRow, 10);
+  const sourceRecordId = String(update?.recordId || "").trim() || (sourceRow ? `weaver:row-${sourceRow}` : "");
+  const excerptText = String(update?.excerptText || "").trim();
+  if (!sourceRecordId || !excerptText) {
+    return null;
+  }
+
+  const now = new Date().toISOString();
+  return {
+    recordId: `weaver-exc-${sourceRecordId}`,
+    contentType: "EXC",
+    sourceSystem: "weaver",
+    sourceRecordId,
+    author: String(update?.author || "").trim(),
+    bookTitle: String(update?.bookTitle || "").trim(),
+    poemTitle: String(update?.poemTitle || update?.title || "").trim(),
+    excerpt: excerptText,
+    handoffStatus: "queued",
+    handoffMode: "auto",
+    approvedAt: now,
+    updatedAt: now,
+    payload: {
+      sourceRow: sourceRow || 0,
+      sourceRecordId,
+      reviewDecision: "accept"
+    }
+  };
+}
+
+async function syncAcceptedExcerptHandoffs(updates) {
+  const handoffs = (Array.isArray(updates) ? updates : [])
+    .map(buildAcceptedExcerptHandoff)
+    .filter(Boolean);
+  if (!handoffs.length) {
+    return { ok: true, savedCount: 0, records: [] };
+  }
+
+  try {
+    const result = await syncWeaverRuntimeDb("upsert_excerpt_handoffs", { handoffs });
+    return {
+      ok: Boolean(result?.ok),
+      savedCount: Array.isArray(result?.records) ? result.records.length : handoffs.length,
+      records: Array.isArray(result?.records) ? result.records : []
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error.message,
+      savedCount: 0,
+      records: []
+    };
+  }
 }
 
 function normalizeGraphicsQcDecision(value) {
