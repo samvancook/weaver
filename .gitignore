@@ -40,3 +40,10 @@ data/peeled_off/
 data/poetry_please_qi_*.json
 data/qi_graphic_*.csv
 data/qi_queue_cleanup*.csv
+data/exports/
+data/reports/
+data/missing_workbook_records.csv
+data/missing_workbook_records.json
+data/old_tool_coverage_report.json
+data/old_tool_archive.db
+archive/scripts/data/
