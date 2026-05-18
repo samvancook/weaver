@@ -121,6 +121,27 @@ const PIG_COMPLETION_COLUMNS = {
   poetryPleaseUpdatedAt: 18,
   poetryPleaseNote: 19
 };
+const QUEUE_CACHE_TTL_MS = 5000;
+const queueSnapshotCache = new Map();
+
+async function getCachedQueueSnapshot(key, loader, ttlMs = QUEUE_CACHE_TTL_MS) {
+  const now = Date.now();
+  const current = queueSnapshotCache.get(key);
+  if (current && current.expiresAt > now) {
+    return current.value;
+  }
+
+  const value = await loader();
+  queueSnapshotCache.set(key, {
+    value,
+    expiresAt: now + ttlMs
+  });
+  return value;
+}
+
+function invalidateQueueSnapshots() {
+  queueSnapshotCache.clear();
+}
 const PIG_COMPLETION_HEADERS = [[
   "completion_id",
   "request_id",
@@ -2151,18 +2172,20 @@ async function appendExcerptGatheringRow(payload = {}) {
 }
 
 async function getPendingRecordsFromSheets() {
-  const range = `'${sourceSheetName.replace(/'/g, "''")}'!A2:BK`;
-  const values = await fetchSheetValuesServer(range);
-  const canonicalBookAuthorMap = await getCanonicalGraphicsBookAuthorMap().catch(() => new Map());
-  const records = values
-    .map((row, index) => buildPendingRecordFromSheetRow(row, index, canonicalBookAuthorMap))
-    .filter(Boolean);
+  return getCachedQueueSnapshot("pending-records", async () => {
+    const range = `'${sourceSheetName.replace(/'/g, "''")}'!A2:BK`;
+    const values = await fetchSheetValuesServer(range);
+    const canonicalBookAuthorMap = await getCanonicalGraphicsBookAuthorMap().catch(() => new Map());
+    const records = values
+      .map((row, index) => buildPendingRecordFromSheetRow(row, index, canonicalBookAuthorMap))
+      .filter(Boolean);
 
-  return {
-    ok: true,
-    version: `${appVersion}-service-account`,
-    records
-  };
+    return {
+      ok: true,
+      version: `${appVersion}-service-account`,
+      records
+    };
+  });
 }
 
 async function getPendingExcerptsForBookFromSheets(bookTitle) {
@@ -2509,29 +2532,31 @@ function buildCleanupSheetGraphicsRecords(values = [], qcState = new Map(), cano
 }
 
 async function getPendingGraphicsQcRecords() {
-  const range = `'${graphicsCleanupSheetName.replace(/'/g, "''")}'!A2:I`;
-  const [values, qcState, pigRows, canonicalBookAuthorMap] = await Promise.all([
-    fetchSheetValuesServer(range),
-    getGraphicsQcStateMapFromSheets(),
-    readPigCompletedGraphicsRows(),
-    getCanonicalGraphicsBookAuthorMap()
-  ]);
-  const runtimeState = await getRuntimeGraphicsState(pigRows.map(row => row[PIG_COMPLETION_COLUMNS.completionId - 1]));
-  const handoffState = await getRuntimeGraphicsHandoffState(
-    pigRows.map(row => cleanSheetWhitespace(row[PIG_COMPLETION_COLUMNS.requestId - 1]))
-  );
+  return getCachedQueueSnapshot("graphics-qc-pending", async () => {
+    const range = `'${graphicsCleanupSheetName.replace(/'/g, "''")}'!A2:I`;
+    const [values, qcState, pigRows, canonicalBookAuthorMap] = await Promise.all([
+      fetchSheetValuesServer(range),
+      getGraphicsQcStateMapFromSheets(),
+      readPigCompletedGraphicsRows(),
+      getCanonicalGraphicsBookAuthorMap()
+    ]);
+    const runtimeState = await getRuntimeGraphicsState(pigRows.map(row => row[PIG_COMPLETION_COLUMNS.completionId - 1]));
+    const handoffState = await getRuntimeGraphicsHandoffState(
+      pigRows.map(row => cleanSheetWhitespace(row[PIG_COMPLETION_COLUMNS.requestId - 1]))
+    );
 
-  const cleanupRecords = buildCleanupSheetGraphicsRecords(values, qcState, canonicalBookAuthorMap);
-  const pigRecords = pigRows
-    .map((row, index) => overlayRuntimeHandoffState(
-      overlayRuntimeGraphicsState(buildPigQcRecordFromSheetRow(row, index, canonicalBookAuthorMap), runtimeState),
-      handoffState
-    ))
-    .filter(Boolean);
+    const cleanupRecords = buildCleanupSheetGraphicsRecords(values, qcState, canonicalBookAuthorMap);
+    const pigRecords = pigRows
+      .map((row, index) => overlayRuntimeHandoffState(
+        overlayRuntimeGraphicsState(buildPigQcRecordFromSheetRow(row, index, canonicalBookAuthorMap), runtimeState),
+        handoffState
+      ))
+      .filter(Boolean);
 
-  return collapsePendingGraphicsQcRecords(
-    mergeRecordCollections([cleanupRecords, pigRecords])
-  ).filter(record => !hasResolvedGraphicsQcDecision(record));
+    return collapsePendingGraphicsQcRecords(
+      mergeRecordCollections([cleanupRecords, pigRecords])
+    ).filter(record => !hasResolvedGraphicsQcDecision(record));
+  });
 }
 
 function buildGraphicsReworkRequestId(completion) {
@@ -2624,27 +2649,29 @@ async function getPigReworkRequests(filterMode = "all") {
 }
 
 async function getPigMismatchRecords(filterMode = "all") {
-  const rows = await readPigCompletedGraphicsRows();
-  const canonicalBookAuthorMap = await getCanonicalGraphicsBookAuthorMap();
-  const runtimeState = await getRuntimeGraphicsState(rows.map(row => row[PIG_COMPLETION_COLUMNS.completionId - 1]));
-  const handoffState = await getRuntimeGraphicsHandoffState(
-    rows.map(row => cleanSheetWhitespace(row[PIG_COMPLETION_COLUMNS.requestId - 1]))
-  );
-  let records = rows
-    .map((row, index) => overlayRuntimeHandoffState(
-      overlayRuntimeGraphicsState(buildPigQcRecordFromSheetRow(row, index, canonicalBookAuthorMap), runtimeState),
-      handoffState
-    ))
-    .filter(Boolean)
-    .map(buildGraphicsMismatchRecord)
-    .filter(Boolean);
+  return getCachedQueueSnapshot(`graphics-mismatch:${cleanSheetWhitespace(filterMode).toLowerCase() || "all"}`, async () => {
+    const rows = await readPigCompletedGraphicsRows();
+    const canonicalBookAuthorMap = await getCanonicalGraphicsBookAuthorMap();
+    const runtimeState = await getRuntimeGraphicsState(rows.map(row => row[PIG_COMPLETION_COLUMNS.completionId - 1]));
+    const handoffState = await getRuntimeGraphicsHandoffState(
+      rows.map(row => cleanSheetWhitespace(row[PIG_COMPLETION_COLUMNS.requestId - 1]))
+    );
+    let records = rows
+      .map((row, index) => overlayRuntimeHandoffState(
+        overlayRuntimeGraphicsState(buildPigQcRecordFromSheetRow(row, index, canonicalBookAuthorMap), runtimeState),
+        handoffState
+      ))
+      .filter(Boolean)
+      .map(buildGraphicsMismatchRecord)
+      .filter(Boolean);
 
-  if (cleanSheetWhitespace(filterMode).toLowerCase() === "current_titles") {
-    const allowed = getReviewQueueIncludeSet();
-    records = records.filter(record => allowed.has(normalizeBookKey(record.bookTitle)));
-  }
+    if (cleanSheetWhitespace(filterMode).toLowerCase() === "current_titles") {
+      const allowed = getReviewQueueIncludeSet();
+      records = records.filter(record => allowed.has(normalizeBookKey(record.bookTitle)));
+    }
 
-  return records;
+    return records;
+  });
 }
 
 function buildCompletedRequestLookup(rows = []) {
@@ -2685,67 +2712,70 @@ function buildCompletedRequestLookup(rows = []) {
 }
 
 async function getPigGraphicsRequests(filterMode = "all", { includeCompleted = false } = {}) {
-  const range = `'${graphicsQueueSheetName.replace(/'/g, "''")}'!A2:I`;
-  const [rows, completionRows, reworkRequests, canonicalBookAuthorMap] = await Promise.all([
-    fetchSheetValuesServer(range),
-    readPigCompletedGraphicsRows(),
-    getPigReworkRequests(filterMode),
-    getCanonicalGraphicsBookAuthorMap()
-  ]);
-  const completedLookup = buildCompletedRequestLookup(completionRows);
-  let records = rows
-    .map((row, index) => buildGraphicsRequestRecordFromQueueRow(row, index, canonicalBookAuthorMap))
-    .filter(Boolean)
-    .filter(record => {
-      if (includeCompleted) return true;
-      const requestId = cleanSheetWhitespace(record.graphicsRequestId);
-      const sourceRow = record.queueSheetRow ? String(record.queueSheetRow) : "";
-      const recordId = cleanSheetWhitespace(record.recordId);
-      return requestId
-        && !completedLookup.requestIds.has(requestId)
-        && (!sourceRow || !completedLookup.sourceSheetRows.has(sourceRow))
-        && (!recordId || !completedLookup.sourceRecordIds.has(recordId));
-    });
+  const cacheKey = `graphics-requests:${cleanSheetWhitespace(filterMode).toLowerCase() || "all"}:${includeCompleted ? "with-completed" : "open-only"}`;
+  return getCachedQueueSnapshot(cacheKey, async () => {
+    const range = `'${graphicsQueueSheetName.replace(/'/g, "''")}'!A2:I`;
+    const [rows, completionRows, reworkRequests, canonicalBookAuthorMap] = await Promise.all([
+      fetchSheetValuesServer(range),
+      readPigCompletedGraphicsRows(),
+      getPigReworkRequests(filterMode),
+      getCanonicalGraphicsBookAuthorMap()
+    ]);
+    const completedLookup = buildCompletedRequestLookup(completionRows);
+    let records = rows
+      .map((row, index) => buildGraphicsRequestRecordFromQueueRow(row, index, canonicalBookAuthorMap))
+      .filter(Boolean)
+      .filter(record => {
+        if (includeCompleted) return true;
+        const requestId = cleanSheetWhitespace(record.graphicsRequestId);
+        const sourceRow = record.queueSheetRow ? String(record.queueSheetRow) : "";
+        const recordId = cleanSheetWhitespace(record.recordId);
+        return requestId
+          && !completedLookup.requestIds.has(requestId)
+          && (!sourceRow || !completedLookup.sourceSheetRows.has(sourceRow))
+          && (!recordId || !completedLookup.sourceRecordIds.has(recordId));
+      });
 
-  const queueLedgerRequests = records.map(record => ({
-    graphicsRequestId: record.graphicsRequestId,
-    sourceSystem: "weaver",
-    sourceStatus: record.requestStatus || "open",
-    sourcePayload: {
+    const queueLedgerRequests = records.map(record => ({
       graphicsRequestId: record.graphicsRequestId,
-      queueSheetRow: record.queueSheetRow,
-      recordId: record.recordId,
-      author: record.author,
-      poemTitle: record.poemTitle,
-      bookTitle: record.bookTitle,
-      quoteText: record.quoteText
-    }
-  }));
-  if (queueLedgerRequests.length) {
-    await syncWeaverRuntimeDb("upsert_handoff_requests", { requests: queueLedgerRequests }).catch(() => null);
-    const ledgerByRequestId = await getRuntimeGraphicsHandoffState(
-      queueLedgerRequests.map(request => request.graphicsRequestId)
-    );
-    records = records.filter(record => {
-      const ledger = ledgerByRequestId[cleanSheetWhitespace(record.graphicsRequestId)];
-      if (!ledger) return true;
-      const handoffStatus = cleanSheetWhitespace(ledger.handoffStatus).toLowerCase();
-      const pigStatus = cleanSheetWhitespace(ledger.pigStatus).toLowerCase();
-      const qcStatus = cleanSheetWhitespace(ledger.qcStatus).toLowerCase();
-      return (
-        (handoffStatus === "requested" || handoffStatus === "claimed" || handoffStatus === "rejected")
-        && !["generated", "exported", "uploaded", "failed"].includes(pigStatus)
-        && (qcStatus === "not_sent" || qcStatus === "needs_revision")
+      sourceSystem: "weaver",
+      sourceStatus: record.requestStatus || "open",
+      sourcePayload: {
+        graphicsRequestId: record.graphicsRequestId,
+        queueSheetRow: record.queueSheetRow,
+        recordId: record.recordId,
+        author: record.author,
+        poemTitle: record.poemTitle,
+        bookTitle: record.bookTitle,
+        quoteText: record.quoteText
+      }
+    }));
+    if (queueLedgerRequests.length) {
+      await syncWeaverRuntimeDb("upsert_handoff_requests", { requests: queueLedgerRequests }).catch(() => null);
+      const ledgerByRequestId = await getRuntimeGraphicsHandoffState(
+        queueLedgerRequests.map(request => request.graphicsRequestId)
       );
-    });
-  }
+      records = records.filter(record => {
+        const ledger = ledgerByRequestId[cleanSheetWhitespace(record.graphicsRequestId)];
+        if (!ledger) return true;
+        const handoffStatus = cleanSheetWhitespace(ledger.handoffStatus).toLowerCase();
+        const pigStatus = cleanSheetWhitespace(ledger.pigStatus).toLowerCase();
+        const qcStatus = cleanSheetWhitespace(ledger.qcStatus).toLowerCase();
+        return (
+          (handoffStatus === "requested" || handoffStatus === "claimed" || handoffStatus === "rejected")
+          && !["generated", "exported", "uploaded", "failed"].includes(pigStatus)
+          && (qcStatus === "not_sent" || qcStatus === "needs_revision")
+        );
+      });
+    }
 
-  if (cleanSheetWhitespace(filterMode).toLowerCase() === "current_titles") {
-    const allowed = getReviewQueueIncludeSet();
-    records = records.filter(record => allowed.has(normalizeBookKey(record.bookTitle)));
-  }
+    if (cleanSheetWhitespace(filterMode).toLowerCase() === "current_titles") {
+      const allowed = getReviewQueueIncludeSet();
+      records = records.filter(record => allowed.has(normalizeBookKey(record.bookTitle)));
+    }
 
-  return [...records, ...reworkRequests];
+    return [...records, ...reworkRequests];
+  });
 }
 
 async function getPigGraphicsRequestBooks(filterMode = "all") {
@@ -3689,6 +3719,7 @@ const server = http.createServer(async (req, res) => {
       const body = await readRequestBody(req);
       const parsed = JSON.parse(body || "{}");
       const result = await appendExcerptGatheringRow(parsed);
+      invalidateQueueSnapshots();
       return sendJson(res, 200, result);
     } catch (error) {
       return sendJson(res, 500, {
@@ -3983,6 +4014,7 @@ const server = http.createServer(async (req, res) => {
       const updates = Array.isArray(parsed.updates) ? parsed.updates : [];
 
       const result = await saveReviewsToSheets(updates);
+      if (result?.ok) invalidateQueueSnapshots();
       return sendJson(res, 200, result);
     } catch (error) {
       return sendJson(res, 500, {
@@ -3999,6 +4031,7 @@ const server = http.createServer(async (req, res) => {
       const update = parsed.update && typeof parsed.update === "object" ? parsed.update : {};
 
       const result = await saveSingleReviewToSheets(update);
+      if (result?.ok) invalidateQueueSnapshots();
       return sendJson(res, 200, result);
     } catch (error) {
       return sendJson(res, 500, {
@@ -4015,6 +4048,7 @@ const server = http.createServer(async (req, res) => {
       const updates = Array.isArray(parsed.updates) ? parsed.updates : [];
 
       const result = await saveGraphicsQcToSheets(updates);
+      if (result?.ok) invalidateQueueSnapshots();
       return sendJson(res, 200, result);
     } catch (error) {
       return sendJson(res, 500, {
@@ -4033,6 +4067,7 @@ const server = http.createServer(async (req, res) => {
         : (parsed.completion && typeof parsed.completion === "object" ? [parsed.completion] : []);
 
       const result = await upsertPigCompletedGraphics(completions);
+      if (result?.ok) invalidateQueueSnapshots();
       return sendJson(res, 200, result);
     } catch (error) {
       return sendJson(res, 500, {
