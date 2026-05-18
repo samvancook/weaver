@@ -321,6 +321,96 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
             ON excerpt_entries(normalized_poem_title);
         CREATE INDEX IF NOT EXISTS idx_excerpt_entries_chars
             ON excerpt_entries(character_count);
+
+        CREATE TABLE IF NOT EXISTS raw_import_rows (
+            id INTEGER PRIMARY KEY,
+            source_name TEXT NOT NULL,
+            source_file TEXT NOT NULL,
+            source_row_number INTEGER NOT NULL,
+            record_id TEXT,
+            timestamp_text TEXT,
+            email_address TEXT,
+            request_type TEXT,
+            author TEXT,
+            title TEXT,
+            book_title TEXT,
+            excerpt_text TEXT,
+            excerpt_review_decision TEXT,
+            exclude_from_quote_db TEXT,
+            row_json TEXT NOT NULL,
+            imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(source_file, source_row_number)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_raw_import_rows_record_id
+            ON raw_import_rows(record_id);
+        CREATE INDEX IF NOT EXISTS idx_raw_import_rows_timestamp
+            ON raw_import_rows(timestamp_text);
+        CREATE INDEX IF NOT EXISTS idx_raw_import_rows_author
+            ON raw_import_rows(author);
+
+        CREATE TABLE IF NOT EXISTS raw_excerpt_links (
+            id INTEGER PRIMARY KEY,
+            raw_import_row_id INTEGER NOT NULL UNIQUE REFERENCES raw_import_rows(id) ON DELETE CASCADE,
+            excerpt_entry_id INTEGER NOT NULL REFERENCES excerpt_entries(id) ON DELETE CASCADE,
+            match_type TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_raw_excerpt_links_excerpt_entry
+            ON raw_excerpt_links(excerpt_entry_id);
+
+        CREATE VIEW IF NOT EXISTS v_raw_row_status AS
+        SELECT
+            r.id AS raw_import_row_id,
+            r.source_name,
+            r.source_file,
+            r.source_row_number,
+            r.record_id,
+            r.timestamp_text,
+            r.email_address,
+            r.request_type,
+            r.author,
+            r.title,
+            r.book_title,
+            r.excerpt_text,
+            r.excerpt_review_decision,
+            r.exclude_from_quote_db,
+            CASE
+                WHEN r.excerpt_review_decision = 'ACCEPT' THEN 1
+                ELSE 0
+            END AS is_accepted,
+            CASE
+                WHEN r.excerpt_review_decision = 'REJECT' THEN 1
+                ELSE 0
+            END AS is_rejected,
+            CASE
+                WHEN UPPER(COALESCE(r.exclude_from_quote_db, '')) = 'Y' THEN 1
+                ELSE 0
+            END AS is_excluded,
+            CASE
+                WHEN COALESCE(TRIM(r.excerpt_text), '') != '' THEN 1
+                ELSE 0
+            END AS has_excerpt_text,
+            l.id AS raw_excerpt_link_id,
+            l.match_type,
+            l.excerpt_entry_id,
+            CASE
+                WHEN l.id IS NOT NULL THEN 1
+                ELSE 0
+            END AS is_linked,
+            e.source_id AS excerpt_source_id,
+            e.source_row_number AS excerpt_source_row_number,
+            e.external_id AS excerpt_external_id,
+            e.author AS excerpt_author,
+            e.poem_title AS excerpt_poem_title,
+            e.book_title AS excerpt_book_title,
+            e.excerpt_text AS excerpt_entry_text
+        FROM raw_import_rows r
+        LEFT JOIN raw_excerpt_links l
+            ON l.raw_import_row_id = r.id
+        LEFT JOIN excerpt_entries e
+            ON e.id = l.excerpt_entry_id;
         """
     )
 

@@ -139,6 +139,14 @@ Current direction:
 - keep exact library matches recommendation-only, not auto-selected
 - keep bulk actions out of the current flow for now, but revisit them once the exact-match lane feels reliable
 
+## Now
+
+- confirm exactly which excerpts from the old collection system successfully made it into Weaver’s live pipeline, and run narrow reconciliation/backfill passes for missing books or batches
+- start EXC handoff from Weaver to Poetry Please with stable excerpt IDs, runtime-backed handoff storage, and controlled backfill
+- sync the updated EPUB-backed catalog DB from the poetry catalog workspace into Weaver’s `data/formal_catalog.db` before deploys so live validation reflects current source truth
+- treat `Roads` and `Tooth Gaps in the Archives` mismatches as higher-confidence catalog issues now that their DOCX-backed provisional sources are landing poem-level data
+- keep `Flee` out of poem-parsing expectations for now and plan a chapter-based ingestion path instead
+
 ## Current Workflow Direction
 
 - Weaver remains the review and correction layer

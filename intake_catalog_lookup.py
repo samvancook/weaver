@@ -32,7 +32,7 @@ def get_intake_books() -> dict:
     for row in load_book_status_rows():
         source_format = (row.get("primary_source_format") or "").strip().lower()
         effective_status = (row.get("effective_status") or "").strip().lower()
-        if source_format != "epub":
+        if source_format not in {"epub", "docx"}:
             continue
         if effective_status == "skip_epub":
             continue

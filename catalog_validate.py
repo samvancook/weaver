@@ -13,7 +13,7 @@ from excerpt_library import find_library_excerpt_match
 
 DEFAULT_DB_PATH = Path(__file__).resolve().parent / "data" / "formal_catalog.db"
 LEGACY_DB_PATH = Path("/Users/buttonpublishingone/Desktop/CODEX/Social Media Dev/poetry_catalog/formal_catalog.db")
-DB_PATH = DEFAULT_DB_PATH if DEFAULT_DB_PATH.exists() else LEGACY_DB_PATH
+DB_PATH = LEGACY_DB_PATH if LEGACY_DB_PATH.exists() else DEFAULT_DB_PATH
 
 
 def normalize(text: str | None) -> str:
