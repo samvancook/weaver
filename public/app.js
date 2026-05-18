@@ -111,6 +111,7 @@ let currentIntakeLegacyBooks = [];
 let currentIntakePublishingBooks = [];
 let currentIntakePublishingBooksByKey = new Map();
 let currentGatheringBookPoems = [];
+let currentGatheringCatalogBook = null;
 let googleSheetsTokenClient = null;
 let googleSheetsAccessToken = "";
 let reviewVisibleCount = 1;
@@ -398,12 +399,10 @@ function getReviewBatchSize() {
 }
 
 function normalizeBookKey(text) {
-  return (text || "")
-    .trim()
+  return getIntakeBookBaseTitle(text)
     .replace(/[’‘]/g, "'")
     .replace(/[“”]/g, "\"")
     .replace(/[–—]/g, "-")
-    .replace(/\s+/g, " ")
     .toLowerCase();
 }
 
@@ -1097,6 +1096,7 @@ async function loadGatheringPoemsForBook(bookTitle, { preserveTitle = false } = 
   if (!cleanedBookTitle || !elements.gatheringBookTitle) {
     populateDatalist(elements.gatheringBookPoemOptions, []);
     currentGatheringBookPoems = [];
+    currentGatheringCatalogBook = null;
     if (elements.gatheringBookSourceHint) {
       elements.gatheringBookSourceHint.textContent = "Select a book to load poem titles from a catalog-backed source, or keep going manually when no catalog source is available.";
     }
@@ -1107,6 +1107,11 @@ async function loadGatheringPoemsForBook(bookTitle, { preserveTitle = false } = 
   const previousValue = preserveTitle ? elements.gatheringBookTitle.value.trim() : "";
   const data = await requestReviewApi("/api/intake/catalog/poems", { bookTitle: cleanedBookTitle });
   const poems = Array.isArray(data.poems) ? data.poems : [];
+  currentGatheringCatalogBook = {
+    title: data.bookTitle || cleanedBookTitle,
+    author: data.author || "",
+    primarySourceFormat: data.primarySourceFormat || ""
+  };
   currentGatheringBookPoems = poems;
   populateDatalist(elements.gatheringBookPoemOptions, poems);
   if (previousValue && poems.includes(previousValue)) {
@@ -1129,7 +1134,7 @@ async function loadGatheringPoemsForBook(bookTitle, { preserveTitle = false } = 
 function updateGatheringCatalogPreviewState() {
   const bookTitle = elements.gatheringBookBook?.value.trim() || "";
   const poemTitle = elements.gatheringBookTitle?.value.trim() || "";
-  const hasCatalogBook = !!currentIntakeCatalogBooksByKey.get(normalizeBookKey(bookTitle));
+  const hasCatalogBook = !!currentGatheringCatalogBook || !!currentIntakeCatalogBooksByKey.get(normalizeBookKey(bookTitle));
   const currentIndex = currentGatheringBookPoems.indexOf(poemTitle);
   const hasIndexedPoem = currentIndex >= 0;
 
@@ -1148,6 +1153,7 @@ function updateGatheringCatalogPreviewState() {
 function setGatheringBookManualMode(bookTitle) {
   populateDatalist(elements.gatheringBookPoemOptions, []);
   currentGatheringBookPoems = [];
+  currentGatheringCatalogBook = null;
   if (elements.gatheringBookTitle) {
     elements.gatheringBookTitle.placeholder = "Type poem title manually";
   }
@@ -1205,16 +1211,20 @@ async function handleGatheringBookSelectionChange({ preserveTitle = false } = {}
   }
 
   const catalogBook = currentIntakeCatalogBooksByKey.get(normalizeBookKey(bookTitle));
-  if (!catalogBook) {
-    if (!preserveTitle && elements.gatheringBookTitle) elements.gatheringBookTitle.value = "";
-    setGatheringBookManualMode(bookTitle);
-    return;
-  }
-
+  const lookupTitle = catalogBook?.title || bookTitle;
   if (elements.gatheringBookTitle) {
     elements.gatheringBookTitle.placeholder = "Start typing to filter catalog poem titles";
   }
-  await loadGatheringPoemsForBook(catalogBook.title, { preserveTitle });
+  try {
+    await loadGatheringPoemsForBook(lookupTitle, { preserveTitle });
+    if (currentGatheringBookPoems.length) {
+      return;
+    }
+  } catch (_error) {
+    // Fall through to manual mode if the live catalog lookup fails.
+  }
+  if (!preserveTitle && elements.gatheringBookTitle) elements.gatheringBookTitle.value = "";
+  setGatheringBookManualMode(bookTitle);
 }
 
 function resetGatheringForm() {
@@ -3867,8 +3877,25 @@ function filterChangedUpdates(updates, excerpts) {
     const current = bySourceRow.get(Number(update.sourceRow));
     if (!current) return true;
 
+    const currentExplicitDecision = normalizeDecision(current.excerptReviewDecision);
+    const currentEffectiveDecision = getEffectiveReviewDecision(current);
+    const updateDecision = normalizeDecision(update.reviewDecision);
+
+    // Legacy/backfilled rows can carry approved-for-QI state without an explicit
+    // review decision. In batch mode, "No decision" should leave those rows in
+    // place rather than clearing the implicit approval flag underneath them.
+    if (!updateDecision && !currentExplicitDecision) {
+      return (
+        normalizeCorrectionNote(update.correctionNote) !== normalizeCorrectionNote(current.correctionNote) ||
+        normalizeCorrectionNote(update.correctedAuthor) !== normalizeCorrectionNote(current.correctedAuthor) ||
+        normalizeCorrectionNote(update.correctedTitle) !== normalizeCorrectionNote(current.correctedTitle) ||
+        normalizeCorrectionNote(update.correctedBookTitle) !== normalizeCorrectionNote(current.correctedBookTitle) ||
+        normalizeCorrectionNote(update.correctedExcerpt) !== normalizeCorrectionNote(current.correctedExcerpt)
+      );
+    }
+
     return (
-      normalizeDecision(update.reviewDecision) !== getEffectiveReviewDecision(current) ||
+      updateDecision !== currentEffectiveDecision ||
       normalizeCorrectionNote(update.correctionNote) !== normalizeCorrectionNote(current.correctionNote) ||
       normalizeCorrectionNote(update.correctedAuthor) !== normalizeCorrectionNote(current.correctedAuthor) ||
       normalizeCorrectionNote(update.correctedTitle) !== normalizeCorrectionNote(current.correctedTitle) ||

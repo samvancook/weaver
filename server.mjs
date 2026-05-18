@@ -148,16 +148,40 @@ const GRAPHICS_QC_REJECT_REASON_LABELS = new Map([
   ["final_reject", "Final reject"]
 ]);
 
+function cleanSheetWhitespace(text) {
+  return String(text || "").replace(/\s+/g, " ").trim();
+}
+
+function getBookBaseTitle(text) {
+  const cleanedTitle = cleanSheetWhitespace(text);
+  if (!cleanedTitle) return "";
+
+  if (cleanedTitle.includes(":")) {
+    const colonBase = cleanedTitle.split(/\s*:\s*/, 1)[0]?.trim() || "";
+    if (colonBase) {
+      return colonBase;
+    }
+  }
+
+  const editionMatch = cleanedTitle.match(/^(.*?)\s*-\s*(limited edition|special edition|re-?release)$/i);
+  if (editionMatch?.[1]) {
+    return cleanSheetWhitespace(editionMatch[1]);
+  }
+
+  const parenEditionMatch = cleanedTitle.match(/^(.*?)\s*\((limited edition|special edition|re-?release)\)$/i);
+  if (parenEditionMatch?.[1]) {
+    return cleanSheetWhitespace(parenEditionMatch[1]);
+  }
+
+  return cleanedTitle;
+}
+
 function normalizeBookKey(text) {
-  return String(text || "").trim().replace(/\s+/g, " ").toLowerCase();
+  return getBookBaseTitle(text).toLowerCase();
 }
 
 function getReviewQueueIncludeSet() {
   return new Set(defaultReviewQueueIncludeTitles.map(normalizeBookKey).filter(Boolean));
-}
-
-function cleanSheetWhitespace(text) {
-  return String(text || "").replace(/\s+/g, " ").trim();
 }
 
 function canonicalizeKnownAuthorName(value, { bookTitle = "" } = {}) {
@@ -2089,7 +2113,7 @@ async function appendExcerptGatheringRow(payload = {}) {
 
   if (rowNumber && mode === "book") {
     const config = SHEET_SOURCE_CONFIG.columnMap;
-    await batchUpdateSheetValuesServer([
+    const writes = [
       {
         range: `'${sourceSheetName.replace(/'/g, "''")}'!${toA1Column(config.author)}${rowNumber}`,
         values: [[cleanSheetWhitespace(payload.author)]]
@@ -2106,7 +2130,15 @@ async function appendExcerptGatheringRow(payload = {}) {
         range: `'${sourceSheetName.replace(/'/g, "''")}'!${toA1Column(config.bookTitle)}${rowNumber}`,
         values: [[cleanSheetWhitespace(payload.bookTitle)]]
       }
-    ]);
+    ];
+    const sourceRecordId = cleanSheetWhitespace(payload.recordId);
+    if (sourceRecordId) {
+      writes.unshift({
+        range: `'${sourceSheetName.replace(/'/g, "''")}'!${toA1Column(config.recordId)}${rowNumber}`,
+        values: [[sourceRecordId]]
+      });
+    }
+    await batchUpdateSheetValuesServer(writes);
   }
 
   return {
@@ -2351,6 +2383,88 @@ async function handoffApprovedGraphicsToPoetryPlease(records = []) {
   }
 
   return result;
+}
+
+function buildPoetryPleaseExcerptRecord(record) {
+  if (!record) return null;
+  const excerpt = String(record.excerpt || record.quoteText || "").trim();
+  const recordId = cleanSheetWhitespace(record.recordId);
+  if (!recordId || !excerpt) {
+    return null;
+  }
+
+  return {
+    contentType: "EXC",
+    recordId,
+    sourceSystem: cleanSheetWhitespace(record.sourceSystem || "weaver"),
+    sourceRecordId: cleanSheetWhitespace(record.sourceRecordId),
+    author: String(record.author || ""),
+    bookTitle: String(record.bookTitle || ""),
+    poemTitle: String(record.poemTitle || ""),
+    excerpt,
+    approvedAt: cleanSheetWhitespace(record.approvedAt),
+    updatedAt: cleanSheetWhitespace(record.updatedAt),
+    bookShortener: String(record.bookShortener || ""),
+    bookLink: String(record.bookLink || ""),
+    releaseCatalog: String(record.releaseCatalog || ""),
+    driveLink: String(record.driveLink || ""),
+    sourceUrl: String(record.sourceUrl || ""),
+    pageNumber: String(record.pageNumber || "")
+  };
+}
+
+async function handoffApprovedExcerptsToPoetryPlease(records = []) {
+  const approvedRecords = Array.isArray(records) ? records.map(buildPoetryPleaseExcerptRecord).filter(Boolean) : [];
+  if (!approvedRecords.length) {
+    return { ok: true, skipped: true, reason: "no_records", results: [] };
+  }
+  if (!poetryPleaseApiKey) {
+    return { ok: false, skipped: true, reason: "missing_poetry_please_api_key", results: [] };
+  }
+
+  const results = [];
+  for (const record of approvedRecords) {
+    const response = await fetch(`${poetryPleaseApiUrl.replace(/\/$/, "")}/internal/weaverImport`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": poetryPleaseApiKey
+      },
+      body: JSON.stringify({
+        contentType: "EXC",
+        payload: record
+      })
+    });
+
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || !result.ok) {
+      const message = result.error || `Poetry Please EXC handoff failed with ${response.status}`;
+      const error = new Error(message);
+      error.responseStatus = response.status;
+      error.responseBody = result;
+      error.recordId = record.recordId;
+      throw error;
+    }
+
+    const itemId = cleanSheetWhitespace(
+      result?.results?.[0]?.id ||
+      result?.id ||
+      result?.recordId
+    );
+    results.push({
+      recordId: record.recordId,
+      poetryPleaseItemId: itemId,
+      response: result
+    });
+  }
+
+  return {
+    ok: true,
+    createdCount: results.length,
+    updatedCount: 0,
+    errorCount: 0,
+    results
+  };
 }
 
 function hasResolvedGraphicsQcDecision(record) {
@@ -3032,10 +3146,45 @@ async function syncAcceptedExcerptHandoffs(updates) {
 
   try {
     const result = await syncWeaverRuntimeDb("upsert_excerpt_handoffs", { handoffs });
+    const records = Array.isArray(result?.records) ? result.records : [];
+    let poetryPlease = { ok: true, skipped: true, reason: "no_records" };
+    try {
+      poetryPlease = await handoffApprovedExcerptsToPoetryPlease(records);
+    } catch (error) {
+      poetryPlease = { ok: false, error: error.message };
+    }
+
+    if (records.length) {
+      const now = new Date().toISOString();
+      const poetryPleaseResults = new Map(
+        Array.isArray(poetryPlease?.results)
+          ? poetryPlease.results.map(result => [cleanSheetWhitespace(result.recordId), result])
+          : []
+      );
+      const statusUpdates = records.map(record => ({
+        ...record,
+        handoffStatus: poetryPlease.ok ? "sent" : "failed",
+        handedOffAt: poetryPlease.ok ? now : String(record.handedOffAt || ""),
+        poetryPleaseItemId: poetryPlease.ok
+          ? cleanSheetWhitespace(poetryPleaseResults.get(cleanSheetWhitespace(record.recordId))?.poetryPleaseItemId)
+          : String(record.poetryPleaseItemId || ""),
+        errorMessage: poetryPlease.ok ? "" : String(poetryPlease.error || poetryPlease.reason || "handoff_failed"),
+        updatedAt: now
+      }));
+      const statusResult = await syncWeaverRuntimeDb("upsert_excerpt_handoffs", { handoffs: statusUpdates });
+      return {
+        ok: Boolean(result?.ok),
+        savedCount: Array.isArray(statusResult?.records) ? statusResult.records.length : handoffs.length,
+        records: Array.isArray(statusResult?.records) ? statusResult.records : records,
+        poetryPlease
+      };
+    }
+
     return {
       ok: Boolean(result?.ok),
-      savedCount: Array.isArray(result?.records) ? result.records.length : handoffs.length,
-      records: Array.isArray(result?.records) ? result.records : []
+      savedCount: records.length || handoffs.length,
+      records,
+      poetryPlease
     };
   } catch (error) {
     return {
