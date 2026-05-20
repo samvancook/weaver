@@ -44,6 +44,9 @@ const elements = {
   previewGraphicsFolderImport: document.getElementById("preview-graphics-folder-import"),
   applyGraphicsFolderImport: document.getElementById("apply-graphics-folder-import"),
   graphicsFolderImportResults: document.getElementById("graphics-folder-import-results"),
+  refreshExcerptHandoffs: document.getElementById("refresh-excerpt-handoffs"),
+  retryFailedExcerptHandoffs: document.getElementById("retry-failed-excerpt-handoffs"),
+  excerptHandoffSummary: document.getElementById("excerpt-handoff-summary"),
   exportGraphicsSheet: document.getElementById("export-graphics-sheet"),
   submitGraphicsQc: document.getElementById("submit-graphics-qc"),
   submitGraphicsQcBottom: document.getElementById("submit-graphics-qc-bottom"),
@@ -90,7 +93,8 @@ const elements = {
   correctionBookCountBadge: document.getElementById("correction-book-count-badge"),
   correctionExcerptCountBadge: document.getElementById("correction-excerpt-count-badge"),
   graphicsBookCountBadge: document.getElementById("graphics-book-count-badge"),
-  graphicsCountBadge: document.getElementById("graphics-count-badge")
+  graphicsCountBadge: document.getElementById("graphics-count-badge"),
+  excerptHandoffCountBadge: document.getElementById("excerpt-handoff-count-badge")
 };
 
 let currentExcerpts = [];
@@ -101,6 +105,7 @@ let currentGraphicsRecords = [];
 let currentGraphicsBookSummaries = [];
 let currentGraphicsAssetMatches = new Map();
 let currentGraphicsFolderImportPreview = null;
+let currentExcerptHandoffRecords = [];
 let isSaving = false;
 let currentValidationByRecordId = new Map();
 let currentModule = "review";
@@ -2293,6 +2298,85 @@ async function loadGraphicsBooks(options = {}) {
   }
 }
 
+function renderExcerptHandoffSummary(records) {
+  const handoffRecords = Array.isArray(records) ? records : [];
+  currentExcerptHandoffRecords = handoffRecords;
+  const queuedCount = handoffRecords.filter(record => (record.handoffStatus || "").toLowerCase() === "queued").length;
+  const failedCount = handoffRecords.filter(record => (record.handoffStatus || "").toLowerCase() === "failed").length;
+  const sentCount = handoffRecords.filter(record => (record.handoffStatus || "").toLowerCase() === "sent").length;
+
+  if (elements.excerptHandoffCountBadge) {
+    elements.excerptHandoffCountBadge.textContent = `${handoffRecords.length} Record${handoffRecords.length === 1 ? "" : "s"}`;
+  }
+
+  if (!elements.excerptHandoffSummary) {
+    return;
+  }
+
+  if (!handoffRecords.length) {
+    elements.excerptHandoffSummary.innerHTML = `<p class="empty-state">No queued or failed EXC handoffs need attention right now.</p>`;
+    return;
+  }
+
+  const failedMarkup = handoffRecords
+    .filter(record => (record.handoffStatus || "").toLowerCase() === "failed")
+    .slice(0, 5)
+    .map(record => `
+      <li>
+        <strong>${escapeHtml(record.poemTitle || "Untitled poem")}</strong>
+        <span> · ${escapeHtml(record.bookTitle || "(blank book)")}</span>
+        <span> · ${escapeHtml(record.errorMessage || "Unknown error")}</span>
+      </li>
+    `)
+    .join("");
+
+  elements.excerptHandoffSummary.innerHTML = `
+    <div class="excerpt-card">
+      <div class="excerpt-card__meta">
+        <span class="badge badge--muted">Queued ${queuedCount}</span>
+        <span class="badge badge--warn">Failed ${failedCount}</span>
+        <span class="badge badge--signal">Sent ${sentCount}</span>
+      </div>
+      ${failedMarkup ? `<ul>${failedMarkup}</ul>` : `<p class="hint">No failed EXC handoffs in the current snapshot.</p>`}
+    </div>
+  `;
+}
+
+async function loadExcerptHandoffs() {
+  try {
+    const data = await requestReviewApi("/api/excerpts/handoffs", { status: "queued,failed,sent" });
+    const records = Array.isArray(data.records) ? data.records : [];
+    renderExcerptHandoffSummary(records);
+  } catch (error) {
+    setStatus(`EXC handoff load failed: ${error.message}`);
+  }
+}
+
+async function retryFailedExcerptHandoffs() {
+  try {
+    setStatus("Retrying failed EXC handoffs...");
+    const response = await fetch("/api/excerpts/handoffs/retry", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        statuses: ["failed"]
+      })
+    });
+    const result = await response.json();
+    if (!response.ok || !result.ok) {
+      throw new Error(result.error || `/api/excerpts/handoffs/retry returned ${response.status}`);
+    }
+    await loadExcerptHandoffs();
+    const poetryPlease = result.poetryPlease || {};
+    const suffix = poetryPlease.ok ? "" : ` Poetry Please needs attention: ${poetryPlease.error || poetryPlease.reason || "handoff_failed"}.`;
+    setStatus(`Retried ${Number(result.retriedCount || 0)} failed EXC handoff${Number(result.retriedCount || 0) === 1 ? "" : "s"}.${suffix}`);
+  } catch (error) {
+    setStatus(`EXC handoff retry failed: ${error.message}`);
+  }
+}
+
 async function loadGraphicsRecords() {
   const mode = getSelectedGraphicsMode();
   const bookKey = elements.graphicsBookSelect?.value || "";
@@ -4234,6 +4318,7 @@ elements.showCorrectionsModule?.addEventListener("click", () => {
 });
 elements.showGraphicsModule?.addEventListener("click", () => {
   setActiveModule("graphics");
+  loadExcerptHandoffs();
   if (elements.graphicsBookSelect?.options.length <= 1) {
     loadGraphicsBooks();
   }
@@ -4242,6 +4327,8 @@ elements.loadGraphicsBooks?.addEventListener("click", loadGraphicsBooks);
 elements.loadGraphicsRecords?.addEventListener("click", loadGraphicsRecords);
 elements.previewGraphicsFolderImport?.addEventListener("click", previewGraphicsFolderImport);
 elements.applyGraphicsFolderImport?.addEventListener("click", applyGraphicsFolderImport);
+elements.refreshExcerptHandoffs?.addEventListener("click", loadExcerptHandoffs);
+elements.retryFailedExcerptHandoffs?.addEventListener("click", retryFailedExcerptHandoffs);
 elements.graphicsFolderImportResults?.addEventListener("change", event => {
   if (
     (event.target instanceof HTMLInputElement && event.target.type === "radio") ||

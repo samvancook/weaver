@@ -136,6 +136,16 @@ def normalize_flag(value: str | None) -> str:
     return ""
 
 
+def normalize_bool(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return normalize_flag(str(value)) == "Y"
+
+
 def parse_metadata_json(text: str | None) -> dict[str, str]:
     if not text:
         return {}
@@ -606,23 +616,64 @@ def ingest_weaver_approved_records(
         inserted = 0
         updated = 0
         skipped = 0
+        source_cache: dict[tuple[str, str, str], int] = {}
 
         with connection:
-            source_id = _get_or_create_source_id(connection, source_name, source_kind, source_path)
             cursor = connection.cursor()
 
             for index, record in enumerate(records, start=1):
-                excerpt_text = clean_whitespace(record.get("excerptText"))
+                approval = record.get("approval") or {}
+                status = record.get("status") or {}
+                canonical = record.get("canonical") or {}
+
+                review_decision = clean_whitespace(approval.get("reviewDecision")).lower()
+                is_excluded = normalize_bool(status.get("excluded"))
+                needs_correction = normalize_bool(status.get("needsCorrection"))
+                if review_decision and review_decision != "approve":
+                    skipped += 1
+                    continue
+                if is_excluded or needs_correction:
+                    skipped += 1
+                    continue
+
+                source_kind_value = clean_whitespace(record.get("sourceKind")) or source_kind
+                source_name_value = f"{source_name}:{source_kind_value}"
+                source_path_value = f"{source_path}:{source_kind_value}"
+                source_key = (source_name_value, source_kind_value, source_path_value)
+                source_id = source_cache.get(source_key)
+                if source_id is None:
+                    source_id = _get_or_create_source_id(
+                        connection,
+                        source_name_value,
+                        source_kind_value,
+                        source_path_value,
+                    )
+                    source_cache[source_key] = source_id
+
+                excerpt_text = preserve_excerpt_text(record.get("excerptText"))
                 if not excerpt_text:
                     skipped += 1
                     continue
 
                 source_row_number = int(record.get("sourceRow") or index)
-                external_id = clean_whitespace(record.get("recordId"))
-                author = clean_whitespace(record.get("author"))
-                book_title = clean_whitespace(record.get("bookTitle"))
-                poem_title = clean_whitespace(record.get("title"))
+                external_id = clean_whitespace(record.get("sourceRecordId") or record.get("recordId"))
+                author = clean_whitespace(
+                    canonical.get("canonicalAuthor") or record.get("author")
+                )
+                book_title = clean_whitespace(
+                    canonical.get("canonicalBookTitle") or record.get("bookTitle")
+                )
+                poem_title = clean_whitespace(
+                    canonical.get("canonicalPoemTitle")
+                    or record.get("poemTitle")
+                    or record.get("title")
+                )
                 metadata_json = json.dumps(record, ensure_ascii=True)
+                normalized_author = normalize_lookup_text(author)
+                normalized_book_title = normalize_lookup_text(book_title)
+                normalized_poem_title = normalize_lookup_text(poem_title)
+                normalized_excerpt = normalize_lookup_text(excerpt_text)
+                excerpt_hash = fingerprint_excerpt(excerpt_text)
 
                 existing_row = None
                 if external_id:
@@ -640,6 +691,26 @@ def ingest_weaver_approved_records(
                         """
                         SELECT id
                         FROM excerpt_entries
+                        WHERE source_id = ?
+                          AND normalized_author = ?
+                          AND normalized_poem_title = ?
+                          AND normalized_book_title = ?
+                          AND excerpt_hash = ?
+                        LIMIT 1
+                        """,
+                        (
+                            source_id,
+                            normalized_author,
+                            normalized_poem_title,
+                            normalized_book_title,
+                            excerpt_hash,
+                        ),
+                    ).fetchone()
+                if existing_row is None:
+                    existing_row = cursor.execute(
+                        """
+                        SELECT id
+                        FROM excerpt_entries
                         WHERE source_id = ? AND source_row_number = ?
                         LIMIT 1
                         """,
@@ -651,14 +722,14 @@ def ingest_weaver_approved_records(
                     "source_row_number": source_row_number,
                     "external_id": external_id,
                     "author": author,
-                    "normalized_author": normalize_lookup_text(author),
+                    "normalized_author": normalized_author,
                     "book_title": book_title,
-                    "normalized_book_title": normalize_lookup_text(book_title),
+                    "normalized_book_title": normalized_book_title,
                     "poem_title": poem_title,
-                    "normalized_poem_title": normalize_lookup_text(poem_title),
+                    "normalized_poem_title": normalized_poem_title,
                     "excerpt_text": excerpt_text,
-                    "normalized_excerpt": normalize_lookup_text(excerpt_text),
-                    "excerpt_hash": fingerprint_excerpt(excerpt_text),
+                    "normalized_excerpt": normalized_excerpt,
+                    "excerpt_hash": excerpt_hash,
                     "word_count": len(excerpt_text.split()),
                     "character_count": len(excerpt_text),
                     "metadata_json": metadata_json,

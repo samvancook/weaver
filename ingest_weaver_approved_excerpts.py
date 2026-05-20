@@ -33,31 +33,47 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_records(input_path: Path | None) -> list[dict]:
+def load_records(input_path: Path | None) -> tuple[list[dict], str | None]:
     if input_path:
         payload = json.loads(input_path.read_text(encoding="utf-8"))
     else:
         payload = json.load(sys.stdin)
 
+    source_import_id = None
     if isinstance(payload, dict):
+        source_import_id = payload.get("sourceImportId")
         records = payload.get("records", [])
     else:
         records = payload
 
     if not isinstance(records, list):
         raise ValueError("Expected a JSON list or an object with a 'records' array.")
-    return records
+
+    if source_import_id:
+        wrapped_records: list[dict] = []
+        for record in records:
+            if isinstance(record, dict):
+                enriched = dict(record)
+                enriched.setdefault("sourceImportId", source_import_id)
+                wrapped_records.append(enriched)
+            else:
+                wrapped_records.append(record)
+        records = wrapped_records
+
+    return records, source_import_id
 
 
 def main() -> int:
     args = parse_args()
-    records = load_records(args.input_path)
+    records, source_import_id = load_records(args.input_path)
     result = ingest_weaver_approved_records(
         records,
         db_path=args.db_path,
         source_name=args.source_name,
     )
     result["record_count"] = len(records)
+    if source_import_id:
+        result["source_import_id"] = source_import_id
     print(json.dumps(result, indent=2))
     return 0
 

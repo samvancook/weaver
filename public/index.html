@@ -323,6 +323,17 @@
         <p class="hint">
           This replaces the old quote-image creation browser. `Needs graphics` is the true creation queue. `2026 Titles` narrows that queue to the current season. `Graphics QC` is for graphics that already exist and should be reviewed. `Mismatch pairing` is for QC-rejected graphics that need to be matched to the correct excerpt. `Poetry Please handoff` is for approved graphics and their downstream status.
         </p>
+        <div class="panel__header module-panel__subheader">
+          <h3>EXC Handoff</h3>
+          <span class="badge badge--muted" id="excerpt-handoff-count-badge">0 Records</span>
+        </div>
+        <div class="toolbar">
+          <button id="refresh-excerpt-handoffs" class="button button--secondary" type="button">Refresh EXC Handoffs</button>
+          <button id="retry-failed-excerpt-handoffs" class="button button--secondary" type="button">Retry Failed EXC</button>
+        </div>
+        <div id="excerpt-handoff-summary" class="excerpt-list">
+          <p class="empty-state">Load the EXC handoff summary to monitor queued, failed, and sent excerpt exports.</p>
+        </div>
         <details class="folder-import-panel" id="graphics-folder-import-panel">
           <summary class="folder-import-panel__summary">Import Made Graphics From Drive</summary>
           <div class="folder-import-panel__header">

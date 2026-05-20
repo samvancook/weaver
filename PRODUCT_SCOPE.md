@@ -756,6 +756,7 @@ Build this as a standalone internal tool first, but keep the stack compatible wi
 - continue the runtime DB cutover for graphics QC and Poetry Please handoff state so sheet columns are no longer the only operational truth
 - improve excerpt gathering so italicized phrases can be captured intentionally instead of relying on ad hoc `*...*` workarounds
 - start the EXC handoff path from Weaver to Poetry Please with stable excerpt record IDs, runtime-backed handoff storage, and a later backfill pass for already-approved excerpts
+  - for shared exports, treat `approvedForGraphics` as editorial eligibility/requested-for-graphics state only, never as proof that a graphic was completed, QC-passed, or exists as an asset
 
 ### Soon
 

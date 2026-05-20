@@ -188,35 +188,105 @@ Use this to ingest approved excerpts coming from Weaver into the core excerpt li
 python3 ingest_weaver_approved_excerpts.py /path/to/weaver_approved.json
 ```
 
-The JSON payload can be either a list of records or an object with a `records` array.
+The JSON payload can be either:
 
-Expected fields per record:
+- a list of records
+- or a batch wrapper with `sourceImportId` and `records`
 
-- `recordId`
+Batch wrapper:
+
+```json
+{
+  "sourceImportId": "weaver-approved-sync-2026-05-19T18:22:00Z",
+  "records": []
+}
+```
+
+Expected shared record shape:
+
+- `sourceKind`
+- `sourceRecordId`
 - `sourceRow`
+- `sourceApprovedAt`
+- `sourceUpdatedAt`
 - `author`
+- `poemTitle`
 - `bookTitle`
-- `title`
 - `excerptText`
+- `approval.reviewDecision`
+- `approval.approvedForUse`
+- `approval.approvedForQuoteImage`
+- `approval.approvedForGraphics`
+- `status.excluded`
+- `status.needsCorrection`
+- `status.correctionApplied`
+- `status.validationStatus`
+- `status.duplicateGroupId`
+- `canonical.canonicalAuthor`
+- `canonical.canonicalPoemTitle`
+- `canonical.canonicalBookTitle`
+- `canonical.catalogMatchId`
+- `canonical.libraryMatchId`
+- `metadata.wordCount`
+- `metadata.lineCount`
+- `metadata.updatedAt`
+- `sourcePayload`
 
 Example:
 
 ```json
 {
+  "sourceImportId": "weaver-approved-sync-2026-05-19T18:22:00Z",
   "records": [
     {
-      "recordId": "weaver-123",
-      "sourceRow": 101,
-      "author": "Test Author",
-      "bookTitle": "Test Book",
-      "title": "Test Poem",
-      "excerptText": "This is a brand new approved excerpt from Weaver."
+      "sourceKind": "weaver",
+      "sourceRecordId": "weaver:row-2130",
+      "sourceRow": 2130,
+      "sourceApprovedAt": "2026-05-19T18:22:00Z",
+      "sourceUpdatedAt": "2026-05-19T18:22:00Z",
+      "author": "Author Name",
+      "poemTitle": "Poem Title",
+      "bookTitle": "Book Title",
+      "excerptText": "The approved excerpt text...",
+      "approval": {
+        "reviewDecision": "approve",
+        "approvedForUse": true,
+        "approvedForQuoteImage": true,
+        "approvedForGraphics": true
+      },
+      "status": {
+        "excluded": false,
+        "needsCorrection": false,
+        "correctionApplied": false,
+        "validationStatus": "matched",
+        "duplicateGroupId": ""
+      },
+      "canonical": {
+        "canonicalAuthor": "Author Name",
+        "canonicalPoemTitle": "Poem Title",
+        "canonicalBookTitle": "Book Title",
+        "catalogMatchId": "",
+        "libraryMatchId": ""
+      },
+      "metadata": {
+        "wordCount": 18,
+        "lineCount": 3,
+        "updatedAt": "2026-05-19T18:22:00Z"
+      },
+      "sourcePayload": {}
     }
   ]
 }
 ```
 
 Ingest behavior:
+
+- idempotent on `sourceKind + sourceRecordId`
+- fallback duplicate match on normalized author + poem title + book title + excerpt text
+- updates existing Weaver-sourced records when approved text changes
+- preserves the full incoming record JSON for audit
+- skips records that are rejected, excluded, or marked needs-correction
+- treats `approval.approvedForGraphics` as editorial eligibility/requested-for-graphics state, not production completion
 
 - writes to `data/excerpt_library.db`
 - stores records under source `weaver://approved`

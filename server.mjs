@@ -9,7 +9,10 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const publicDir = path.join(__dirname, "public");
 const port = Number(process.env.PORT || 8080);
-const appVersion = process.env.WEAVER_APP_VERSION || "2026-04-28-qc-rework-1";
+const appVersion =
+  process.env.K_REVISION ||
+  process.env.WEAVER_APP_VERSION ||
+  "dev-local";
 const spreadsheetId =
   process.env.WEAVER_SPREADSHEET_ID ||
   "1yTCRQKAavimDEJka1-Ice4xlJ1mCm8hq0-G1PTQkTLM";
@@ -1712,6 +1715,89 @@ function buildPendingRecordFromSheetRow(row, index, canonicalBookAuthorMap = nul
   };
 }
 
+function buildApprovedExcerptExportRecordFromSheetRow(row, index, canonicalBookAuthorMap = null) {
+  const config = SHEET_SOURCE_CONFIG.columnMap;
+  const excerptText = (row[config.excerpt - 1] || "").toString();
+  const cleanedExcerptText = cleanSheetWhitespace(excerptText);
+  const excluded = isSheetYes(row[config.exclude - 1]);
+  const reviewDecision = getSheetExcerptReviewDecision(row);
+  const explicitDecision = cleanSheetWhitespace(row[config.excerptReviewDecision - 1]).toUpperCase();
+  const bookTitle = cleanSheetWhitespace(row[config.bookTitle - 1]);
+  const approvedForUse = (row[config.approved - 1] || "").toString().trim().toUpperCase() === "Y";
+
+  if (!bookTitle || !cleanedExcerptText || excluded || !approvedForUse) {
+    return null;
+  }
+  if (reviewDecision === "REJECT" || reviewDecision === "NEEDS_CORRECTION") {
+    return null;
+  }
+
+  const sourceRow = SHEET_SOURCE_CONFIG.startRow + index;
+  const sourceRecordId = cleanSheetWhitespace(row[config.recordId - 1]) || `weaver:row-${sourceRow}`;
+  const author = resolveGraphicsAuthor(row[config.author - 1] || "", bookTitle, canonicalBookAuthorMap);
+  const poemTitle = (row[config.title - 1] || "").toString();
+  const validationStatus = cleanSheetWhitespace(row[config.validationStatus - 1]);
+  const canonicalAuthor = cleanSheetWhitespace(row[config.validationCanonicalAuthor - 1]) || author;
+  const canonicalPoemTitle = cleanSheetWhitespace(row[config.validationMatchedPoemTitle - 1]) || poemTitle;
+  const canonicalBookTitle = cleanSheetWhitespace(row[config.validationCanonicalBook - 1]) || bookTitle;
+  const duplicateGroupId = (row[config.duplicateGroupId - 1] || "").toString();
+  const createdTimestamp = cleanSheetWhitespace(row[0]);
+  const normalizedTimestamp = parseChicagoSheetTimestampToIso(createdTimestamp);
+  const lineCount = excerptText
+    ? excerptText.split(/\r?\n/).map(line => line.trim()).filter(Boolean).length
+    : 0;
+  const correctionApplied = Boolean(
+    cleanSheetWhitespace(row[config.correctedAuthor - 1])
+    || cleanSheetWhitespace(row[config.correctedTitle - 1])
+    || cleanSheetWhitespace(row[config.correctedBookTitle - 1])
+    || cleanSheetWhitespace(row[config.correctedExcerpt - 1])
+  );
+  const bookMeta = publishingBooksCache?.get(normalizeBookKey(bookTitle)) || null;
+
+  return {
+    sourceKind: "weaver",
+    sourceRecordId,
+    sourceRow,
+    sourceApprovedAt: normalizedTimestamp,
+    sourceUpdatedAt: normalizedTimestamp,
+    author,
+    poemTitle,
+    bookTitle,
+    excerptText,
+    approval: {
+      reviewDecision: explicitDecision === "APPROVE" || approvedForUse ? "approve" : explicitDecision.toLowerCase(),
+      approvedForUse: true,
+      approvedForQuoteImage: approvedForUse,
+      approvedForGraphics: approvedForUse
+    },
+    status: {
+      excluded: false,
+      needsCorrection: false,
+      correctionApplied,
+      validationStatus,
+      duplicateGroupId
+    },
+    canonical: {
+      canonicalAuthor,
+      canonicalPoemTitle,
+      canonicalBookTitle,
+      catalogMatchId: "",
+      libraryMatchId: ""
+    },
+    metadata: {
+      wordCount: cleanedExcerptText ? cleanedExcerptText.split(/\s+/).length : 0,
+      lineCount,
+      updatedAt: normalizedTimestamp
+    },
+    bookShortener: bookMeta?.bookShortener || "",
+    bookLink: "",
+    releaseCatalog: bookMeta?.releaseCatalog || "",
+    driveLink: "",
+    sourceUrl: "",
+    sourcePayload: {}
+  };
+}
+
 function buildCorrectionRecordFromSheetRow(row, index, canonicalBookAuthorMap = null) {
   const config = SHEET_SOURCE_CONFIG.columnMap;
   const rawExcerptText = (row[config.excerpt - 1] || "").toString();
@@ -1805,6 +1891,57 @@ function formatChicagoTimestamp(date = new Date()) {
   );
 
   return `${parts.month}/${parts.day}/${parts.year} ${parts.hour}:${parts.minute}:${parts.second}`;
+}
+
+function formatDateInChicagoParts(date) {
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Chicago",
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false
+  });
+
+  return Object.fromEntries(
+    formatter.formatToParts(date)
+      .filter(part => part.type !== "literal")
+      .map(part => [part.type, part.value])
+  );
+}
+
+function parseChicagoSheetTimestampToIso(value) {
+  const text = cleanSheetWhitespace(value);
+  if (!text) return "";
+
+  const match = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2}):(\d{2})$/);
+  if (!match) return text;
+
+  const [, month, day, year, hour, minute, second] = match;
+  const mm = month.padStart(2, "0");
+  const dd = day.padStart(2, "0");
+  const hh = hour.padStart(2, "0");
+  const offsets = ["-06:00", "-05:00"];
+
+  for (const offset of offsets) {
+    const candidate = new Date(`${year}-${mm}-${dd}T${hh}:${minute}:${second}${offset}`);
+    if (Number.isNaN(candidate.getTime())) continue;
+    const parts = formatDateInChicagoParts(candidate);
+    if (
+      parts.year === year
+      && parts.month === String(Number(month))
+      && parts.day === String(Number(day))
+      && parts.hour === String(Number(hour))
+      && parts.minute === minute
+      && parts.second === second
+    ) {
+      return candidate.toISOString();
+    }
+  }
+
+  return text;
 }
 
 function toUniqueSortedValues(values) {
@@ -2210,6 +2347,40 @@ async function getPendingExcerptsForBookFromSheets(bookTitle) {
   };
 }
 
+let publishingBooksCache = null;
+
+async function getPublishingBooksByKey() {
+  if (publishingBooksCache) return publishingBooksCache;
+  try {
+    const books = await getPublishingOrderBooks();
+    publishingBooksCache = new Map(
+      books.map(book => [normalizeBookKey(book.title), book]).filter(([key]) => key)
+    );
+  } catch {
+    publishingBooksCache = new Map();
+  }
+  return publishingBooksCache;
+}
+
+async function getApprovedExcerptsExportFromSheets({ since = "" } = {}) {
+  await getPublishingBooksByKey();
+  const sinceValue = cleanSheetWhitespace(since);
+  const range = `'${sourceSheetName.replace(/'/g, "''")}'!A2:BK`;
+  const values = await fetchSheetValuesServer(range);
+  const canonicalBookAuthorMap = await getCanonicalGraphicsBookAuthorMap().catch(() => new Map());
+  const records = values
+    .map((row, index) => buildApprovedExcerptExportRecordFromSheetRow(row, index, canonicalBookAuthorMap))
+    .filter(Boolean)
+    .filter(record => !sinceValue || cleanSheetWhitespace(record.metadata?.updatedAt) >= sinceValue);
+
+  return {
+    ok: true,
+    version: `${appVersion}-service-account`,
+    sourceImportId: `weaver-approved-sync-${new Date().toISOString()}`,
+    records
+  };
+}
+
 async function getCorrectionBooksFromSheets() {
   const range = `'${sourceSheetName.replace(/'/g, "''")}'!A2:BK`;
   const values = await fetchSheetValuesServer(range);
@@ -2487,6 +2658,79 @@ async function handoffApprovedExcerptsToPoetryPlease(records = []) {
     updatedCount: 0,
     errorCount: 0,
     results
+  };
+}
+
+function normalizeExcerptHandoffStatus(value) {
+  return cleanSheetWhitespace(value).toLowerCase();
+}
+
+async function updateExcerptHandoffStatuses(records, poetryPlease) {
+  const handoffRecords = Array.isArray(records) ? records : [];
+  if (!handoffRecords.length) {
+    return { ok: true, savedCount: 0, records: [] };
+  }
+
+  const now = new Date().toISOString();
+  const poetryPleaseResults = new Map(
+    Array.isArray(poetryPlease?.results)
+      ? poetryPlease.results.map(result => [cleanSheetWhitespace(result.recordId), result])
+      : []
+  );
+  const statusUpdates = handoffRecords.map(record => ({
+    ...record,
+    handoffStatus: poetryPlease.ok ? "sent" : "failed",
+    handedOffAt: poetryPlease.ok ? now : String(record.handedOffAt || ""),
+    poetryPleaseItemId: poetryPlease.ok
+      ? cleanSheetWhitespace(poetryPleaseResults.get(cleanSheetWhitespace(record.recordId))?.poetryPleaseItemId)
+      : String(record.poetryPleaseItemId || ""),
+    errorMessage: poetryPlease.ok ? "" : String(poetryPlease.error || poetryPlease.reason || "handoff_failed"),
+    updatedAt: now
+  }));
+  const statusResult = await syncWeaverRuntimeDb("upsert_excerpt_handoffs", { handoffs: statusUpdates });
+  return {
+    ok: true,
+    savedCount: Array.isArray(statusResult?.records) ? statusResult.records.length : handoffRecords.length,
+    records: Array.isArray(statusResult?.records) ? statusResult.records : handoffRecords
+  };
+}
+
+async function getExcerptHandoffRecords({ recordIds = [], statuses = [] } = {}) {
+  const result = await syncWeaverRuntimeDb("get_excerpt_handoffs", { recordIds });
+  const records = Array.isArray(result?.records) ? result.records : [];
+  const normalizedStatuses = (Array.isArray(statuses) ? statuses : [])
+    .map(normalizeExcerptHandoffStatus)
+    .filter(Boolean);
+  const filtered = normalizedStatuses.length
+    ? records.filter(record => normalizedStatuses.includes(normalizeExcerptHandoffStatus(record.handoffStatus)))
+    : records;
+  return {
+    ok: Boolean(result?.ok),
+    count: filtered.length,
+    records: filtered
+  };
+}
+
+async function retryExcerptHandoffs({ recordIds = [], statuses = ["queued", "failed"] } = {}) {
+  const handoffResult = await getExcerptHandoffRecords({ recordIds, statuses });
+  const records = Array.isArray(handoffResult.records) ? handoffResult.records : [];
+  if (!records.length) {
+    return { ok: true, retriedCount: 0, skipped: true, reason: "no_records", records: [] };
+  }
+
+  let poetryPlease = { ok: true, skipped: true, reason: "no_records" };
+  try {
+    poetryPlease = await handoffApprovedExcerptsToPoetryPlease(records);
+  } catch (error) {
+    poetryPlease = { ok: false, error: error.message };
+  }
+
+  const statusResult = await updateExcerptHandoffStatuses(records, poetryPlease);
+  return {
+    ok: Boolean(statusResult.ok),
+    retriedCount: records.length,
+    records: statusResult.records,
+    poetryPlease
   };
 }
 
@@ -3185,27 +3429,11 @@ async function syncAcceptedExcerptHandoffs(updates) {
     }
 
     if (records.length) {
-      const now = new Date().toISOString();
-      const poetryPleaseResults = new Map(
-        Array.isArray(poetryPlease?.results)
-          ? poetryPlease.results.map(result => [cleanSheetWhitespace(result.recordId), result])
-          : []
-      );
-      const statusUpdates = records.map(record => ({
-        ...record,
-        handoffStatus: poetryPlease.ok ? "sent" : "failed",
-        handedOffAt: poetryPlease.ok ? now : String(record.handedOffAt || ""),
-        poetryPleaseItemId: poetryPlease.ok
-          ? cleanSheetWhitespace(poetryPleaseResults.get(cleanSheetWhitespace(record.recordId))?.poetryPleaseItemId)
-          : String(record.poetryPleaseItemId || ""),
-        errorMessage: poetryPlease.ok ? "" : String(poetryPlease.error || poetryPlease.reason || "handoff_failed"),
-        updatedAt: now
-      }));
-      const statusResult = await syncWeaverRuntimeDb("upsert_excerpt_handoffs", { handoffs: statusUpdates });
+      const statusResult = await updateExcerptHandoffStatuses(records, poetryPlease);
       return {
         ok: Boolean(result?.ok),
-        savedCount: Array.isArray(statusResult?.records) ? statusResult.records.length : handoffs.length,
-        records: Array.isArray(statusResult?.records) ? statusResult.records : records,
+        savedCount: statusResult.savedCount,
+        records: statusResult.records,
         poetryPlease
       };
     }
@@ -3732,6 +3960,75 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === "/api/review/pending-records" && req.method === "GET") {
     try {
       const result = await getPendingRecordsFromSheets();
+      return sendJson(res, 200, result);
+    } catch (error) {
+      return sendJson(res, 500, {
+        ok: false,
+        error: error.message
+      });
+    }
+  }
+
+  if (url.pathname === "/api/excerpts/approved" && req.method === "GET") {
+    try {
+      const result = await getApprovedExcerptsExportFromSheets({
+        since: url.searchParams.get("since") || ""
+      });
+      return sendJson(res, 200, result);
+    } catch (error) {
+      return sendJson(res, 500, {
+        ok: false,
+        error: error.message
+      });
+    }
+  }
+
+  if (url.pathname === "/api/excerpts/approved/export" && req.method === "POST") {
+    try {
+      const body = await readRequestBody(req);
+      const parsed = JSON.parse(body || "{}");
+      const result = await getApprovedExcerptsExportFromSheets({
+        since: parsed.since || ""
+      });
+      if (cleanSheetWhitespace(parsed.sourceImportId)) {
+        result.sourceImportId = cleanSheetWhitespace(parsed.sourceImportId);
+      }
+      return sendJson(res, 200, result);
+    } catch (error) {
+      return sendJson(res, 500, {
+        ok: false,
+        error: error.message
+      });
+    }
+  }
+
+  if (url.pathname === "/api/excerpts/handoffs" && req.method === "GET") {
+    try {
+      const statuses = (url.searchParams.get("status") || "")
+        .split(",")
+        .map(value => value.trim())
+        .filter(Boolean);
+      const recordIds = (url.searchParams.get("recordIds") || "")
+        .split(",")
+        .map(value => value.trim())
+        .filter(Boolean);
+      const result = await getExcerptHandoffRecords({ recordIds, statuses });
+      return sendJson(res, 200, result);
+    } catch (error) {
+      return sendJson(res, 500, {
+        ok: false,
+        error: error.message
+      });
+    }
+  }
+
+  if (url.pathname === "/api/excerpts/handoffs/retry" && req.method === "POST") {
+    try {
+      const body = await readRequestBody(req);
+      const parsed = JSON.parse(body || "{}");
+      const recordIds = Array.isArray(parsed.recordIds) ? parsed.recordIds : [];
+      const statuses = Array.isArray(parsed.statuses) ? parsed.statuses : ["queued", "failed"];
+      const result = await retryExcerptHandoffs({ recordIds, statuses });
       return sendJson(res, 200, result);
     } catch (error) {
       return sendJson(res, 500, {
