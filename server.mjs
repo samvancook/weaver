@@ -126,6 +126,7 @@ const PIG_COMPLETION_COLUMNS = {
 };
 const QUEUE_CACHE_TTL_MS = 5000;
 const queueSnapshotCache = new Map();
+const SOURCE_SHEET_CACHE_KEY = "source-sheet-values";
 
 async function getCachedQueueSnapshot(key, loader, ttlMs = QUEUE_CACHE_TTL_MS) {
   const now = Date.now();
@@ -144,6 +145,11 @@ async function getCachedQueueSnapshot(key, loader, ttlMs = QUEUE_CACHE_TTL_MS) {
 
 function invalidateQueueSnapshots() {
   queueSnapshotCache.clear();
+}
+
+async function getSourceSheetValuesCached() {
+  const range = `'${sourceSheetName.replace(/'/g, "''")}'!A2:BK`;
+  return getCachedQueueSnapshot(SOURCE_SHEET_CACHE_KEY, () => fetchSheetValuesServer(range));
 }
 const PIG_COMPLETION_HEADERS = [[
   "completion_id",
@@ -2310,8 +2316,7 @@ async function appendExcerptGatheringRow(payload = {}) {
 
 async function getPendingRecordsFromSheets() {
   return getCachedQueueSnapshot("pending-records", async () => {
-    const range = `'${sourceSheetName.replace(/'/g, "''")}'!A2:BK`;
-    const values = await fetchSheetValuesServer(range);
+    const values = await getSourceSheetValuesCached();
     const canonicalBookAuthorMap = await getCanonicalGraphicsBookAuthorMap().catch(() => new Map());
     const records = values
       .map((row, index) => buildPendingRecordFromSheetRow(row, index, canonicalBookAuthorMap))
@@ -2327,8 +2332,7 @@ async function getPendingRecordsFromSheets() {
 
 async function getPendingExcerptsForBookFromSheets(bookTitle) {
   const requestedKey = normalizeBookKey(bookTitle);
-  const range = `'${sourceSheetName.replace(/'/g, "''")}'!A2:BK`;
-  const values = await fetchSheetValuesServer(range);
+  const values = await getSourceSheetValuesCached();
   const canonicalBookAuthorMap = await getCanonicalGraphicsBookAuthorMap().catch(() => new Map());
   const excerpts = values
     .map((row, index) => buildPendingRecordFromSheetRow(row, index, canonicalBookAuthorMap))
@@ -2365,8 +2369,7 @@ async function getPublishingBooksByKey() {
 async function getApprovedExcerptsExportFromSheets({ since = "" } = {}) {
   await getPublishingBooksByKey();
   const sinceValue = cleanSheetWhitespace(since);
-  const range = `'${sourceSheetName.replace(/'/g, "''")}'!A2:BK`;
-  const values = await fetchSheetValuesServer(range);
+  const values = await getSourceSheetValuesCached();
   const canonicalBookAuthorMap = await getCanonicalGraphicsBookAuthorMap().catch(() => new Map());
   const records = values
     .map((row, index) => buildApprovedExcerptExportRecordFromSheetRow(row, index, canonicalBookAuthorMap))
@@ -2382,8 +2385,7 @@ async function getApprovedExcerptsExportFromSheets({ since = "" } = {}) {
 }
 
 async function getCorrectionBooksFromSheets() {
-  const range = `'${sourceSheetName.replace(/'/g, "''")}'!A2:BK`;
-  const values = await fetchSheetValuesServer(range);
+  const values = await getSourceSheetValuesCached();
   const canonicalBookAuthorMap = await getCanonicalGraphicsBookAuthorMap().catch(() => new Map());
   const records = values
     .map((row, index) => buildCorrectionRecordFromSheetRow(row, index, canonicalBookAuthorMap))
@@ -2617,46 +2619,64 @@ async function handoffApprovedExcerptsToPoetryPlease(records = []) {
   }
 
   const results = [];
+  let createdCount = 0;
+  let updatedCount = 0;
+  let errorCount = 0;
   for (const record of approvedRecords) {
-    const response = await fetch(`${poetryPleaseApiUrl.replace(/\/$/, "")}/internal/weaverImport`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": poetryPleaseApiKey
-      },
-      body: JSON.stringify({
-        contentType: "EXC",
-        payload: record
-      })
-    });
+    try {
+      const response = await fetch(`${poetryPleaseApiUrl.replace(/\/$/, "")}/internal/weaverImport`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": poetryPleaseApiKey
+        },
+        body: JSON.stringify({
+          contentType: "EXC",
+          payload: record
+        })
+      });
 
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok || !result.ok) {
-      const message = result.error || `Poetry Please EXC handoff failed with ${response.status}`;
-      const error = new Error(message);
-      error.responseStatus = response.status;
-      error.responseBody = result;
-      error.recordId = record.recordId;
-      throw error;
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.ok) {
+        errorCount += 1;
+        results.push({
+          recordId: record.recordId,
+          ok: false,
+          error: result.error || `Poetry Please EXC handoff failed with ${response.status}`,
+          response: result
+        });
+        continue;
+      }
+
+      const itemId = cleanSheetWhitespace(
+        result?.results?.[0]?.id ||
+        result?.id ||
+        result?.recordId
+      );
+      createdCount += Number(result?.createdCount || 0);
+      updatedCount += Number(result?.updatedCount || 0);
+      results.push({
+        recordId: record.recordId,
+        ok: true,
+        poetryPleaseItemId: itemId,
+        response: result
+      });
+    } catch (error) {
+      errorCount += 1;
+      results.push({
+        recordId: record.recordId,
+        ok: false,
+        error: error.message,
+        response: {}
+      });
     }
-
-    const itemId = cleanSheetWhitespace(
-      result?.results?.[0]?.id ||
-      result?.id ||
-      result?.recordId
-    );
-    results.push({
-      recordId: record.recordId,
-      poetryPleaseItemId: itemId,
-      response: result
-    });
   }
 
   return {
-    ok: true,
-    createdCount: results.length,
-    updatedCount: 0,
-    errorCount: 0,
+    ok: errorCount === 0,
+    createdCount,
+    updatedCount,
+    errorCount,
     results
   };
 }
@@ -2679,12 +2699,21 @@ async function updateExcerptHandoffStatuses(records, poetryPlease) {
   );
   const statusUpdates = handoffRecords.map(record => ({
     ...record,
-    handoffStatus: poetryPlease.ok ? "sent" : "failed",
-    handedOffAt: poetryPlease.ok ? now : String(record.handedOffAt || ""),
-    poetryPleaseItemId: poetryPlease.ok
-      ? cleanSheetWhitespace(poetryPleaseResults.get(cleanSheetWhitespace(record.recordId))?.poetryPleaseItemId)
-      : String(record.poetryPleaseItemId || ""),
-    errorMessage: poetryPlease.ok ? "" : String(poetryPlease.error || poetryPlease.reason || "handoff_failed"),
+    handoffStatus: poetryPleaseResults.get(cleanSheetWhitespace(record.recordId))?.ok === false ? "failed" : "sent",
+    handedOffAt: poetryPleaseResults.get(cleanSheetWhitespace(record.recordId))?.ok === false
+      ? String(record.handedOffAt || "")
+      : now,
+    poetryPleaseItemId: poetryPleaseResults.get(cleanSheetWhitespace(record.recordId))?.ok === false
+      ? String(record.poetryPleaseItemId || "")
+      : cleanSheetWhitespace(poetryPleaseResults.get(cleanSheetWhitespace(record.recordId))?.poetryPleaseItemId),
+    errorMessage: poetryPleaseResults.get(cleanSheetWhitespace(record.recordId))?.ok === false
+      ? String(
+          poetryPleaseResults.get(cleanSheetWhitespace(record.recordId))?.error ||
+          poetryPlease.error ||
+          poetryPlease.reason ||
+          "handoff_failed"
+        )
+      : "",
     updatedAt: now
   }));
   const statusResult = await syncWeaverRuntimeDb("upsert_excerpt_handoffs", { handoffs: statusUpdates });
@@ -2696,16 +2725,39 @@ async function updateExcerptHandoffStatuses(records, poetryPlease) {
 }
 
 async function getExcerptHandoffRecords({ recordIds = [], statuses = [] } = {}) {
-  const result = await syncWeaverRuntimeDb("get_excerpt_handoffs", { recordIds });
-  const records = Array.isArray(result?.records) ? result.records : [];
+  const exportResult = await getApprovedExcerptsExportFromSheets();
+  const approvedRecords = Array.isArray(exportResult?.records) ? exportResult.records : [];
+  const approvedHandoffs = approvedRecords
+    .map(buildExcerptHandoffFromApprovedExportRecord)
+    .filter(Boolean);
+  const approvedById = new Map(
+    approvedHandoffs.map(record => [cleanSheetWhitespace(record.recordId), record])
+  );
+  const result = await syncWeaverRuntimeDb("get_excerpt_handoffs", { recordIds: approvedHandoffs.map(record => record.recordId) });
+  const runtimeRecords = Array.isArray(result?.records) ? result.records : [];
+  const runtimeById = new Map(
+    runtimeRecords.map(record => [cleanSheetWhitespace(record.recordId), record])
+  );
+  const records = approvedHandoffs.map(record => {
+    const runtimeRecord = runtimeById.get(cleanSheetWhitespace(record.recordId));
+    return runtimeRecord ? { ...record, ...runtimeRecord } : record;
+  });
+  const requestedIds = new Set(
+    (Array.isArray(recordIds) ? recordIds : [])
+      .map(value => cleanSheetWhitespace(value))
+      .filter(Boolean)
+  );
+  const scopedRecords = requestedIds.size
+    ? records.filter(record => requestedIds.has(cleanSheetWhitespace(record.recordId)))
+    : records;
   const normalizedStatuses = (Array.isArray(statuses) ? statuses : [])
     .map(normalizeExcerptHandoffStatus)
     .filter(Boolean);
   const filtered = normalizedStatuses.length
-    ? records.filter(record => normalizedStatuses.includes(normalizeExcerptHandoffStatus(record.handoffStatus)))
-    : records;
+    ? scopedRecords.filter(record => normalizedStatuses.includes(normalizeExcerptHandoffStatus(record.handoffStatus)))
+    : scopedRecords;
   return {
-    ok: Boolean(result?.ok),
+    ok: true,
     count: filtered.length,
     records: filtered
   };
@@ -2729,6 +2781,61 @@ async function retryExcerptHandoffs({ recordIds = [], statuses = ["queued", "fai
   return {
     ok: Boolean(statusResult.ok),
     retriedCount: records.length,
+    records: statusResult.records,
+    poetryPlease
+  };
+}
+
+async function backfillApprovedExcerptHandoffs({ since = "", sourceRecordIds = [] } = {}) {
+  const exportResult = await getApprovedExcerptsExportFromSheets({ since });
+  const approvedRecords = Array.isArray(exportResult?.records) ? exportResult.records : [];
+  const requestedIds = new Set(
+    (Array.isArray(sourceRecordIds) ? sourceRecordIds : [])
+      .map(value => cleanSheetWhitespace(value))
+      .filter(Boolean)
+  );
+  const candidates = requestedIds.size
+    ? approvedRecords.filter(record => requestedIds.has(cleanSheetWhitespace(record?.sourceRecordId)))
+    : approvedRecords;
+  const targetRecordIds = candidates
+    .map(record => cleanSheetWhitespace(record?.sourceRecordId))
+    .filter(Boolean)
+    .map(sourceRecordId => `weaver-exc-${sourceRecordId}`);
+  const existingResult = await getExcerptHandoffRecords({ recordIds: targetRecordIds });
+  const existingIds = new Set(
+    (Array.isArray(existingResult?.records) ? existingResult.records : [])
+      .map(record => cleanSheetWhitespace(record?.recordId))
+      .filter(Boolean)
+  );
+  const missing = candidates.filter(
+    record => !existingIds.has(`weaver-exc-${cleanSheetWhitespace(record?.sourceRecordId)}`)
+  );
+  const handoffs = missing
+    .map(buildExcerptHandoffFromApprovedExportRecord)
+    .filter(Boolean);
+
+  if (!handoffs.length) {
+    return {
+      ok: true,
+      savedCount: 0,
+      skipped: true,
+      reason: "no_missing_records",
+      records: []
+    };
+  }
+
+  const upsertResult = await syncWeaverRuntimeDb("upsert_excerpt_handoffs", { handoffs });
+  const records = Array.isArray(upsertResult?.records) ? upsertResult.records : handoffs;
+  let poetryPlease = { ok: true, skipped: true, reason: "no_records" };
+  try {
+    poetryPlease = await handoffApprovedExcerptsToPoetryPlease(records);
+  } catch (error) {
+    poetryPlease = { ok: false, error: error.message };
+  }
+  const statusResult = await updateExcerptHandoffStatuses(records, poetryPlease);
+  return {
+    ok: Boolean(statusResult.ok),
+    savedCount: records.length,
     records: statusResult.records,
     poetryPlease
   };
@@ -3306,6 +3413,9 @@ function buildReviewWriteRanges(update) {
   }
 
   const reviewDecision = normalizeReviewDecisionValue(update.reviewDecision || update.approval);
+  if (!reviewDecision) {
+    return [];
+  }
   const needsCorrection = reviewDecision === "NEEDS_CORRECTION";
   const useForQi = isTruthyParam(update.useForQi || update.graphicsQi);
   const useForInt = isTruthyParam(update.useForInt || update.photos);
@@ -3343,17 +3453,18 @@ function buildReviewWriteRanges(update) {
 }
 
 async function saveReviewsToSheets(updates) {
-  const requests = updates.flatMap(buildReviewWriteRanges);
+  const validUpdates = (Array.isArray(updates) ? updates : []).filter(update => buildReviewWriteRanges(update).length);
+  const requests = validUpdates.flatMap(buildReviewWriteRanges);
   if (!requests.length) {
     return { ok: false, error: "No updates provided." };
   }
 
   await batchUpdateSheetValuesServer(requests);
-  const excerptHandoffs = await syncAcceptedExcerptHandoffs(updates);
+  const excerptHandoffs = await syncAcceptedExcerptHandoffs(validUpdates);
   return {
     ok: true,
     version: `${appVersion}-service-account`,
-    savedCount: updates.length,
+    savedCount: validUpdates.length,
     excerptHandoffs
   };
 }
@@ -3373,6 +3484,41 @@ async function saveSingleReviewToSheets(update) {
     recordId: String(update.recordId || ""),
     excerptHandoffs
   };
+}
+
+async function enrichAcceptedExcerptUpdate(update) {
+  const normalized = update && typeof update === "object" ? { ...update } : {};
+  const sourceRow = parseInt(normalized?.sourceRow, 10);
+  if (!sourceRow || sourceRow < SHEET_SOURCE_CONFIG.startRow) {
+    return normalized;
+  }
+  if (cleanSheetWhitespace(normalized.excerptText) && cleanSheetWhitespace(normalized.bookTitle)) {
+    return normalized;
+  }
+
+  const range = `'${sourceSheetName.replace(/'/g, "''")}'!A${sourceRow}:BK${sourceRow}`;
+  const values = await fetchSheetValuesServer(range);
+  const row = Array.isArray(values) ? values[0] : null;
+  if (!row) {
+    return normalized;
+  }
+  const canonicalBookAuthorMap = await getCanonicalGraphicsBookAuthorMap().catch(() => new Map());
+  const record = buildPendingRecordFromSheetRow(row, sourceRow - SHEET_SOURCE_CONFIG.startRow, canonicalBookAuthorMap) || {
+    sourceRow,
+    recordId: (row[SHEET_SOURCE_CONFIG.columnMap.recordId - 1] || "").toString(),
+    author: resolveGraphicsAuthor(row[SHEET_SOURCE_CONFIG.columnMap.author - 1] || "", cleanSheetWhitespace(row[SHEET_SOURCE_CONFIG.columnMap.bookTitle - 1] || ""), canonicalBookAuthorMap),
+    title: (row[SHEET_SOURCE_CONFIG.columnMap.title - 1] || "").toString(),
+    bookTitle: cleanSheetWhitespace(row[SHEET_SOURCE_CONFIG.columnMap.bookTitle - 1] || ""),
+    excerptText: (row[SHEET_SOURCE_CONFIG.columnMap.excerpt - 1] || "").toString()
+  };
+
+  normalized.recordId = cleanSheetWhitespace(normalized.recordId) || record.recordId || "";
+  normalized.author = cleanSheetWhitespace(normalized.author) || record.author || "";
+  normalized.title = cleanSheetWhitespace(normalized.title) || record.title || "";
+  normalized.poemTitle = cleanSheetWhitespace(normalized.poemTitle) || record.title || "";
+  normalized.bookTitle = cleanSheetWhitespace(normalized.bookTitle) || record.bookTitle || "";
+  normalized.excerptText = normalized.excerptText || record.excerptText || "";
+  return normalized;
 }
 
 function buildAcceptedExcerptHandoff(update) {
@@ -3410,8 +3556,45 @@ function buildAcceptedExcerptHandoff(update) {
   };
 }
 
+function buildExcerptHandoffFromApprovedExportRecord(record) {
+  const sourceRecordId = cleanSheetWhitespace(record?.sourceRecordId);
+  const excerptText = cleanSheetWhitespace(record?.excerptText);
+  if (!sourceRecordId || !excerptText) {
+    return null;
+  }
+
+  const approvedAt =
+    cleanSheetWhitespace(record?.sourceApprovedAt) ||
+    cleanSheetWhitespace(record?.sourceUpdatedAt) ||
+    new Date().toISOString();
+  const updatedAt =
+    cleanSheetWhitespace(record?.sourceUpdatedAt) ||
+    approvedAt;
+
+  return {
+    recordId: `weaver-exc-${sourceRecordId}`,
+    contentType: "EXC",
+    sourceSystem: "weaver",
+    sourceRecordId,
+    author: cleanSheetWhitespace(record?.author),
+    bookTitle: cleanSheetWhitespace(record?.bookTitle),
+    poemTitle: cleanSheetWhitespace(record?.poemTitle),
+    excerpt: excerptText,
+    handoffStatus: "queued",
+    handoffMode: "backfill",
+    approvedAt,
+    updatedAt,
+    payload: {
+      sourceRow: parseInt(record?.sourceRow, 10) || 0,
+      sourceRecordId,
+      reviewDecision: "accept"
+    }
+  };
+}
+
 async function syncAcceptedExcerptHandoffs(updates) {
-  const handoffs = (Array.isArray(updates) ? updates : [])
+  const normalizedUpdates = await Promise.all((Array.isArray(updates) ? updates : []).map(enrichAcceptedExcerptUpdate));
+  const handoffs = normalizedUpdates
     .map(buildAcceptedExcerptHandoff)
     .filter(Boolean);
   if (!handoffs.length) {
@@ -4029,6 +4212,22 @@ const server = http.createServer(async (req, res) => {
       const recordIds = Array.isArray(parsed.recordIds) ? parsed.recordIds : [];
       const statuses = Array.isArray(parsed.statuses) ? parsed.statuses : ["queued", "failed"];
       const result = await retryExcerptHandoffs({ recordIds, statuses });
+      return sendJson(res, 200, result);
+    } catch (error) {
+      return sendJson(res, 500, {
+        ok: false,
+        error: error.message
+      });
+    }
+  }
+
+  if (url.pathname === "/api/excerpts/handoffs/backfill-approved" && req.method === "POST") {
+    try {
+      const body = await readRequestBody(req);
+      const parsed = JSON.parse(body || "{}");
+      const since = cleanSheetWhitespace(parsed.since);
+      const sourceRecordIds = Array.isArray(parsed.sourceRecordIds) ? parsed.sourceRecordIds : [];
+      const result = await backfillApprovedExcerptHandoffs({ since, sourceRecordIds });
       return sendJson(res, 200, result);
     } catch (error) {
       return sendJson(res, 500, {
