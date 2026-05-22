@@ -47,3 +47,17 @@ data/missing_workbook_records.json
 data/old_tool_coverage_report.json
 data/old_tool_archive.db
 archive/scripts/data/
+QI_DATABASE_ROADMAP.md
+backfill_source_records_to_weaver.py
+compare_workbook_to_library.py
+export_weaver_excerpt_library.py
+extract_workbook_approved_excerpts.py
+import_old_tool_archive.py
+link_raw_rows_to_excerpt_entries.py
+raw_row_status_report.py
+reconcile_sources_to_weaver.py
+run_backfill_batches.py
+sync_old_tool_archive_into_excerpt_db.py
+verify_old_tool_coverage.py
+data/missing_old_tool_records.json
+data/workbook_approved_backfill.json
