@@ -20,6 +20,7 @@ const elements = {
   bookSelect: document.getElementById("book-select"),
   weirdBookSelect: document.getElementById("weird-book-select"),
   reviewFilter: document.getElementById("review-filter"),
+  reviewReleaseCatalog: document.getElementById("review-release-catalog"),
   reviewDisplayMode: document.getElementById("review-display-mode"),
   weirdReviewFilter: document.getElementById("weird-review-filter"),
   loadExcerpts: document.getElementById("load-excerpts"),
@@ -36,6 +37,7 @@ const elements = {
   correctionList: document.getElementById("correction-list"),
   graphicsMode: document.getElementById("graphics-mode"),
   graphicsFilter: document.getElementById("graphics-filter"),
+  graphicsReleaseCatalog: document.getElementById("graphics-release-catalog"),
   graphicsBookSelect: document.getElementById("graphics-book-select"),
   loadGraphicsBooks: document.getElementById("load-graphics-books"),
   loadGraphicsRecords: document.getElementById("load-graphics-records"),
@@ -725,12 +727,70 @@ function getReviewQueueIncludeSet() {
   return new Set(titles.map(normalizeBookKey).filter(Boolean));
 }
 
+function getReleaseCatalogOptions() {
+  return Array.isArray(runtimeConfig.releaseCatalogOptions)
+    ? runtimeConfig.releaseCatalogOptions.filter(Boolean)
+    : [];
+}
+
+function getReleaseCatalogByBookKey() {
+  const raw = runtimeConfig.releaseCatalogByTitle || {};
+  return raw && typeof raw === "object" ? raw : {};
+}
+
+function getSelectedReviewReleaseCatalog() {
+  return elements.reviewReleaseCatalog?.value || "__all__";
+}
+
+function getSelectedGraphicsReleaseCatalog() {
+  return elements.graphicsReleaseCatalog?.value || "__all__";
+}
+
+function matchesSelectedReleaseCatalog(bookTitle, selectedCatalog = "__all__") {
+  if (!selectedCatalog || selectedCatalog === "__all__") {
+    return true;
+  }
+  const catalogByBookKey = getReleaseCatalogByBookKey();
+  const currentCatalog = catalogByBookKey[normalizeBookKey(bookTitle)] || "";
+  return currentCatalog === selectedCatalog;
+}
+
+function populateReleaseCatalogSelect(select, selectedValue = "__all__") {
+  if (!select) return;
+  const options = getReleaseCatalogOptions();
+  select.innerHTML = "";
+  const allOption = document.createElement("option");
+  allOption.value = "__all__";
+  allOption.textContent = "All release catalogs";
+  select.appendChild(allOption);
+  options.forEach(optionValue => {
+    const option = document.createElement("option");
+    option.value = optionValue;
+    option.textContent = optionValue;
+    select.appendChild(option);
+  });
+  select.value = options.includes(selectedValue) ? selectedValue : "__all__";
+}
+
+function syncReleaseCatalogFilterUi() {
+  if (elements.reviewReleaseCatalog) {
+    elements.reviewReleaseCatalog.disabled = getSelectedReviewFilter() !== "current_titles";
+  }
+  if (elements.graphicsReleaseCatalog) {
+    elements.graphicsReleaseCatalog.disabled = getSelectedGraphicsMode() !== "queue" || getSelectedGraphicsFilter() !== "current_titles";
+  }
+}
+
 function getVisibleReviewBookSummaries() {
   const reviewQueueIncludeSet = getReviewQueueIncludeSet();
   if (getSelectedReviewFilter() !== "current_titles" || !reviewQueueIncludeSet.size) {
     return currentReviewBookSummaries;
   }
-  return currentReviewBookSummaries.filter(book => reviewQueueIncludeSet.has(book.key));
+  const selectedCatalog = getSelectedReviewReleaseCatalog();
+  return currentReviewBookSummaries.filter(book => (
+    reviewQueueIncludeSet.has(book.key)
+    && matchesSelectedReleaseCatalog(book.title, selectedCatalog)
+  ));
 }
 
 function refreshReviewBookSelect(preserveSelection = true) {
@@ -1964,8 +2024,11 @@ function getVisibleGraphicsBookSummaries() {
   if (!reviewQueueIncludeSet.size) {
     return currentGraphicsBookSummaries;
   }
-
-  return currentGraphicsBookSummaries.filter(book => reviewQueueIncludeSet.has(normalizeBookKey(book.title)));
+  const selectedCatalog = getSelectedGraphicsReleaseCatalog();
+  return currentGraphicsBookSummaries.filter(book => (
+    reviewQueueIncludeSet.has(normalizeBookKey(book.title))
+    && matchesSelectedReleaseCatalog(book.title, selectedCatalog)
+  ));
 }
 
 function isGraphicsQcSweepSelection(value = elements.graphicsBookSelect?.value || "") {
@@ -2825,7 +2888,11 @@ function applyReviewFilter(excerpts) {
     if (!reviewQueueIncludeSet.size) {
       return excerpts;
     }
-    return excerpts.filter(excerpt => reviewQueueIncludeSet.has(normalizeBookKey(excerpt.bookTitle)));
+    const selectedCatalog = getSelectedReviewReleaseCatalog();
+    return excerpts.filter(excerpt => (
+      reviewQueueIncludeSet.has(normalizeBookKey(excerpt.bookTitle))
+      && matchesSelectedReleaseCatalog(excerpt.bookTitle, selectedCatalog)
+    ));
   }
   if (mode === "new_only") {
     return excerpts.filter(excerpt => !hasLibraryExcerptMatch(excerpt));
@@ -4409,6 +4476,15 @@ elements.gatheringVideoQuote?.addEventListener("input", updateGatheringQuoteMeta
 ].forEach(field => field?.addEventListener("keydown", handleGatheringQuickSubmit));
 if (elements.reviewFilter) {
   elements.reviewFilter.addEventListener("change", () => {
+    syncReleaseCatalogFilterUi();
+    refreshReviewBookSelect(true);
+    reviewVisibleCount = getReviewBatchSize();
+    reviewPinnedRowOrder = [];
+    renderCurrentExcerpts();
+  });
+}
+if (elements.reviewReleaseCatalog) {
+  elements.reviewReleaseCatalog.addEventListener("change", () => {
     refreshReviewBookSelect(true);
     reviewVisibleCount = getReviewBatchSize();
     reviewPinnedRowOrder = [];
@@ -4434,6 +4510,7 @@ if (elements.graphicsMode) {
     if (elements.graphicsFilter) {
       elements.graphicsFilter.disabled = getSelectedGraphicsMode() !== "queue";
     }
+    syncReleaseCatalogFilterUi();
     refreshGraphicsFolderImportVisibility();
     currentGraphicsRecords = [];
     currentGraphicsAssetMatches = new Map();
@@ -4448,12 +4525,21 @@ if (elements.graphicsMode) {
 if (elements.graphicsFilter) {
   elements.graphicsFilter.disabled = getSelectedGraphicsMode() !== "queue";
   elements.graphicsFilter.addEventListener("change", () => {
+    syncReleaseCatalogFilterUi();
+    refreshGraphicsBookSelect(true);
+  });
+}
+if (elements.graphicsReleaseCatalog) {
+  elements.graphicsReleaseCatalog.addEventListener("change", () => {
     refreshGraphicsBookSelect(true);
   });
 }
 
 async function initializeApp() {
   await loadRuntimeConfig();
+  populateReleaseCatalogSelect(elements.reviewReleaseCatalog);
+  populateReleaseCatalogSelect(elements.graphicsReleaseCatalog);
+  syncReleaseCatalogFilterUi();
   applyRuntimeMode();
   updateGatheringModeUi();
   refreshGraphicsFolderImportVisibility();

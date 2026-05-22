@@ -240,6 +240,24 @@ async function getReviewQueueIncludeTitles() {
   }
 }
 
+async function getReleaseCatalogMetadata() {
+  try {
+    const books = await getReleaseCatalogQueueBooks();
+    const releaseCatalogOptions = Array.from(new Set(
+      books.map(book => cleanSheetWhitespace(book.releaseCatalog)).filter(Boolean)
+    ));
+    const releaseCatalogByTitle = {};
+    books.forEach(book => {
+      const key = normalizeBookKey(book.title);
+      if (!key) return;
+      releaseCatalogByTitle[key] = cleanSheetWhitespace(book.releaseCatalog);
+    });
+    return { releaseCatalogOptions, releaseCatalogByTitle };
+  } catch {
+    return { releaseCatalogOptions: [], releaseCatalogByTitle: {} };
+  }
+}
+
 function resolvePublishingBookMeta(bookTitle = "", canonicalBookTitle = "") {
   const keys = [normalizeBookKey(bookTitle), normalizeBookKey(canonicalBookTitle)].filter(Boolean);
   for (const key of keys) {
@@ -4144,6 +4162,7 @@ const server = http.createServer(async (req, res) => {
 
   if (url.pathname === "/api/bootstrap") {
     const reviewQueueIncludeTitles = await getReviewQueueIncludeTitles();
+    const { releaseCatalogOptions, releaseCatalogByTitle } = await getReleaseCatalogMetadata();
     return sendJson(res, 200, {
       appName: "Weaver",
       appVersion,
@@ -4153,6 +4172,8 @@ const server = http.createServer(async (req, res) => {
       spreadsheetId,
       sourceSheetName,
       reviewQueueIncludeTitles,
+      releaseCatalogOptions,
+      releaseCatalogByTitle,
       reviewApiMode: "cloud-run-sheet-proxy",
       sections: [
         { id: "gathering", label: "Excerpt gathering" },
