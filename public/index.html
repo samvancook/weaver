@@ -11,7 +11,7 @@
     })();
   </script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
-  <link rel="stylesheet" href="/style.css?v=20260427a" />
+  <link rel="stylesheet" href="/style.css?v=20260521a" />
 </head>
 <body>
   <div class="shell">
@@ -47,6 +47,7 @@
           <label class="field field--grow">
             <span>Email</span>
             <input id="gathering-email" type="email" placeholder="name@buttonpoetry.com" />
+            <p class="field-warning" id="gathering-email-warning" hidden>Add your email before submitting.</p>
           </label>
         </div>
         <select id="gathering-mode" hidden aria-hidden="true">
@@ -179,7 +180,7 @@
           <label class="field">
             <span>Queue Mode</span>
             <select id="review-filter">
-              <option value="current_titles">2026 Titles</option>
+              <option value="current_titles">Release Catalog</option>
               <option value="all">All pending</option>
               <option value="new_only">New to library only</option>
               <option value="exact_library">Exact library matches</option>
@@ -307,7 +308,7 @@
           <label class="field">
             <span>Queue Mode</span>
             <select id="graphics-filter">
-              <option value="current_titles">2026 Titles</option>
+              <option value="current_titles">Release Catalog</option>
               <option value="all">All books</option>
             </select>
           </label>
@@ -321,7 +322,7 @@
           <button id="load-graphics-records" class="button">Load Queue Rows</button>
         </div>
         <p class="hint">
-          This replaces the old quote-image creation browser. `Needs graphics` is the true creation queue. `2026 Titles` narrows that queue to the current season. `Graphics QC` is for graphics that already exist and should be reviewed. `Mismatch pairing` is for QC-rejected graphics that need to be matched to the correct excerpt. `Poetry Please handoff` is for approved graphics and their downstream status.
+          This replaces the old quote-image creation browser. `Needs graphics` is the true creation queue. `Release Catalog` narrows that queue to books with publishing-order release metadata. `Graphics QC` is for graphics that already exist and should be reviewed. `Mismatch pairing` is for QC-rejected graphics that need to be matched to the correct excerpt. `Poetry Please handoff` is for approved graphics and their downstream status.
         </p>
         <div class="panel__header module-panel__subheader">
           <h3>EXC Handoff</h3>
@@ -378,6 +379,6 @@
     </main>
   </div>
 
-  <script src="/app.js?v=20260512a"></script>
+  <script src="/app.js?v=20260521a"></script>
 </body>
 </html>

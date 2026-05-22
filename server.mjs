@@ -45,7 +45,7 @@ const poetryPleaseApiUrl =
   "https://poetryplease.org/api";
 const poetryPleaseApiKey =
   String(process.env.POETRY_PLEASE_API_KEY || "").trim();
-const defaultReviewQueueIncludeTitles = [
+const fallbackReviewQueueIncludeTitles = [
   "A Choir of Honest Killers",
   "all the ugly bits",
   "Coin Laundry at Midnight",
@@ -210,8 +210,45 @@ function normalizeBookKey(text) {
   return getBookBaseTitle(text).toLowerCase();
 }
 
-function getReviewQueueIncludeSet() {
-  return new Set(defaultReviewQueueIncludeTitles.map(normalizeBookKey).filter(Boolean));
+function buildReviewQueueIncludeSetFromBooks(books = []) {
+  return new Set(
+    books
+      .filter(book => cleanSheetWhitespace(book?.releaseCatalog) && cleanSheetWhitespace(book?.bookShortener))
+      .map(book => normalizeBookKey(book.title))
+      .filter(Boolean)
+  );
+}
+
+async function getReleaseCatalogQueueBooks() {
+  const books = await getPublishingOrderBooks();
+  return books.filter(book => cleanSheetWhitespace(book?.releaseCatalog) && cleanSheetWhitespace(book?.bookShortener));
+}
+
+async function getReviewQueueIncludeSet() {
+  try {
+    return buildReviewQueueIncludeSetFromBooks(await getReleaseCatalogQueueBooks());
+  } catch {
+    return new Set(fallbackReviewQueueIncludeTitles.map(normalizeBookKey).filter(Boolean));
+  }
+}
+
+async function getReviewQueueIncludeTitles() {
+  try {
+    return (await getReleaseCatalogQueueBooks()).map(book => book.title);
+  } catch {
+    return fallbackReviewQueueIncludeTitles;
+  }
+}
+
+function resolvePublishingBookMeta(bookTitle = "", canonicalBookTitle = "") {
+  const keys = [normalizeBookKey(bookTitle), normalizeBookKey(canonicalBookTitle)].filter(Boolean);
+  for (const key of keys) {
+    const match = publishingBooksCache?.get(key);
+    if (match) {
+      return match;
+    }
+  }
+  return null;
 }
 
 function canonicalizeKnownAuthorName(value, { bookTitle = "" } = {}) {
@@ -1758,7 +1795,7 @@ function buildApprovedExcerptExportRecordFromSheetRow(row, index, canonicalBookA
     || cleanSheetWhitespace(row[config.correctedBookTitle - 1])
     || cleanSheetWhitespace(row[config.correctedExcerpt - 1])
   );
-  const bookMeta = publishingBooksCache?.get(normalizeBookKey(bookTitle)) || null;
+  const bookMeta = resolvePublishingBookMeta(bookTitle, canonicalBookTitle);
 
   return {
     sourceKind: "weaver",
@@ -2585,8 +2622,20 @@ function buildPoetryPleaseExcerptRecord(record) {
   if (!record) return null;
   const excerpt = String(record.excerpt || record.quoteText || "").trim();
   const recordId = cleanSheetWhitespace(record.recordId);
+  const bookShortener = cleanSheetWhitespace(record.bookShortener);
+  const releaseCatalog = cleanSheetWhitespace(record.releaseCatalog);
   if (!recordId || !excerpt) {
     return null;
+  }
+  if (!bookShortener || !releaseCatalog) {
+    return {
+      invalid: true,
+      recordId,
+      error: `Missing required publishing metadata: ${[
+        !bookShortener ? "bookShortener" : "",
+        !releaseCatalog ? "releaseCatalog" : ""
+      ].filter(Boolean).join(", ")}`
+    };
   }
 
   return {
@@ -2600,9 +2649,9 @@ function buildPoetryPleaseExcerptRecord(record) {
     excerpt,
     approvedAt: cleanSheetWhitespace(record.approvedAt),
     updatedAt: cleanSheetWhitespace(record.updatedAt),
-    bookShortener: String(record.bookShortener || ""),
+    bookShortener,
     bookLink: String(record.bookLink || ""),
-    releaseCatalog: String(record.releaseCatalog || ""),
+    releaseCatalog,
     driveLink: String(record.driveLink || ""),
     sourceUrl: String(record.sourceUrl || ""),
     pageNumber: String(record.pageNumber || "")
@@ -2623,6 +2672,16 @@ async function handoffApprovedExcerptsToPoetryPlease(records = []) {
   let updatedCount = 0;
   let errorCount = 0;
   for (const record of approvedRecords) {
+    if (record.invalid) {
+      errorCount += 1;
+      results.push({
+        recordId: record.recordId,
+        ok: false,
+        error: record.error,
+        response: { ok: false, error: record.error }
+      });
+      continue;
+    }
     try {
       const response = await fetch(`${poetryPleaseApiUrl.replace(/\/$/, "")}/internal/weaverImport`, {
         method: "POST",
@@ -2992,7 +3051,7 @@ async function getPigReworkRequests(filterMode = "all") {
     .filter(Boolean);
 
   if (cleanSheetWhitespace(filterMode).toLowerCase() === "current_titles") {
-    const allowed = getReviewQueueIncludeSet();
+    const allowed = await getReviewQueueIncludeSet();
     records = records.filter(record => allowed.has(normalizeBookKey(record.bookTitle)));
   }
 
@@ -3017,7 +3076,7 @@ async function getPigMismatchRecords(filterMode = "all") {
       .filter(Boolean);
 
     if (cleanSheetWhitespace(filterMode).toLowerCase() === "current_titles") {
-      const allowed = getReviewQueueIncludeSet();
+      const allowed = await getReviewQueueIncludeSet();
       records = records.filter(record => allowed.has(normalizeBookKey(record.bookTitle)));
     }
 
@@ -3121,7 +3180,7 @@ async function getPigGraphicsRequests(filterMode = "all", { includeCompleted = f
     }
 
     if (cleanSheetWhitespace(filterMode).toLowerCase() === "current_titles") {
-      const allowed = getReviewQueueIncludeSet();
+      const allowed = await getReviewQueueIncludeSet();
       records = records.filter(record => allowed.has(normalizeBookKey(record.bookTitle)));
     }
 
@@ -3518,6 +3577,11 @@ async function enrichAcceptedExcerptUpdate(update) {
   normalized.poemTitle = cleanSheetWhitespace(normalized.poemTitle) || record.title || "";
   normalized.bookTitle = cleanSheetWhitespace(normalized.bookTitle) || record.bookTitle || "";
   normalized.excerptText = normalized.excerptText || record.excerptText || "";
+  const bookMeta = resolvePublishingBookMeta(normalized.bookTitle, normalized.bookTitle);
+  if (bookMeta) {
+    normalized.bookShortener = cleanSheetWhitespace(normalized.bookShortener) || cleanSheetWhitespace(bookMeta.bookShortener);
+    normalized.releaseCatalog = cleanSheetWhitespace(normalized.releaseCatalog) || cleanSheetWhitespace(bookMeta.releaseCatalog);
+  }
   return normalized;
 }
 
@@ -3548,6 +3612,12 @@ function buildAcceptedExcerptHandoff(update) {
     handoffMode: "auto",
     approvedAt: now,
     updatedAt: now,
+    bookShortener: cleanSheetWhitespace(update?.bookShortener),
+    bookLink: cleanSheetWhitespace(update?.bookLink),
+    releaseCatalog: cleanSheetWhitespace(update?.releaseCatalog),
+    driveLink: cleanSheetWhitespace(update?.driveLink),
+    sourceUrl: cleanSheetWhitespace(update?.sourceUrl),
+    pageNumber: cleanSheetWhitespace(update?.pageNumber),
     payload: {
       sourceRow: sourceRow || 0,
       sourceRecordId,
@@ -3584,6 +3654,12 @@ function buildExcerptHandoffFromApprovedExportRecord(record) {
     handoffMode: "backfill",
     approvedAt,
     updatedAt,
+    bookShortener: cleanSheetWhitespace(record?.bookShortener),
+    bookLink: cleanSheetWhitespace(record?.bookLink),
+    releaseCatalog: cleanSheetWhitespace(record?.releaseCatalog),
+    driveLink: cleanSheetWhitespace(record?.driveLink),
+    sourceUrl: cleanSheetWhitespace(record?.sourceUrl),
+    pageNumber: cleanSheetWhitespace(record?.pageNumber),
     payload: {
       sourceRow: parseInt(record?.sourceRow, 10) || 0,
       sourceRecordId,
@@ -4067,6 +4143,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (url.pathname === "/api/bootstrap") {
+    const reviewQueueIncludeTitles = await getReviewQueueIncludeTitles();
     return sendJson(res, 200, {
       appName: "Weaver",
       appVersion,
@@ -4075,7 +4152,7 @@ const server = http.createServer(async (req, res) => {
       sheetReadFallbackEnabled: false,
       spreadsheetId,
       sourceSheetName,
-      reviewQueueIncludeTitles: defaultReviewQueueIncludeTitles,
+      reviewQueueIncludeTitles,
       reviewApiMode: "cloud-run-sheet-proxy",
       sections: [
         { id: "gathering", label: "Excerpt gathering" },

@@ -53,6 +53,7 @@ const elements = {
   graphicsList: document.getElementById("graphics-list"),
   gatheringMode: document.getElementById("gathering-mode"),
   gatheringEmail: document.getElementById("gathering-email"),
+  gatheringEmailWarning: document.getElementById("gathering-email-warning"),
   gatheringBookFields: document.getElementById("gathering-book-fields"),
   gatheringBookAuthor: document.getElementById("gathering-book-author"),
   gatheringBookTitle: document.getElementById("gathering-book-title"),
@@ -128,6 +129,7 @@ let currentWeirdBookSummaries = [];
 let reviewBookSummaryByKey = new Map();
 let weirdBookSummaryByKey = new Map();
 let graphicsBookSummaryByKey = new Map();
+let gatheringCatalogPopup = null;
 
 const REVIEW_SINGLE_BATCH_SIZE = 1;
 const REVIEW_MULTI_BATCH_SIZE = 25;
@@ -1204,6 +1206,9 @@ function navigateGatheringCatalogPoem(direction) {
 
   elements.gatheringBookTitle.value = currentGatheringBookPoems[nextIndex];
   updateGatheringCatalogPreviewState();
+  if (gatheringCatalogPopup && !gatheringCatalogPopup.closed) {
+    openGatheringCatalogPoem();
+  }
 }
 
 async function handleGatheringBookSelectionChange({ preserveTitle = false } = {}) {
@@ -1307,6 +1312,14 @@ function updateGatheringQuoteMeta() {
   }
 }
 
+function setGatheringEmailWarning(message = "") {
+  if (!elements.gatheringEmail || !elements.gatheringEmailWarning) return;
+  const hasMessage = !!String(message || "").trim();
+  elements.gatheringEmailWarning.hidden = !hasMessage;
+  elements.gatheringEmailWarning.textContent = hasMessage ? String(message).trim() : "";
+  elements.gatheringEmail.classList.toggle("field-error", hasMessage);
+}
+
 function handleGatheringQuickSubmit(event) {
   if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
     event.preventDefault();
@@ -1318,8 +1331,11 @@ function buildGatheringPayload() {
   const mode = getSelectedGatheringMode();
   const email = elements.gatheringEmail?.value.trim() || "";
   if (!email) {
+    setGatheringEmailWarning("Add your email before submitting.");
+    elements.gatheringEmail?.focus();
     throw new Error("Add an email before submitting an excerpt gathering row.");
   }
+  setGatheringEmailWarning("");
 
   if (mode === "book") {
     const author = elements.gatheringBookAuthor?.value.trim() || "";
@@ -1393,6 +1409,7 @@ async function submitGathering() {
     setStatus(`Submitting ${INTAKE_MODE_LABELS[payload.mode] || "excerpt gathering"} row...`);
     const result = await postReviewApi("/api/intake/submit", payload);
     resetGatheringAfterSubmit(payload.mode);
+    setGatheringEmailWarning("");
     setStatus(`Saved excerpt gathering row ${result.rowNumber}.`, result);
     if (currentModule === "review") {
       loadBooks();
@@ -1416,7 +1433,7 @@ function openGatheringCatalogPoem() {
   if (excerptText) {
     url.searchParams.set("excerptText", excerptText);
   }
-  openComparisonWindow(url.toString(), "weaverGatheringCatalogPoem");
+  gatheringCatalogPopup = openComparisonWindow(url.toString(), "weaverGatheringCatalogPoem");
 }
 
 function ensureGoogleSheetsTokenClient() {
@@ -1657,8 +1674,10 @@ function openComparisonWindow(href, windowName) {
     }
     popup.location.replace(href);
     popup.focus();
+    return popup;
   } else {
     window.open(href, "_blank", "noopener,noreferrer");
+    return null;
   }
 }
 
@@ -3011,7 +3030,7 @@ function isExtraReviewRecord(record, providedValidation = null) {
 
 function getEmptyStateMessage() {
   if (getSelectedReviewFilter() === "current_titles") {
-    return "No pending excerpts in this book are currently in the 2026 titles lane.";
+    return "No pending excerpts in this book are currently in the release-catalog lane.";
   }
   if (getSelectedReviewFilter() === "new_only") {
     return "No currently loaded excerpts appear to be net new to the excerpt library.";
@@ -4346,6 +4365,11 @@ elements.loadGatheringOptions?.addEventListener("click", () => {
   });
 });
 elements.submitGathering?.addEventListener("click", submitGathering);
+elements.gatheringEmail?.addEventListener("input", () => {
+  if (elements.gatheringEmail?.value.trim()) {
+    setGatheringEmailWarning("");
+  }
+});
 elements.gatheringMode?.addEventListener("change", updateGatheringModeUi);
 elements.gatheringBookBook?.addEventListener("change", () => {
   handleGatheringBookSelectionChange().catch(error => {
