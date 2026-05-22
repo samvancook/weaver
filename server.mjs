@@ -223,6 +223,11 @@ const CONTRIBUTOR_INVITES = [
     email: "samvancook@gmail.com",
     role: "contributor",
     allowedBooks: ["without the frills"]
+  },
+  {
+    email: "gigibellag@gmail.com",
+    role: "contributor",
+    allowedBooks: ["without the frills"]
   }
 ];
 

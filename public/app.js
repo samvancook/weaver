@@ -436,6 +436,13 @@ function getContributorShellPrefillEmail() {
   return cleanSheetWhitespace(contributorShellParams.get("invite") || contributorShellParams.get("email") || "");
 }
 
+function setElementForcedHidden(element, shouldHide) {
+  if (!element) return;
+  element.toggleAttribute("hidden", shouldHide);
+  element.style.display = shouldHide ? "none" : "";
+  element.setAttribute("aria-hidden", shouldHide ? "true" : "false");
+}
+
 function getAllowedContributorBooks(access) {
   return new Set(
     (Array.isArray(access?.allowedBooks) ? access.allowedBooks : [])
@@ -1012,12 +1019,12 @@ function applyContributorAccessMode() {
   const isContributorShell = isContributorShellRequested();
   const hideIrrelevantUi = isContributorMode || isContributorShell;
 
-  elements.showReviewModule?.toggleAttribute("hidden", hideIrrelevantUi);
-  elements.showWeirdModule?.toggleAttribute("hidden", hideIrrelevantUi);
-  elements.showCorrectionsModule?.toggleAttribute("hidden", hideIrrelevantUi);
-  elements.showGraphicsModule?.toggleAttribute("hidden", hideIrrelevantUi);
-  elements.gatheringTabVideo?.toggleAttribute("hidden", hideIrrelevantUi);
-  elements.gatheringTabFix?.toggleAttribute("hidden", hideIrrelevantUi);
+  setElementForcedHidden(elements.showReviewModule, hideIrrelevantUi);
+  setElementForcedHidden(elements.showWeirdModule, hideIrrelevantUi);
+  setElementForcedHidden(elements.showCorrectionsModule, hideIrrelevantUi);
+  setElementForcedHidden(elements.showGraphicsModule, hideIrrelevantUi);
+  setElementForcedHidden(elements.gatheringTabVideo, hideIrrelevantUi);
+  setElementForcedHidden(elements.gatheringTabFix, hideIrrelevantUi);
 
   if (hideIrrelevantUi) {
     setGatheringMode("book");
