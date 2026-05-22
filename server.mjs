@@ -182,6 +182,10 @@ function cleanSheetWhitespace(text) {
   return String(text || "").replace(/\s+/g, " ").trim();
 }
 
+function normalizeExcerptTransferText(text) {
+  return String(text || "").replace(/\r\n?/g, "\n").trim();
+}
+
 function getBookBaseTitle(text) {
   const cleanedTitle = cleanSheetWhitespace(text);
   if (!cleanedTitle) return "";
@@ -243,9 +247,41 @@ async function getReviewQueueIncludeTitles() {
 async function getReleaseCatalogMetadata() {
   try {
     const books = await getReleaseCatalogQueueBooks();
+    const sortReleaseCatalogOptions = (left, right) => {
+      const parseCatalog = value => {
+        const cleaned = cleanSheetWhitespace(value);
+        const match = cleaned.match(/^(Spring|Fall)\s+(\d{4})$/i);
+        if (match) {
+          return {
+            raw: cleaned,
+            recognized: true,
+            seasonRank: match[1].toLowerCase() === "fall" ? 2 : 1,
+            year: Number(match[2])
+          };
+        }
+        return {
+          raw: cleaned,
+          recognized: false,
+          seasonRank: 0,
+          year: -Infinity
+        };
+      };
+
+      const a = parseCatalog(left);
+      const b = parseCatalog(right);
+      if (a.recognized && b.recognized) {
+        if (a.year !== b.year) return b.year - a.year;
+        if (a.seasonRank !== b.seasonRank) return b.seasonRank - a.seasonRank;
+        return a.raw.localeCompare(b.raw);
+      }
+      if (a.recognized) return -1;
+      if (b.recognized) return 1;
+      return a.raw.localeCompare(b.raw);
+    };
+
     const releaseCatalogOptions = Array.from(new Set(
       books.map(book => cleanSheetWhitespace(book.releaseCatalog)).filter(Boolean)
-    ));
+    )).sort(sortReleaseCatalogOptions);
     const releaseCatalogByTitle = {};
     books.forEach(book => {
       const key = normalizeBookKey(book.title);
@@ -2638,11 +2674,11 @@ async function handoffApprovedGraphicsToPoetryPlease(records = []) {
 
 function buildPoetryPleaseExcerptRecord(record) {
   if (!record) return null;
-  const excerpt = String(record.excerpt || record.quoteText || "").trim();
+  const excerpt = normalizeExcerptTransferText(record.excerpt || record.quoteText || "");
   const recordId = cleanSheetWhitespace(record.recordId);
   const bookShortener = cleanSheetWhitespace(record.bookShortener);
   const releaseCatalog = cleanSheetWhitespace(record.releaseCatalog);
-  if (!recordId || !excerpt) {
+  if (!recordId || !cleanSheetWhitespace(excerpt)) {
     return null;
   }
   if (!bookShortener || !releaseCatalog) {
@@ -3646,8 +3682,8 @@ function buildAcceptedExcerptHandoff(update) {
 
 function buildExcerptHandoffFromApprovedExportRecord(record) {
   const sourceRecordId = cleanSheetWhitespace(record?.sourceRecordId);
-  const excerptText = cleanSheetWhitespace(record?.excerptText);
-  if (!sourceRecordId || !excerptText) {
+  const excerptText = normalizeExcerptTransferText(record?.excerptText);
+  if (!sourceRecordId || !cleanSheetWhitespace(excerptText)) {
     return null;
   }
 
