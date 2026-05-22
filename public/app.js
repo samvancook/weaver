@@ -133,6 +133,7 @@ let reviewBookSummaryByKey = new Map();
 let weirdBookSummaryByKey = new Map();
 let graphicsBookSummaryByKey = new Map();
 let gatheringCatalogPopup = null;
+const contributorShellParams = new URLSearchParams(window.location.search);
 
 const REVIEW_SINGLE_BATCH_SIZE = 1;
 const REVIEW_MULTI_BATCH_SIZE = 25;
@@ -425,6 +426,14 @@ function getContributorAccessForEmail(email) {
   const invites = Array.isArray(runtimeConfig.contributorInvites) ? runtimeConfig.contributorInvites : [];
   if (!cleanedEmail) return null;
   return invites.find(invite => String(invite?.email || "").trim().toLowerCase() === cleanedEmail) || null;
+}
+
+function isContributorShellRequested() {
+  return contributorShellParams.get("contributor") === "1";
+}
+
+function getContributorShellPrefillEmail() {
+  return cleanSheetWhitespace(contributorShellParams.get("invite") || contributorShellParams.get("email") || "");
 }
 
 function getAllowedContributorBooks(access) {
@@ -1000,16 +1009,21 @@ function applyRuntimeMode() {
 function applyContributorAccessMode() {
   currentContributorAccess = getContributorAccessForEmail(elements.gatheringEmail?.value || "");
   const isContributorMode = !!currentContributorAccess;
+  const isContributorShell = isContributorShellRequested();
+  const hideIrrelevantUi = isContributorMode || isContributorShell;
 
-  elements.showReviewModule?.toggleAttribute("hidden", isContributorMode);
-  elements.showWeirdModule?.toggleAttribute("hidden", isContributorMode);
-  elements.showCorrectionsModule?.toggleAttribute("hidden", isContributorMode);
-  elements.showGraphicsModule?.toggleAttribute("hidden", isContributorMode);
-  elements.gatheringTabVideo?.toggleAttribute("hidden", isContributorMode);
-  elements.gatheringTabFix?.toggleAttribute("hidden", isContributorMode);
+  elements.showReviewModule?.toggleAttribute("hidden", hideIrrelevantUi);
+  elements.showWeirdModule?.toggleAttribute("hidden", hideIrrelevantUi);
+  elements.showCorrectionsModule?.toggleAttribute("hidden", hideIrrelevantUi);
+  elements.showGraphicsModule?.toggleAttribute("hidden", hideIrrelevantUi);
+  elements.gatheringTabVideo?.toggleAttribute("hidden", hideIrrelevantUi);
+  elements.gatheringTabFix?.toggleAttribute("hidden", hideIrrelevantUi);
+
+  if (hideIrrelevantUi) {
+    setGatheringMode("book");
+  }
 
   if (isContributorMode) {
-    setGatheringMode("book");
     if (elements.gatheringBookBook) {
       elements.gatheringBookBook.disabled = true;
       elements.gatheringBookBook.value = currentContributorAccess.allowedBooks?.[0] || "";
@@ -1051,7 +1065,7 @@ function setGatheringMode(mode) {
 }
 
 function setActiveModule(moduleName) {
-  if (currentContributorAccess && moduleName !== "gathering") {
+  if ((currentContributorAccess || isContributorShellRequested()) && moduleName !== "gathering") {
     moduleName = "gathering";
   }
   currentModule = ["gathering", "review", "weird", "corrections", "graphics"].includes(moduleName) ? moduleName : "review";
@@ -4494,7 +4508,7 @@ elements.gatheringEmail?.addEventListener("input", () => {
   loadGatheringOptions({ force: true }).catch(error => {
     setStatus(`Excerpt gathering option load failed: ${error.message}`);
   });
-  if (currentContributorAccess) {
+  if (currentContributorAccess || isContributorShellRequested()) {
     handleGatheringBookSelectionChange({ preserveTitle: true }).catch(error => {
       setStatus(`Book metadata load failed: ${error.message}`);
     });
@@ -4601,6 +4615,9 @@ if (elements.graphicsReleaseCatalog) {
 
 async function initializeApp() {
   await loadRuntimeConfig();
+  if (elements.gatheringEmail && !elements.gatheringEmail.value.trim()) {
+    elements.gatheringEmail.value = getContributorShellPrefillEmail();
+  }
   populateReleaseCatalogSelect(elements.reviewReleaseCatalog);
   populateReleaseCatalogSelect(elements.graphicsReleaseCatalog);
   syncReleaseCatalogFilterUi();
@@ -4609,9 +4626,10 @@ async function initializeApp() {
   updateGatheringModeUi();
   refreshGraphicsFolderImportVisibility();
   renderGraphicsFolderImportPreview(null);
-  setActiveModule(currentContributorAccess ? "gathering" : "review");
+  const contributorShell = currentContributorAccess || isContributorShellRequested();
+  setActiveModule(contributorShell ? "gathering" : "review");
   setStatus(`Ready${runtimeConfig.appVersion ? ` (${runtimeConfig.appVersion})` : ""}. Loading books...`);
-  if (currentContributorAccess) {
+  if (contributorShell) {
     loadGatheringOptions().catch(error => {
       setStatus(`Excerpt gathering option load failed: ${error.message}`);
     });
