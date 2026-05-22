@@ -100,7 +100,10 @@ const SHEET_SOURCE_CONFIG = {
     correctedTitle: 58,
     correctedBookTitle: 59,
     correctedExcerpt: 60,
-    validationPrimarySourceFormat: 61
+    validationPrimarySourceFormat: 61,
+    excerptPoetryPleaseStatus: 62,
+    excerptPoetryPleaseUpdatedAt: 63,
+    excerptPoetryPleaseNote: 64
   }
 };
 const PIG_COMPLETION_COLUMNS = {
@@ -148,7 +151,8 @@ function invalidateQueueSnapshots() {
 }
 
 async function getSourceSheetValuesCached() {
-  const range = `'${sourceSheetName.replace(/'/g, "''")}'!A2:BK`;
+  await ensureExcerptPoetryPleaseColumnsServer();
+  const range = `'${sourceSheetName.replace(/'/g, "''")}'!A2:BL`;
   return getCachedQueueSnapshot(SOURCE_SHEET_CACHE_KEY, () => fetchSheetValuesServer(range));
 }
 const PIG_COMPLETION_HEADERS = [[
@@ -1131,6 +1135,38 @@ async function ensurePigCompletedGraphicsSheetServer() {
   ]);
 }
 
+async function ensureExcerptPoetryPleaseColumnsServer() {
+  const metadata = await fetchSpreadsheetMetadataServer();
+  const targetSheet = (metadata.sheets || []).find(sheet => {
+    return cleanSheetWhitespace(sheet?.properties?.title) === cleanSheetWhitespace(sourceSheetName);
+  });
+
+  if (!targetSheet?.properties?.sheetId) {
+    throw new Error(`Source sheet "${sourceSheetName}" not found.`);
+  }
+
+  const sheetId = targetSheet.properties.sheetId;
+  const currentColumnCount = Number(targetSheet.properties.gridProperties?.columnCount || 0);
+  if (currentColumnCount < SHEET_SOURCE_CONFIG.columnMap.excerptPoetryPleaseNote) {
+    await sheetBatchUpdateServer([
+      {
+        appendDimension: {
+          sheetId,
+          dimension: "COLUMNS",
+          length: SHEET_SOURCE_CONFIG.columnMap.excerptPoetryPleaseNote - currentColumnCount
+        }
+      }
+    ]);
+  }
+
+  await batchUpdateSheetValuesServer([
+    {
+      range: `'${sourceSheetName.replace(/'/g, "''")}'!BJ1:BL1`,
+      values: [["excerpt_poetry_please_status", "excerpt_poetry_please_updated_at", "excerpt_poetry_please_note"]]
+    }
+  ]);
+}
+
 function buildPigCompletionRowValues(completion, existingRow = []) {
   const completionId = buildPigCompletionId(completion);
   const requestId = cleanSheetWhitespace(completion.requestId || completion.graphicsRequestId);
@@ -1850,6 +1886,9 @@ function buildApprovedExcerptExportRecordFromSheetRow(row, index, canonicalBookA
     || cleanSheetWhitespace(row[config.correctedExcerpt - 1])
   );
   const bookMeta = resolvePublishingBookMeta(bookTitle, canonicalBookTitle);
+  const poetryPleaseStatus = cleanSheetWhitespace(row[config.excerptPoetryPleaseStatus - 1]);
+  const poetryPleaseUpdatedAt = cleanSheetWhitespace(row[config.excerptPoetryPleaseUpdatedAt - 1]);
+  const poetryPleaseNote = String(row[config.excerptPoetryPleaseNote - 1] || "");
 
   return {
     sourceKind: "weaver",
@@ -1891,6 +1930,9 @@ function buildApprovedExcerptExportRecordFromSheetRow(row, index, canonicalBookA
     releaseCatalog: bookMeta?.releaseCatalog || "",
     driveLink: "",
     sourceUrl: "",
+    poetryPleaseStatus,
+    poetryPleaseUpdatedAt,
+    poetryPleaseNote,
     sourcePayload: {}
   };
 }
@@ -2829,6 +2871,34 @@ async function updateExcerptHandoffStatuses(records, poetryPlease) {
       : "",
     updatedAt: now
   }));
+  const sheetWrites = statusUpdates
+    .flatMap(record => {
+      const sourceRow = parseInt(record?.payload?.sourceRow || 0, 10);
+      if (!sourceRow || sourceRow < SHEET_SOURCE_CONFIG.startRow) {
+        return [];
+      }
+      const noteValue = cleanSheetWhitespace(record.poetryPleaseItemId)
+        ? `item=${cleanSheetWhitespace(record.poetryPleaseItemId)}`
+        : String(record.errorMessage || "");
+      return [
+        {
+          range: `'${sourceSheetName.replace(/'/g, "''")}'!${toA1Column(SHEET_SOURCE_CONFIG.columnMap.excerptPoetryPleaseStatus)}${sourceRow}`,
+          values: [[String(record.handoffStatus || "")]]
+        },
+        {
+          range: `'${sourceSheetName.replace(/'/g, "''")}'!${toA1Column(SHEET_SOURCE_CONFIG.columnMap.excerptPoetryPleaseUpdatedAt)}${sourceRow}`,
+          values: [[String(record.handedOffAt || record.updatedAt || "")]]
+        },
+        {
+          range: `'${sourceSheetName.replace(/'/g, "''")}'!${toA1Column(SHEET_SOURCE_CONFIG.columnMap.excerptPoetryPleaseNote)}${sourceRow}`,
+          values: [[noteValue]]
+        }
+      ];
+    });
+  if (sheetWrites.length) {
+    await batchUpdateSheetValuesServer(sheetWrites);
+    invalidateQueueSnapshots();
+  }
   const statusResult = await syncWeaverRuntimeDb("upsert_excerpt_handoffs", { handoffs: statusUpdates });
   return {
     ok: true,
@@ -3694,6 +3764,9 @@ function buildExcerptHandoffFromApprovedExportRecord(record) {
   const updatedAt =
     cleanSheetWhitespace(record?.sourceUpdatedAt) ||
     approvedAt;
+  const sheetHandoffStatus = normalizeExcerptHandoffStatus(record?.poetryPleaseStatus);
+  const sheetHandoffNote = String(record?.poetryPleaseNote || "");
+  const itemIdMatch = sheetHandoffNote.match(/item=([^\s]+)/);
 
   return {
     recordId: `weaver-exc-${sourceRecordId}`,
@@ -3704,8 +3777,11 @@ function buildExcerptHandoffFromApprovedExportRecord(record) {
     bookTitle: cleanSheetWhitespace(record?.bookTitle),
     poemTitle: cleanSheetWhitespace(record?.poemTitle),
     excerpt: excerptText,
-    handoffStatus: "queued",
+    handoffStatus: sheetHandoffStatus || "queued",
     handoffMode: "backfill",
+    handedOffAt: cleanSheetWhitespace(record?.poetryPleaseUpdatedAt),
+    poetryPleaseItemId: itemIdMatch ? cleanSheetWhitespace(itemIdMatch[1]) : "",
+    errorMessage: sheetHandoffStatus === "failed" ? sheetHandoffNote : "",
     approvedAt,
     updatedAt,
     bookShortener: cleanSheetWhitespace(record?.bookShortener),
