@@ -218,6 +218,39 @@ function normalizeBookKey(text) {
   return getBookBaseTitle(text).toLowerCase();
 }
 
+const CONTRIBUTOR_INVITES = [
+  {
+    email: "samvancook@gmail.com",
+    role: "contributor",
+    allowedBooks: ["without the frills"]
+  }
+];
+
+function getContributorInviteByEmail(email) {
+  const cleanedEmail = cleanSheetWhitespace(email).toLowerCase();
+  if (!cleanedEmail) return null;
+  return CONTRIBUTOR_INVITES.find(invite => invite.email.toLowerCase() === cleanedEmail) || null;
+}
+
+function assertContributorIntakeAccess(payload = {}) {
+  const invite = getContributorInviteByEmail(payload.email);
+  if (!invite) {
+    return;
+  }
+
+  const mode = cleanSheetWhitespace(payload.mode).toLowerCase();
+  if (mode !== "book") {
+    throw new Error("This contributor invite is limited to book excerpt gathering only.");
+  }
+
+  const allowedBooks = Array.isArray(invite.allowedBooks) ? invite.allowedBooks : [];
+  const allowedBookKeys = new Set(allowedBooks.map(normalizeBookKey).filter(Boolean));
+  const submittedBookKey = normalizeBookKey(payload.bookTitle);
+  if (!submittedBookKey || !allowedBookKeys.has(submittedBookKey)) {
+    throw new Error(`This contributor invite is limited to: ${allowedBooks.join(", ")}.`);
+  }
+}
+
 function buildReviewQueueIncludeSetFromBooks(books = []) {
   return new Set(
     books
@@ -4287,6 +4320,11 @@ const server = http.createServer(async (req, res) => {
       releaseCatalogOptions,
       releaseCatalogByTitle,
       reviewApiMode: "cloud-run-sheet-proxy",
+      contributorInvites: CONTRIBUTOR_INVITES.map(invite => ({
+        email: invite.email,
+        role: invite.role,
+        allowedBooks: Array.isArray(invite.allowedBooks) ? invite.allowedBooks.slice() : []
+      })),
       sections: [
         { id: "gathering", label: "Excerpt gathering" },
         { id: "review", label: "Review queue" },
@@ -4339,6 +4377,7 @@ const server = http.createServer(async (req, res) => {
     try {
       const body = await readRequestBody(req);
       const parsed = JSON.parse(body || "{}");
+      assertContributorIntakeAccess(parsed);
       const result = await appendExcerptGatheringRow(parsed);
       invalidateQueueSnapshots();
       return sendJson(res, 200, result);

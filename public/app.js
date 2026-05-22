@@ -118,6 +118,7 @@ let currentIntakeCatalogBooksByKey = new Map();
 let currentIntakeLegacyBooks = [];
 let currentIntakePublishingBooks = [];
 let currentIntakePublishingBooksByKey = new Map();
+let currentContributorAccess = null;
 let currentGatheringBookPoems = [];
 let currentGatheringCatalogBook = null;
 let googleSheetsTokenClient = null;
@@ -417,6 +418,27 @@ function normalizeBookKey(text) {
 
 function cleanSheetWhitespace(text) {
   return (text || "").toString().replace(/\s+/g, " ").trim();
+}
+
+function getContributorAccessForEmail(email) {
+  const cleanedEmail = String(email || "").trim().toLowerCase();
+  const invites = Array.isArray(runtimeConfig.contributorInvites) ? runtimeConfig.contributorInvites : [];
+  if (!cleanedEmail) return null;
+  return invites.find(invite => String(invite?.email || "").trim().toLowerCase() === cleanedEmail) || null;
+}
+
+function getAllowedContributorBooks(access) {
+  return new Set(
+    (Array.isArray(access?.allowedBooks) ? access.allowedBooks : [])
+      .map(normalizeBookKey)
+      .filter(Boolean)
+  );
+}
+
+function filterContributorBooks(books = [], access = null) {
+  const allowedBookKeys = getAllowedContributorBooks(access);
+  if (!allowedBookKeys.size) return books.slice();
+  return books.filter(book => allowedBookKeys.has(normalizeBookKey(typeof book === "string" ? book : book?.title)));
 }
 
 function isSheetYes(value) {
@@ -975,6 +997,31 @@ function applyRuntimeMode() {
   }
 }
 
+function applyContributorAccessMode() {
+  currentContributorAccess = getContributorAccessForEmail(elements.gatheringEmail?.value || "");
+  const isContributorMode = !!currentContributorAccess;
+
+  elements.showReviewModule?.toggleAttribute("hidden", isContributorMode);
+  elements.showWeirdModule?.toggleAttribute("hidden", isContributorMode);
+  elements.showCorrectionsModule?.toggleAttribute("hidden", isContributorMode);
+  elements.showGraphicsModule?.toggleAttribute("hidden", isContributorMode);
+  elements.gatheringTabVideo?.toggleAttribute("hidden", isContributorMode);
+  elements.gatheringTabFix?.toggleAttribute("hidden", isContributorMode);
+
+  if (isContributorMode) {
+    setGatheringMode("book");
+    if (elements.gatheringBookBook) {
+      elements.gatheringBookBook.disabled = true;
+      elements.gatheringBookBook.value = currentContributorAccess.allowedBooks?.[0] || "";
+    }
+    if (elements.gatheringBookSourceHint) {
+      elements.gatheringBookSourceHint.textContent = `Contributor mode: this invite is locked to ${currentContributorAccess.allowedBooks.join(", ")}.`;
+    }
+  } else if (elements.gatheringBookBook) {
+    elements.gatheringBookBook.disabled = false;
+  }
+}
+
 function getSelectedGatheringMode() {
   return elements.gatheringMode?.value || "book";
 }
@@ -1004,6 +1051,9 @@ function setGatheringMode(mode) {
 }
 
 function setActiveModule(moduleName) {
+  if (currentContributorAccess && moduleName !== "gathering") {
+    moduleName = "gathering";
+  }
   currentModule = ["gathering", "review", "weird", "corrections", "graphics"].includes(moduleName) ? moduleName : "review";
   elements.gatheringModule?.classList.toggle("module-panel--active", currentModule === "gathering");
   elements.reviewModule?.classList.toggle("module-panel--active", currentModule === "review");
@@ -1136,10 +1186,13 @@ async function loadGatheringOptions({ force = false } = {}) {
   populateDatalist(elements.gatheringAuthorOptions, data.authors || []);
   currentIntakeLegacyBooks = Array.isArray(data.books) ? data.books : [];
   currentIntakeCatalogBooks = Array.isArray(data.catalogBooks) ? data.catalogBooks : [];
+  currentIntakeLegacyBooks = filterContributorBooks(currentIntakeLegacyBooks, currentContributorAccess);
+  currentIntakeCatalogBooks = filterContributorBooks(currentIntakeCatalogBooks, currentContributorAccess);
   currentIntakeCatalogBooksByKey = new Map(
     currentIntakeCatalogBooks.map(book => [normalizeBookKey(book.title), book])
   );
   currentIntakePublishingBooks = Array.isArray(data.publishingBooks) ? data.publishingBooks : [];
+  currentIntakePublishingBooks = filterContributorBooks(currentIntakePublishingBooks, currentContributorAccess);
   currentIntakePublishingBooksByKey = new Map(
     currentIntakePublishingBooks.map(book => [normalizeBookKey(book.title), book])
   );
@@ -1152,6 +1205,7 @@ async function loadGatheringOptions({ force = false } = {}) {
     })
   );
   intakeOptionsLoaded = true;
+  applyContributorAccessMode();
   const publishingStatusNote = data.publishingBooksError
     ? " Publishing-order titles are temporarily unavailable until that sheet is shared with Weaver."
     : "";
@@ -4436,6 +4490,16 @@ elements.gatheringEmail?.addEventListener("input", () => {
   if (elements.gatheringEmail?.value.trim()) {
     setGatheringEmailWarning("");
   }
+  applyContributorAccessMode();
+  loadGatheringOptions({ force: true }).catch(error => {
+    setStatus(`Excerpt gathering option load failed: ${error.message}`);
+  });
+  if (currentContributorAccess) {
+    handleGatheringBookSelectionChange({ preserveTitle: true }).catch(error => {
+      setStatus(`Book metadata load failed: ${error.message}`);
+    });
+    setActiveModule("gathering");
+  }
 });
 elements.gatheringMode?.addEventListener("change", updateGatheringModeUi);
 elements.gatheringBookBook?.addEventListener("change", () => {
@@ -4541,12 +4605,19 @@ async function initializeApp() {
   populateReleaseCatalogSelect(elements.graphicsReleaseCatalog);
   syncReleaseCatalogFilterUi();
   applyRuntimeMode();
+  applyContributorAccessMode();
   updateGatheringModeUi();
   refreshGraphicsFolderImportVisibility();
   renderGraphicsFolderImportPreview(null);
-  setActiveModule("review");
+  setActiveModule(currentContributorAccess ? "gathering" : "review");
   setStatus(`Ready${runtimeConfig.appVersion ? ` (${runtimeConfig.appVersion})` : ""}. Loading books...`);
-  loadBooks();
+  if (currentContributorAccess) {
+    loadGatheringOptions().catch(error => {
+      setStatus(`Excerpt gathering option load failed: ${error.message}`);
+    });
+  } else {
+    loadBooks();
+  }
 }
 
 initializeApp();
