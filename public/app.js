@@ -26,13 +26,16 @@ const elements = {
   loadExcerpts: document.getElementById("load-excerpts"),
   loadWeirdExcerpts: document.getElementById("load-weird-excerpts"),
   submitReview: document.getElementById("submit-review"),
+  submitReviewBottom: document.getElementById("submit-review-bottom"),
   submitWeirdReview: document.getElementById("submit-weird-review"),
+  submitWeirdReviewBottom: document.getElementById("submit-weird-review-bottom"),
   excerptList: document.getElementById("excerpt-list"),
   weirdExcerptList: document.getElementById("weird-excerpt-list"),
   loadCorrectionBooks: document.getElementById("load-correction-books"),
   correctionBookSelect: document.getElementById("correction-book-select"),
   loadCorrections: document.getElementById("load-corrections"),
   submitCorrections: document.getElementById("submit-corrections"),
+  submitCorrectionsBottom: document.getElementById("submit-corrections-bottom"),
   autoApplyCorrections: document.getElementById("auto-apply-corrections"),
   correctionList: document.getElementById("correction-list"),
   graphicsMode: document.getElementById("graphics-mode"),
@@ -4448,11 +4451,14 @@ elements.loadBooks.addEventListener("click", loadBooks);
 elements.loadExcerpts.addEventListener("click", loadExcerpts);
 elements.loadWeirdExcerpts?.addEventListener("click", loadWeirdExcerpts);
 elements.submitReview.addEventListener("click", submitReview);
+elements.submitReviewBottom?.addEventListener("click", submitReview);
 elements.submitWeirdReview?.addEventListener("click", submitWeirdReview);
+elements.submitWeirdReviewBottom?.addEventListener("click", submitWeirdReview);
 elements.loadCorrectionBooks?.addEventListener("click", loadCorrectionBooks);
 elements.loadCorrections?.addEventListener("click", loadCorrections);
 elements.autoApplyCorrections?.addEventListener("click", applyAutoCorrectionsToLoadedQueue);
 elements.submitCorrections?.addEventListener("click", submitCorrections);
+elements.submitCorrectionsBottom?.addEventListener("click", submitCorrections);
 elements.showGatheringModule?.addEventListener("click", () => {
   setActiveModule("gathering");
   if (!intakeOptionsLoaded) {
