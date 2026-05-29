@@ -2794,6 +2794,16 @@ function renderCorrectionExcerpts(excerpts) {
   );
 }
 
+function updateCorrectionBookOptionCount(bookTitle, delta) {
+  if (!elements.correctionBookSelect || !bookTitle || !delta) return;
+  const option = Array.from(elements.correctionBookSelect.options).find(entry => entry.value === bookTitle);
+  if (!option) return;
+  const match = option.textContent.match(/\((\d+)\)$/);
+  if (!match) return;
+  const nextCount = Math.max(0, Number(match[1]) + delta);
+  option.textContent = `${bookTitle} (${nextCount})`;
+}
+
 function renderGraphicsRecords(records) {
   refreshGraphicsFolderImportVisibility();
   if (elements.graphicsCountBadge) {
@@ -2883,6 +2893,33 @@ function renderExcerptCollection(excerpts, container, countBadge, emptyMessage, 
     controls.querySelector("button")?.addEventListener("click", options.onShowMore);
     container.appendChild(controls);
   }
+}
+
+function applyOptimisticGraphicsBookCountUpdate(removedRecords) {
+  if (!Array.isArray(removedRecords) || !removedRecords.length) return;
+  const removedByBookKey = new Map();
+  removedRecords.forEach(record => {
+    const key = normalizeBookKey(record.bookTitle);
+    if (!key) return;
+    removedByBookKey.set(key, (removedByBookKey.get(key) || 0) + 1);
+  });
+
+  currentGraphicsBookSummaries = currentGraphicsBookSummaries
+    .map(book => {
+      const key = normalizeBookKey(book.title);
+      const removedCount = removedByBookKey.get(key) || 0;
+      if (!removedCount) return book;
+      return {
+        ...book,
+        count: Math.max(0, Number(book.count || 0) - removedCount)
+      };
+    })
+    .filter(book => Number(book.count || 0) > 0);
+
+  graphicsBookSummaryByKey = new Map(
+    currentGraphicsBookSummaries.map(book => [normalizeBookKey(book.title), book])
+  );
+  refreshGraphicsBookSelect(true);
 }
 
 function renderCurrentExcerpts() {
@@ -3645,6 +3682,8 @@ async function submitGraphicsQc() {
   try {
     setSubmitState(true, `Saving ${updates.length}...`);
     setStatus(`Saving ${updates.length} QC decisions...`);
+    const savedRecordIds = new Set(updates.map(update => update.recordId));
+    const removedGraphicsRecords = currentGraphicsRecords.filter(record => savedRecordIds.has(record.recordId));
 
     const response = await fetch("/api/save-graphics-qc", {
       method: "POST",
@@ -3661,6 +3700,9 @@ async function submitGraphicsQc() {
     }
 
     const qcSweepMode = isGraphicsQcSweepSelection();
+    currentGraphicsRecords = currentGraphicsRecords.filter(record => !savedRecordIds.has(record.recordId));
+    renderGraphicsRecords(currentGraphicsRecords);
+    applyOptimisticGraphicsBookCountUpdate(removedGraphicsRecords);
     await loadGraphicsBooks();
     if (elements.graphicsBookSelect?.value) {
       await loadGraphicsRecords();
@@ -4349,7 +4391,12 @@ async function submitCorrections() {
     collectUpdates: collectCorrectionUpdates,
     bookKey: elements.correctionBookSelect.value,
     reloadRequest: () => requestReviewApi("/api/review/corrections", { bookTitle: elements.correctionBookSelect.value }),
-    afterSaveOptimistic: null,
+    afterSaveOptimistic: changedUpdates => {
+      const savedSourceRows = new Set(changedUpdates.map(update => Number(update.sourceRow)));
+      currentCorrectionExcerpts = currentCorrectionExcerpts.filter(excerpt => !savedSourceRows.has(Number(excerpt.sourceRow)));
+      renderCorrectionExcerpts(currentCorrectionExcerpts);
+      updateCorrectionBookOptionCount(elements.correctionBookSelect.value, -savedSourceRows.size);
+    },
     afterReload: async refreshed => {
       currentCorrectionExcerpts = refreshed.excerpts;
       await loadCatalogValidation(refreshed.excerpts);
