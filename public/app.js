@@ -4274,6 +4274,8 @@ async function submitReview() {
     reloadRequest: () => requestMergedBookRecords(currentExcerpts),
     afterSaveOptimistic: changedUpdates => {
       const savedSourceRows = new Set(changedUpdates.map(update => Number(update.sourceRow)));
+      currentPendingRecords = currentPendingRecords.filter(record => !savedSourceRows.has(Number(record.sourceRow)));
+      applyPendingBookData(currentPendingRecords, { preserveSelection: true });
       currentExcerpts = currentExcerpts.filter(excerpt => !savedSourceRows.has(Number(excerpt.sourceRow)));
       reviewPinnedRowOrder = [];
       renderCurrentExcerpts();
