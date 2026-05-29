@@ -9,6 +9,7 @@ const elements = {
   gatheringTabBook: document.getElementById("gathering-tab-book"),
   gatheringTabVideo: document.getElementById("gathering-tab-video"),
   gatheringTabFix: document.getElementById("gathering-tab-fix"),
+  gatheringTabBatch: document.getElementById("gathering-tab-batch"),
   gatheringModule: document.getElementById("gathering-module"),
   reviewModule: document.getElementById("review-module"),
   reviewQueuePanel: document.getElementById("review-queue-panel"),
@@ -80,15 +81,23 @@ const elements = {
   gatheringVideoQuote: document.getElementById("gathering-video-quote"),
   gatheringVideoQuoteMeta: document.getElementById("gathering-video-quote-meta"),
   gatheringFixFields: document.getElementById("gathering-fix-fields"),
+  gatheringBatchFields: document.getElementById("gathering-batch-fields"),
   gatheringFixPart: document.getElementById("gathering-fix-part"),
   gatheringFixAuthor: document.getElementById("gathering-fix-author"),
   gatheringFixIncorrect: document.getElementById("gathering-fix-incorrect"),
   gatheringFixCorrect: document.getElementById("gathering-fix-correct"),
+  gatheringBatchCatalog: document.getElementById("gathering-batch-catalog"),
+  gatheringBatchBook: document.getElementById("gathering-batch-book"),
+  gatheringBatchDefaultNotes: document.getElementById("gathering-batch-default-notes"),
+  gatheringBatchSource: document.getElementById("gathering-batch-source"),
+  gatheringBatchPreview: document.getElementById("gathering-batch-preview"),
   gatheringAuthorOptions: document.getElementById("gathering-author-options"),
   gatheringBookOptions: document.getElementById("gathering-book-options"),
   gatheringBookPoemOptions: document.getElementById("gathering-book-poem-options"),
   loadGatheringOptions: document.getElementById("load-gathering-options"),
   submitGathering: document.getElementById("submit-gathering"),
+  previewGatheringBatch: document.getElementById("preview-gathering-batch"),
+  submitGatheringBatch: document.getElementById("submit-gathering-batch"),
   statusOutput: document.getElementById("status-output"),
   appModeBadge: document.getElementById("app-mode-badge"),
   gatheringModeBadge: document.getElementById("gathering-mode-badge"),
@@ -124,6 +133,7 @@ let currentIntakePublishingBooksByKey = new Map();
 let currentContributorAccess = null;
 let currentGatheringBookPoems = [];
 let currentGatheringCatalogBook = null;
+let currentGatheringBatchRows = [];
 let googleSheetsTokenClient = null;
 let googleSheetsAccessToken = "";
 let reviewVisibleCount = 1;
@@ -1028,6 +1038,7 @@ function applyContributorAccessMode() {
   setElementForcedHidden(elements.showGraphicsModule, hideIrrelevantUi);
   setElementForcedHidden(elements.gatheringTabVideo, hideIrrelevantUi);
   setElementForcedHidden(elements.gatheringTabFix, hideIrrelevantUi);
+  setElementForcedHidden(elements.gatheringTabBatch, hideIrrelevantUi);
 
   if (hideIrrelevantUi) {
     setGatheringMode("book");
@@ -1055,14 +1066,20 @@ function updateGatheringModeUi() {
   elements.gatheringBookFields?.toggleAttribute("hidden", mode !== "book");
   elements.gatheringVideoFields?.toggleAttribute("hidden", mode !== "video");
   elements.gatheringFixFields?.toggleAttribute("hidden", mode !== "fix");
+  elements.gatheringBatchFields?.toggleAttribute("hidden", mode !== "batch");
   elements.gatheringTabBook?.classList.toggle("gathering-tab--active", mode === "book");
   elements.gatheringTabVideo?.classList.toggle("gathering-tab--active", mode === "video");
   elements.gatheringTabFix?.classList.toggle("gathering-tab--active", mode === "fix");
+  elements.gatheringTabBatch?.classList.toggle("gathering-tab--active", mode === "batch");
+  elements.submitGathering?.toggleAttribute("hidden", mode === "batch");
+  elements.previewGatheringBatch?.toggleAttribute("hidden", mode !== "batch");
+  elements.submitGatheringBatch?.toggleAttribute("hidden", mode !== "batch");
   if (elements.gatheringModeBadge) {
     elements.gatheringModeBadge.textContent = (
       mode === "book" ? "Book Excerpts" :
       mode === "video" ? "Video Excerpts" :
-      "Fix Existing Quote"
+      mode === "fix" ? "Fix Existing Quote" :
+      "Batch Paste"
     );
   }
   updateGatheringQuoteMeta();
@@ -1390,10 +1407,18 @@ function resetGatheringForm() {
     elements.gatheringFixPart,
     elements.gatheringFixAuthor,
     elements.gatheringFixIncorrect,
-    elements.gatheringFixCorrect
+    elements.gatheringFixCorrect,
+    elements.gatheringBatchCatalog,
+    elements.gatheringBatchBook,
+    elements.gatheringBatchDefaultNotes,
+    elements.gatheringBatchSource
   ].forEach(field => {
     if (field) field.value = "";
   });
+  currentGatheringBatchRows = [];
+  if (elements.gatheringBatchPreview) {
+    elements.gatheringBatchPreview.innerHTML = "";
+  }
   populateDatalist(elements.gatheringBookPoemOptions, []);
   setGatheringBookManualMode("");
   updateGatheringCatalogPreviewState();
@@ -1423,6 +1448,17 @@ function resetGatheringAfterSubmit(mode) {
     if (elements.gatheringFixIncorrect) elements.gatheringFixIncorrect.value = "";
     if (elements.gatheringFixCorrect) elements.gatheringFixCorrect.value = "";
     elements.gatheringFixIncorrect?.focus();
+    return;
+  }
+
+  if (mode === "batch") {
+    if (elements.gatheringBatchSource) elements.gatheringBatchSource.value = "";
+    if (elements.gatheringBatchDefaultNotes) elements.gatheringBatchDefaultNotes.value = "";
+    currentGatheringBatchRows = [];
+    if (elements.gatheringBatchPreview) {
+      elements.gatheringBatchPreview.innerHTML = "";
+    }
+    elements.gatheringBatchSource?.focus();
     return;
   }
 
@@ -1461,7 +1497,189 @@ function setGatheringEmailWarning(message = "") {
 function handleGatheringQuickSubmit(event) {
   if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
     event.preventDefault();
+    if (getSelectedGatheringMode() === "batch") {
+      submitGatheringBatch();
+      return;
+    }
     submitGathering();
+  }
+}
+
+function splitGatheringBatchBlocks(text) {
+  const normalized = String(text || "").replace(/\r\n/g, "\n").trim();
+  if (!normalized) return [];
+  return normalized
+    .split(/\n\s*---+\s*\n|\n{2,}/)
+    .map(block => block.trim())
+    .filter(Boolean);
+}
+
+function parseGatheringBatchBlock(block, index, defaults) {
+  const lines = String(block || "")
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map(line => line.trim())
+    .filter(Boolean);
+  const meta = { title: "", author: "", igHandle: "" };
+  const bodyLines = [];
+
+  lines.forEach(line => {
+    const titleMatch = line.match(/^title\s*:\s*(.+)$/i);
+    const authorMatch = line.match(/^author\s*:\s*(.+)$/i);
+    const igMatch = line.match(/^(ig|instagram|handle)\s*:\s*(.+)$/i);
+    if (titleMatch) {
+      meta.title = titleMatch[1].trim();
+      return;
+    }
+    if (authorMatch) {
+      meta.author = authorMatch[1].trim();
+      return;
+    }
+    if (igMatch) {
+      meta.igHandle = igMatch[2].trim();
+      return;
+    }
+    bodyLines.push(line);
+  });
+
+  if (!meta.igHandle && bodyLines.length && /^@/.test(bodyLines[bodyLines.length - 1])) {
+    meta.igHandle = bodyLines.pop().trim();
+  }
+
+  if (!meta.author && bodyLines.length > 1) {
+    const maybeAuthor = bodyLines[bodyLines.length - 1];
+    if (maybeAuthor.length <= 80 && !/[.?!,;:]$/.test(maybeAuthor)) {
+      meta.author = bodyLines.pop().trim();
+    }
+  }
+
+  if (!meta.title && bodyLines.length) {
+    meta.title = bodyLines[0].trim().slice(0, 120);
+  }
+
+  const quote = bodyLines.join("\n").trim();
+  const notesBits = [
+    defaults.catalog ? `Catalog: ${defaults.catalog}` : "",
+    meta.igHandle ? `Instagram handle: ${meta.igHandle}` : "",
+    defaults.defaultNotes || ""
+  ].filter(Boolean);
+
+  return {
+    key: `batch-${index + 1}`,
+    index: index + 1,
+    title: meta.title,
+    author: meta.author,
+    quote,
+    igHandle: meta.igHandle,
+    bookTitle: defaults.bookTitle,
+    notes: notesBits.join("\n\n"),
+    error: !meta.author || !quote ? "Needs an author and poem text before import." : ""
+  };
+}
+
+function renderGatheringBatchPreview(rows) {
+  if (!elements.gatheringBatchPreview) return;
+  if (!rows.length) {
+    elements.gatheringBatchPreview.innerHTML = "";
+    return;
+  }
+
+  elements.gatheringBatchPreview.innerHTML = rows.map(row => `
+    <article class="excerpt-card">
+      <div class="excerpt-card__meta">
+        <span class="pill pill--muted">Item ${row.index}</span>
+        ${row.title ? `<span class="pill pill--muted">${escapeHtml(row.title)}</span>` : ""}
+        ${row.author ? `<span class="pill pill--muted">${escapeHtml(row.author)}</span>` : ""}
+        ${row.igHandle ? `<span class="pill pill--muted">${escapeHtml(row.igHandle)}</span>` : ""}
+      </div>
+      ${row.error ? `<p class="validation validation--warn">${escapeHtml(row.error)}</p>` : `<p class="validation validation--good">Ready to import into ${escapeHtml(row.bookTitle || "the selected book")}.</p>`}
+      <blockquote class="excerpt-card__quote">${escapeHtml(row.quote || "(No poem text parsed yet.)")}</blockquote>
+    </article>
+  `).join("");
+}
+
+function buildGatheringBatchRows() {
+  const catalog = elements.gatheringBatchCatalog?.value.trim() || "";
+  const bookTitle = elements.gatheringBatchBook?.value.trim() || "";
+  const source = elements.gatheringBatchSource?.value || "";
+  const defaultNotes = elements.gatheringBatchDefaultNotes?.value.trim() || "";
+
+  if (!bookTitle || !source.trim()) {
+    throw new Error("Batch paste needs a book title and pasted content.");
+  }
+
+  const rows = splitGatheringBatchBlocks(source).map((block, index) => (
+    parseGatheringBatchBlock(block, index, { catalog, bookTitle, defaultNotes })
+  ));
+
+  if (!rows.length) {
+    throw new Error("No poem blocks were found in the pasted content.");
+  }
+
+  return rows;
+}
+
+function previewGatheringBatch() {
+  try {
+    currentGatheringBatchRows = buildGatheringBatchRows();
+    renderGatheringBatchPreview(currentGatheringBatchRows);
+    const validCount = currentGatheringBatchRows.filter(row => !row.error).length;
+    const invalidCount = currentGatheringBatchRows.length - validCount;
+    setStatus(
+      invalidCount
+        ? `Previewed ${currentGatheringBatchRows.length} items. ${validCount} are ready and ${invalidCount} need cleanup.`
+        : `Previewed ${currentGatheringBatchRows.length} items. Everything is ready to import.`
+    );
+  } catch (error) {
+    currentGatheringBatchRows = [];
+    renderGatheringBatchPreview([]);
+    setStatus(`Batch preview failed: ${error.message}`);
+  }
+}
+
+async function submitGatheringBatch() {
+  try {
+    const email = elements.gatheringEmail?.value.trim() || "";
+    if (!email) {
+      setGatheringEmailWarning("Add your email before importing a batch.");
+      elements.gatheringEmail?.focus();
+      throw new Error("Add an email before importing a batch.");
+    }
+    setGatheringEmailWarning("");
+
+    if (!currentGatheringBatchRows.length) {
+      currentGatheringBatchRows = buildGatheringBatchRows();
+      renderGatheringBatchPreview(currentGatheringBatchRows);
+    }
+
+    const invalidRow = currentGatheringBatchRows.find(row => row.error);
+    if (invalidRow) {
+      throw new Error(`Item ${invalidRow.index} needs cleanup before import.`);
+    }
+
+    setSubmitState(true, "Importing...");
+    let savedCount = 0;
+    const batchBookTitle = elements.gatheringBatchBook?.value.trim() || "the selected book";
+    for (const row of currentGatheringBatchRows) {
+      await postReviewApi("/api/intake/submit", {
+        mode: "book",
+        email,
+        author: row.author,
+        title: row.title,
+        quote: row.quote,
+        bookTitle: row.bookTitle,
+        notes: row.notes
+      });
+      savedCount += 1;
+      setStatus(`Imported ${savedCount} of ${currentGatheringBatchRows.length} pasted excerpts...`);
+    }
+
+    resetGatheringAfterSubmit("batch");
+    setStatus(`Imported ${savedCount} pasted excerpts into "${batchBookTitle}".`);
+  } catch (error) {
+    setStatus(`Batch import failed: ${error.message}`);
+  } finally {
+    setSubmitState(false, "Submit Excerpt");
   }
 }
 
@@ -4519,6 +4737,7 @@ elements.showGatheringModule?.addEventListener("click", () => {
 elements.gatheringTabBook?.addEventListener("click", () => setGatheringMode("book"));
 elements.gatheringTabVideo?.addEventListener("click", () => setGatheringMode("video"));
 elements.gatheringTabFix?.addEventListener("click", () => setGatheringMode("fix"));
+elements.gatheringTabBatch?.addEventListener("click", () => setGatheringMode("batch"));
 elements.showReviewModule?.addEventListener("click", () => setActiveModule("review"));
 elements.showWeirdModule?.addEventListener("click", () => {
   setActiveModule("weird");
@@ -4562,6 +4781,8 @@ elements.loadGatheringOptions?.addEventListener("click", () => {
   });
 });
 elements.submitGathering?.addEventListener("click", submitGathering);
+elements.previewGatheringBatch?.addEventListener("click", previewGatheringBatch);
+elements.submitGatheringBatch?.addEventListener("click", submitGatheringBatch);
 elements.gatheringEmail?.addEventListener("input", () => {
   if (elements.gatheringEmail?.value.trim()) {
     setGatheringEmailWarning("");
