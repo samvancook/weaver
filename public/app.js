@@ -1590,7 +1590,7 @@ function deriveGatheringBatchTitle(submission) {
 
 function parseGatheringBatchSpreadsheetRows(text, defaults) {
   const rows = parseDelimitedGatheringRows(text);
-  if (rows.length < 2) {
+  if (!rows.length) {
     return null;
   }
 
@@ -1600,16 +1600,31 @@ function parseGatheringBatchSpreadsheetRows(text, defaults) {
   const lastNameIndex = headers.findIndex(header => header === "last name");
   const handleIndex = headers.findIndex(header => header.includes("instagram handle"));
 
+  let dataRows = rows.slice(1);
+  let firstNameColumn = firstNameIndex;
+  let lastNameColumn = lastNameIndex;
+  let handleColumn = handleIndex;
+  let submissionColumn = submissionIndex;
+
   if (submissionIndex === -1 || firstNameIndex === -1) {
-    return null;
+    const firstDataRow = rows[0] || [];
+    const looksLikeRawFormRow = firstDataRow.length >= 10;
+    if (!looksLikeRawFormRow) {
+      return null;
+    }
+    dataRows = rows;
+    handleColumn = 1;
+    firstNameColumn = 3;
+    lastNameColumn = 4;
+    submissionColumn = 9;
   }
 
-  return rows.slice(1).map((cells, index) => {
-    const firstName = String(cells[firstNameIndex] || "").trim();
-    const lastName = String(cells[lastNameIndex] || "").trim();
+  return dataRows.map((cells, index) => {
+    const firstName = String(cells[firstNameColumn] || "").trim();
+    const lastName = String(cells[lastNameColumn] || "").trim();
     const author = [firstName, lastName].filter(Boolean).join(" ").trim();
-    const igHandle = String(cells[handleIndex] || "").trim();
-    const quote = String(cells[submissionIndex] || "").trim();
+    const igHandle = String(cells[handleColumn] || "").trim();
+    const quote = String(cells[submissionColumn] || "").trim();
     const title = deriveGatheringBatchTitle(quote);
 
     return {
