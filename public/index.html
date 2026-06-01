@@ -170,9 +170,9 @@
             </label>
             <label class="field field--full">
               <span>Paste Blocks</span>
-              <textarea id="gathering-batch-source" rows="14" placeholder="Paste one poem block at a time, separated by blank lines or ---&#10;&#10;Supported lines inside each block:&#10;Title: ...&#10;Author: ...&#10;IG: @handle&#10;&#10;If no Title: line is present, Weaver will fall back to the first poem line as the title."></textarea>
+              <textarea id="gathering-batch-source" rows="14" placeholder="Paste poem blocks, or paste rows copied directly from a spreadsheet.&#10;&#10;Supported poem-block lines:&#10;Title: ...&#10;Author: ...&#10;IG: @handle&#10;&#10;Spreadsheet rows can map columns like First Name, Last Name, Public Instagram Handle, and Submission."></textarea>
             </label>
-            <p class="hint">Use one block per poem. Separate blocks with a line containing <code>---</code> or with two blank lines. Include <code>Author:</code> and <code>IG:</code> lines when possible.</p>
+            <p class="hint">Use one block per poem, or paste tabular rows copied from Google Sheets. Block mode supports <code>Title:</code>, <code>Author:</code>, and <code>IG:</code>. Spreadsheet mode looks for columns like <code>First Name</code>, <code>Last Name</code>, <code>Public Instagram Handle</code>, and <code>Submission</code>.</p>
             <div id="gathering-batch-preview" class="excerpt-list">
               <p class="empty-state">Parse preview will appear here before import.</p>
             </div>
@@ -427,6 +427,6 @@
     </main>
   </div>
 
-  <script src="/app.js?v=20260529c"></script>
+  <script src="/app.js?v=20260601a"></script>
 </body>
 </html>

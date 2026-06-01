@@ -1514,6 +1514,118 @@ function splitGatheringBatchBlocks(text) {
     .filter(Boolean);
 }
 
+function parseDelimitedGatheringRows(text) {
+  const source = String(text || "").replace(/\r\n/g, "\n");
+  const rows = [];
+  let row = [];
+  let cell = "";
+  let inQuotes = false;
+
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index];
+    const nextChar = source[index + 1];
+
+    if (char === "\"") {
+      if (inQuotes && nextChar === "\"") {
+        cell += "\"";
+        index += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+
+    if (!inQuotes && char === "\t") {
+      row.push(cell);
+      cell = "";
+      continue;
+    }
+
+    if (!inQuotes && char === "\n") {
+      row.push(cell);
+      if (row.some(value => String(value || "").trim())) {
+        rows.push(row);
+      }
+      row = [];
+      cell = "";
+      continue;
+    }
+
+    cell += char;
+  }
+
+  if (cell.length || row.length) {
+    row.push(cell);
+    if (row.some(value => String(value || "").trim())) {
+      rows.push(row);
+    }
+  }
+
+  return rows;
+}
+
+function normalizeBatchHeader(value) {
+  return cleanSheetWhitespace(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function buildGatheringBatchNotes(defaults, igHandle) {
+  return [
+    defaults.catalog ? `Catalog: ${defaults.catalog}` : "",
+    igHandle ? `Instagram handle: ${igHandle}` : "",
+    defaults.defaultNotes || ""
+  ].filter(Boolean).join("\n\n");
+}
+
+function deriveGatheringBatchTitle(submission) {
+  const lines = String(submission || "")
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map(line => line.trim())
+    .filter(Boolean);
+  return (lines[0] || "").slice(0, 120);
+}
+
+function parseGatheringBatchSpreadsheetRows(text, defaults) {
+  const rows = parseDelimitedGatheringRows(text);
+  if (rows.length < 2) {
+    return null;
+  }
+
+  const headers = rows[0].map(normalizeBatchHeader);
+  const submissionIndex = headers.findIndex(header => header.includes("submission"));
+  const firstNameIndex = headers.findIndex(header => header === "first name");
+  const lastNameIndex = headers.findIndex(header => header === "last name");
+  const handleIndex = headers.findIndex(header => header.includes("instagram handle"));
+
+  if (submissionIndex === -1 || firstNameIndex === -1) {
+    return null;
+  }
+
+  return rows.slice(1).map((cells, index) => {
+    const firstName = String(cells[firstNameIndex] || "").trim();
+    const lastName = String(cells[lastNameIndex] || "").trim();
+    const author = [firstName, lastName].filter(Boolean).join(" ").trim();
+    const igHandle = String(cells[handleIndex] || "").trim();
+    const quote = String(cells[submissionIndex] || "").trim();
+    const title = deriveGatheringBatchTitle(quote);
+
+    return {
+      key: `sheet-batch-${index + 1}`,
+      index: index + 1,
+      title,
+      author,
+      quote,
+      igHandle,
+      bookTitle: defaults.bookTitle,
+      notes: buildGatheringBatchNotes(defaults, igHandle),
+      error: !author || !quote ? "Needs an author and poem text before import." : ""
+    };
+  }).filter(row => row.author || row.quote || row.igHandle);
+}
+
 function parseGatheringBatchBlock(block, index, defaults) {
   const lines = String(block || "")
     .replace(/\r\n/g, "\n")
@@ -1558,11 +1670,6 @@ function parseGatheringBatchBlock(block, index, defaults) {
   }
 
   const quote = bodyLines.join("\n").trim();
-  const notesBits = [
-    defaults.catalog ? `Catalog: ${defaults.catalog}` : "",
-    meta.igHandle ? `Instagram handle: ${meta.igHandle}` : "",
-    defaults.defaultNotes || ""
-  ].filter(Boolean);
 
   return {
     key: `batch-${index + 1}`,
@@ -1572,7 +1679,7 @@ function parseGatheringBatchBlock(block, index, defaults) {
     quote,
     igHandle: meta.igHandle,
     bookTitle: defaults.bookTitle,
-    notes: notesBits.join("\n\n"),
+    notes: buildGatheringBatchNotes(defaults, meta.igHandle),
     error: !meta.author || !quote ? "Needs an author and poem text before import." : ""
   };
 }
@@ -1603,14 +1710,18 @@ function buildGatheringBatchRows() {
   const bookTitle = elements.gatheringBatchBook?.value.trim() || "";
   const source = elements.gatheringBatchSource?.value || "";
   const defaultNotes = elements.gatheringBatchDefaultNotes?.value.trim() || "";
+  const defaults = { catalog, bookTitle, defaultNotes };
 
   if (!bookTitle || !source.trim()) {
     throw new Error("Batch paste needs a book title and pasted content.");
   }
 
-  const rows = splitGatheringBatchBlocks(source).map((block, index) => (
-    parseGatheringBatchBlock(block, index, { catalog, bookTitle, defaultNotes })
-  ));
+  const spreadsheetRows = parseGatheringBatchSpreadsheetRows(source, defaults);
+  const rows = (spreadsheetRows && spreadsheetRows.length)
+    ? spreadsheetRows
+    : splitGatheringBatchBlocks(source).map((block, index) => (
+      parseGatheringBatchBlock(block, index, defaults)
+    ));
 
   if (!rows.length) {
     throw new Error("No poem blocks were found in the pasted content.");
