@@ -157,14 +157,25 @@
 
           <div class="gathering-fields gathering-fields--book" id="gathering-batch-fields" hidden>
             <label class="field field--span-4">
-              <span>Catalog</span>
+              <span>Release Catalog</span>
               <input id="gathering-batch-catalog" type="text" placeholder="Short Form Contest" />
             </label>
-            <label class="field field--span-5">
+            <label class="field field--span-4">
               <span>Book Title</span>
               <input id="gathering-batch-book" type="text" placeholder="Short Form Contest May 2026" />
             </label>
-            <label class="field field--span-3">
+            <label class="field field--span-2">
+              <span>Shortener</span>
+              <input id="gathering-batch-shortener" type="text" placeholder="SFC" />
+            </label>
+            <label class="field field--span-2">
+              <span>Type</span>
+              <select id="gathering-batch-content-type">
+                <option value="EXC">Excerpt</option>
+                <option value="FP">Full Poem</option>
+              </select>
+            </label>
+            <label class="field field--span-12">
               <span>Default Notes</span>
               <input id="gathering-batch-default-notes" type="text" placeholder="Optional note applied to every row" />
             </label>
@@ -172,7 +183,7 @@
               <span>Paste Blocks</span>
               <textarea id="gathering-batch-source" rows="14" placeholder="Paste poem blocks, or paste rows copied directly from a spreadsheet.&#10;&#10;Supported poem-block lines:&#10;Title: ...&#10;Author: ...&#10;IG: @handle&#10;&#10;Spreadsheet rows can map columns like First Name, Last Name, Public Instagram Handle, and Submission."></textarea>
             </label>
-            <p class="hint">Use one block per poem, or paste tabular rows copied from Google Sheets. Block mode supports <code>Title:</code>, <code>Author:</code>, and <code>IG:</code>. Spreadsheet mode looks for columns like <code>First Name</code>, <code>Last Name</code>, <code>Public Instagram Handle</code>, and <code>Submission</code>.</p>
+            <p class="hint">Use one block per poem, or paste tabular rows copied from Google Sheets. Block mode supports <code>Title:</code>, <code>Author:</code>, and <code>IG:</code>. Spreadsheet mode looks for columns like <code>First Name</code>, <code>Last Name</code>, <code>Public Instagram Handle</code>, and <code>Submission</code>. Release catalog, shortener, and type will be applied to every imported row.</p>
             <div id="gathering-batch-preview" class="excerpt-list">
               <p class="empty-state">Parse preview will appear here before import.</p>
             </div>
@@ -427,6 +438,6 @@
     </main>
   </div>
 
-  <script src="/app.js?v=20260601b"></script>
+  <script src="/app.js?v=20260601c"></script>
 </body>
 </html>

@@ -190,6 +190,36 @@ function normalizeExcerptTransferText(text) {
   return String(text || "").replace(/\r\n?/g, "\n").trim();
 }
 
+function normalizeExcerptContentType(value) {
+  const cleaned = cleanSheetWhitespace(value).toUpperCase();
+  if (cleaned === "FP" || cleaned === "FULL POEM") return "FP";
+  return "EXC";
+}
+
+function parseIntakeMetadataFromNotes(text) {
+  const noteText = String(text || "");
+  const result = {
+    releaseCatalog: "",
+    bookShortener: "",
+    contentType: ""
+  };
+  noteText.split(/\r?\n/).forEach(line => {
+    const match = line.match(/^\s*([^:]+):\s*(.+?)\s*$/);
+    if (!match) return;
+    const label = cleanSheetWhitespace(match[1]).toLowerCase();
+    const value = cleanSheetWhitespace(match[2]);
+    if (!value) return;
+    if (label === "release catalog" || label === "catalog") {
+      result.releaseCatalog = value;
+    } else if (label === "book shortener" || label === "shortener") {
+      result.bookShortener = value;
+    } else if (label === "content type" || label === "type") {
+      result.contentType = normalizeExcerptContentType(value);
+    }
+  });
+  return result;
+}
+
 function getBookBaseTitle(text) {
   const cleanedTitle = cleanSheetWhitespace(text);
   if (!cleanedTitle) return "";
@@ -1869,6 +1899,8 @@ function buildPendingRecordFromSheetRow(row, index, canonicalBookAuthorMap = nul
   const excluded = isSheetYes(row[config.exclude - 1]);
   const reviewDecision = getSheetExcerptReviewDecision(row);
   const bookTitle = cleanSheetWhitespace(row[config.bookTitle - 1]);
+  const noteMeta = parseIntakeMetadataFromNotes(row[8] || "");
+  const bookMeta = resolvePublishingBookMeta(bookTitle, bookTitle);
 
   if (!bookTitle || !cleanedExcerptText || excluded || !isPendingSheetReview(reviewDecision)) {
     return null;
@@ -1881,6 +1913,9 @@ function buildPendingRecordFromSheetRow(row, index, canonicalBookAuthorMap = nul
     title: (row[config.title - 1] || "").toString(),
     bookTitle,
     excerptText,
+    releaseCatalog: noteMeta.releaseCatalog || cleanSheetWhitespace(bookMeta?.releaseCatalog),
+    bookShortener: noteMeta.bookShortener || cleanSheetWhitespace(bookMeta?.bookShortener),
+    contentType: noteMeta.contentType || "EXC",
     bookPrimarySourceFormat: cleanSheetWhitespace(row[config.validationPrimarySourceFormat - 1]),
     catalogValidation: buildCatalogValidationPayload(row)
   };
@@ -1895,6 +1930,7 @@ function buildApprovedExcerptExportRecordFromSheetRow(row, index, canonicalBookA
   const explicitDecision = cleanSheetWhitespace(row[config.excerptReviewDecision - 1]).toUpperCase();
   const bookTitle = cleanSheetWhitespace(row[config.bookTitle - 1]);
   const approvedForUse = (row[config.approved - 1] || "").toString().trim().toUpperCase() === "Y";
+  const noteMeta = parseIntakeMetadataFromNotes(row[8] || "");
 
   if (!bookTitle || !cleanedExcerptText || excluded || !approvedForUse) {
     return null;
@@ -1963,9 +1999,10 @@ function buildApprovedExcerptExportRecordFromSheetRow(row, index, canonicalBookA
       lineCount,
       updatedAt: normalizedTimestamp
     },
-    bookShortener: bookMeta?.bookShortener || "",
+    contentType: noteMeta.contentType || "EXC",
+    bookShortener: noteMeta.bookShortener || bookMeta?.bookShortener || "",
     bookLink: "",
-    releaseCatalog: bookMeta?.releaseCatalog || "",
+    releaseCatalog: noteMeta.releaseCatalog || bookMeta?.releaseCatalog || "",
     driveLink: "",
     sourceUrl: "",
     poetryPleaseStatus,
@@ -2758,6 +2795,7 @@ function buildPoetryPleaseExcerptRecord(record) {
   const recordId = cleanSheetWhitespace(record.recordId);
   const bookShortener = cleanSheetWhitespace(record.bookShortener);
   const releaseCatalog = cleanSheetWhitespace(record.releaseCatalog);
+  const contentType = normalizeExcerptContentType(record.contentType || "EXC");
   if (!recordId || !cleanSheetWhitespace(excerpt)) {
     return null;
   }
@@ -2773,7 +2811,7 @@ function buildPoetryPleaseExcerptRecord(record) {
   }
 
   return {
-    contentType: "EXC",
+    contentType,
     recordId,
     sourceSystem: cleanSheetWhitespace(record.sourceSystem || "weaver"),
     sourceRecordId: cleanSheetWhitespace(record.sourceRecordId),
@@ -2824,7 +2862,7 @@ async function handoffApprovedExcerptsToPoetryPlease(records = []) {
           "x-api-key": poetryPleaseApiKey
         },
         body: JSON.stringify({
-          contentType: "EXC",
+          contentType: record.contentType,
           payload: record
         })
       });
@@ -3723,6 +3761,7 @@ async function enrichAcceptedExcerptUpdate(update) {
   if (!row) {
     return normalized;
   }
+  const noteMeta = parseIntakeMetadataFromNotes(row[8] || "");
   const canonicalBookAuthorMap = await getCanonicalGraphicsBookAuthorMap().catch(() => new Map());
   const record = buildPendingRecordFromSheetRow(row, sourceRow - SHEET_SOURCE_CONFIG.startRow, canonicalBookAuthorMap) || {
     sourceRow,
@@ -3739,11 +3778,10 @@ async function enrichAcceptedExcerptUpdate(update) {
   normalized.poemTitle = cleanSheetWhitespace(normalized.poemTitle) || record.title || "";
   normalized.bookTitle = cleanSheetWhitespace(normalized.bookTitle) || record.bookTitle || "";
   normalized.excerptText = normalized.excerptText || record.excerptText || "";
+  normalized.contentType = normalizeExcerptContentType(normalized.contentType || noteMeta.contentType || record.contentType || "EXC");
   const bookMeta = resolvePublishingBookMeta(normalized.bookTitle, normalized.bookTitle);
-  if (bookMeta) {
-    normalized.bookShortener = cleanSheetWhitespace(normalized.bookShortener) || cleanSheetWhitespace(bookMeta.bookShortener);
-    normalized.releaseCatalog = cleanSheetWhitespace(normalized.releaseCatalog) || cleanSheetWhitespace(bookMeta.releaseCatalog);
-  }
+  normalized.bookShortener = cleanSheetWhitespace(normalized.bookShortener) || noteMeta.bookShortener || cleanSheetWhitespace(record.bookShortener) || cleanSheetWhitespace(bookMeta?.bookShortener);
+  normalized.releaseCatalog = cleanSheetWhitespace(normalized.releaseCatalog) || noteMeta.releaseCatalog || cleanSheetWhitespace(record.releaseCatalog) || cleanSheetWhitespace(bookMeta?.releaseCatalog);
   return normalized;
 }
 
@@ -3761,9 +3799,10 @@ function buildAcceptedExcerptHandoff(update) {
   }
 
   const now = new Date().toISOString();
+  const contentType = normalizeExcerptContentType(update?.contentType || "EXC");
   return {
-    recordId: `weaver-exc-${sourceRecordId}`,
-    contentType: "EXC",
+    recordId: `weaver-${contentType.toLowerCase()}-${sourceRecordId}`,
+    contentType,
     sourceSystem: "weaver",
     sourceRecordId,
     author: String(update?.author || "").trim(),
@@ -3807,8 +3846,8 @@ function buildExcerptHandoffFromApprovedExportRecord(record) {
   const itemIdMatch = sheetHandoffNote.match(/item=([^\s]+)/);
 
   return {
-    recordId: `weaver-exc-${sourceRecordId}`,
-    contentType: "EXC",
+    recordId: `weaver-${normalizeExcerptContentType(record?.contentType).toLowerCase()}-${sourceRecordId}`,
+    contentType: normalizeExcerptContentType(record?.contentType),
     sourceSystem: "weaver",
     sourceRecordId,
     author: cleanSheetWhitespace(record?.author),

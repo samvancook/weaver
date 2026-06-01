@@ -88,6 +88,8 @@ const elements = {
   gatheringFixCorrect: document.getElementById("gathering-fix-correct"),
   gatheringBatchCatalog: document.getElementById("gathering-batch-catalog"),
   gatheringBatchBook: document.getElementById("gathering-batch-book"),
+  gatheringBatchShortener: document.getElementById("gathering-batch-shortener"),
+  gatheringBatchContentType: document.getElementById("gathering-batch-content-type"),
   gatheringBatchDefaultNotes: document.getElementById("gathering-batch-default-notes"),
   gatheringBatchSource: document.getElementById("gathering-batch-source"),
   gatheringBatchPreview: document.getElementById("gathering-batch-preview"),
@@ -979,11 +981,92 @@ function refreshBookCountsInBackground() {
     });
 }
 
+function refreshCorrectionBooksInBackground() {
+  requestReviewApi("/api/review/correction-books")
+    .then(data => {
+      if (!data.ok || !elements.correctionBookSelect) return;
+      const previousSelection = elements.correctionBookSelect.value || "";
+      elements.correctionBookSelect.innerHTML = "";
+      const placeholder = document.createElement("option");
+      placeholder.value = "";
+      placeholder.textContent = "Choose a correction book";
+      elements.correctionBookSelect.appendChild(placeholder);
+      (Array.isArray(data.books) ? data.books : []).forEach(book => {
+        const option = document.createElement("option");
+        option.value = book.title;
+        option.textContent = `${book.title} (${book.count})`;
+        elements.correctionBookSelect.appendChild(option);
+      });
+      if ((Array.isArray(data.books) ? data.books : []).some(book => book.title === previousSelection)) {
+        elements.correctionBookSelect.value = previousSelection;
+      }
+      if (elements.correctionBookCountBadge) {
+        elements.correctionBookCountBadge.textContent = `${(Array.isArray(data.books) ? data.books : []).length} Books`;
+      }
+    })
+    .catch(() => {
+      // Background refresh is best-effort only.
+    });
+}
+
+function refreshGraphicsBooksInBackground() {
+  const mode = getSelectedGraphicsMode();
+  requestReviewApi("/api/review/graphics-books", { mode })
+    .then(data => {
+      if (!data.ok) return;
+      currentGraphicsBookSummaries = Array.isArray(data.books) ? data.books : [];
+      graphicsBookSummaryByKey = new Map(
+        currentGraphicsBookSummaries.map(book => [normalizeBookKey(book.title), book])
+      );
+      refreshGraphicsBookSelect(true);
+      if (elements.graphicsBookCountBadge) {
+        elements.graphicsBookCountBadge.textContent = `${getVisibleGraphicsBookSummaries().length} Books`;
+      }
+    })
+    .catch(() => {
+      // Background refresh is best-effort only.
+    });
+}
+
+function refreshExcerptHandoffsInBackground() {
+  requestReviewApi("/api/excerpts/handoffs", { status: "queued,failed,sent" })
+    .then(data => {
+      if (!data.ok) return;
+      renderExcerptHandoffSummary(Array.isArray(data.records) ? data.records : []);
+    })
+    .catch(() => {
+      // Background refresh is best-effort only.
+    });
+}
+
+function refreshToolSummariesInBackground({
+  review = false,
+  corrections = false,
+  graphics = false,
+  handoffs = false,
+} = {}) {
+  if (review) refreshBookCountsInBackground();
+  if (corrections) refreshCorrectionBooksInBackground();
+  if (graphics) refreshGraphicsBooksInBackground();
+  if (handoffs) refreshExcerptHandoffsInBackground();
+}
+
 function applyPendingBookData(records, { preserveSelection = false } = {}) {
   const previousWeirdSelection = preserveSelection ? elements.weirdBookSelect?.value || "" : "";
 
   currentPendingRecords = records;
   const allBookSummaries = summarizePendingBooks(records);
+  const releaseCatalogByTitle = { ...(runtimeConfig.releaseCatalogByTitle || {}) };
+  const releaseCatalogOptions = new Set(getReleaseCatalogOptions());
+  allBookSummaries.forEach(summary => {
+    if (!summary.releaseCatalog) return;
+    releaseCatalogByTitle[normalizeBookKey(summary.title)] = summary.releaseCatalog;
+    releaseCatalogOptions.add(summary.releaseCatalog);
+  });
+  runtimeConfig.releaseCatalogByTitle = releaseCatalogByTitle;
+  runtimeConfig.releaseCatalogOptions = Array.from(releaseCatalogOptions);
+  populateReleaseCatalogSelect(elements.reviewReleaseCatalog, getSelectedReviewReleaseCatalog());
+  populateReleaseCatalogSelect(elements.graphicsReleaseCatalog, getSelectedGraphicsReleaseCatalog());
   currentReviewBookSummaries = allBookSummaries.filter(book => book.standardCount > 0);
   currentWeirdBookSummaries = allBookSummaries.filter(book => book.needsCheckingCount > 0);
   reviewBookSummaryByKey = indexBookSummariesByKey(currentReviewBookSummaries);
@@ -1410,6 +1493,7 @@ function resetGatheringForm() {
     elements.gatheringFixCorrect,
     elements.gatheringBatchCatalog,
     elements.gatheringBatchBook,
+    elements.gatheringBatchShortener,
     elements.gatheringBatchDefaultNotes,
     elements.gatheringBatchSource
   ].forEach(field => {
@@ -1573,7 +1657,9 @@ function normalizeBatchHeader(value) {
 
 function buildGatheringBatchNotes(defaults, igHandle) {
   return [
-    defaults.catalog ? `Catalog: ${defaults.catalog}` : "",
+    defaults.catalog ? `Release Catalog: ${defaults.catalog}` : "",
+    defaults.bookShortener ? `Book Shortener: ${defaults.bookShortener}` : "",
+    defaults.contentType ? `Content Type: ${defaults.contentType}` : "",
     igHandle ? `Instagram handle: ${igHandle}` : "",
     defaults.defaultNotes || ""
   ].filter(Boolean).join("\n\n");
@@ -1723,12 +1809,17 @@ function renderGatheringBatchPreview(rows) {
 function buildGatheringBatchRows() {
   const catalog = elements.gatheringBatchCatalog?.value.trim() || "";
   const bookTitle = elements.gatheringBatchBook?.value.trim() || "";
+  const bookShortener = elements.gatheringBatchShortener?.value.trim() || "";
+  const contentType = elements.gatheringBatchContentType?.value || "EXC";
   const source = elements.gatheringBatchSource?.value || "";
   const defaultNotes = elements.gatheringBatchDefaultNotes?.value.trim() || "";
-  const defaults = { catalog, bookTitle, defaultNotes };
+  const defaults = { catalog, bookTitle, bookShortener, contentType, defaultNotes };
 
   if (!bookTitle || !source.trim()) {
     throw new Error("Batch paste needs a book title and pasted content.");
+  }
+  if (!catalog || !bookShortener) {
+    throw new Error("Batch paste needs both a release catalog and a shortener.");
   }
 
   const spreadsheetRows = parseGatheringBatchSpreadsheetRows(source, defaults);
@@ -2365,6 +2456,7 @@ function summarizePendingBooks(records) {
       byTitle.set(titleKey, {
         key: titleKey,
         title,
+        releaseCatalog: cleanSheetWhitespace(record.releaseCatalog || ""),
         totalCount: 0,
         standardCount: 0,
         goodCount: 0,
@@ -2376,6 +2468,7 @@ function summarizePendingBooks(records) {
 
     const summary = byTitle.get(titleKey);
     summary.title = choosePreferredBookTitle(summary.title, title);
+    summary.releaseCatalog = summary.releaseCatalog || cleanSheetWhitespace(record.releaseCatalog || "");
     summary.variants.add(title);
     summary.totalCount += 1;
     const isPdfOnly = isPdfOnlyCatalogValidation(validation, record);
