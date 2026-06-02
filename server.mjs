@@ -919,7 +919,11 @@ function buildGraphicsRequestRecordFromQueueRow(row, index, canonicalBookAuthorM
   const workflowStatus = cleanSheetWhitespace(row[7]);
   const recordId = String(row[8] || "");
 
-  if (!bookTitle || !cleanSheetWhitespace(quoteText)) {
+  if (
+    !bookTitle ||
+    !cleanSheetWhitespace(quoteText) ||
+    workflowStatus.toLowerCase() === "duplicate_suppressed"
+  ) {
     return null;
   }
 
