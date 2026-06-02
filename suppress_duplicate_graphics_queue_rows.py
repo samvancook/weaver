@@ -242,27 +242,36 @@ def update_sheet(access_token: str, targets: list[dict]) -> dict:
     )
 
 
-def block_ledger_targets(targets: list[dict]) -> None:
+def block_ledger_targets(targets: list[dict]) -> dict[str, int]:
+    blocked = 0
+    already_absent = 0
     for target in targets:
         request_id = urllib.parse.quote(target["graphicsRequestId"], safe="")
-        json_request(
-            "PATCH",
-            f"{LEDGER_BASE_URL}/{request_id}",
-            payload={
-                "sourceStatus": "duplicate_suppressed",
-                "handoffStatus": "blocked",
-                "pigStatus": "failed",
-                "blockedReason": f"exact_duplicate_of_queue_row_{target['keepRow']}",
-            },
-        )
+        try:
+            json_request(
+                "PATCH",
+                f"{LEDGER_BASE_URL}/{request_id}",
+                payload={
+                    "sourceStatus": "duplicate_suppressed",
+                    "handoffStatus": "blocked",
+                    "pigStatus": "failed",
+                    "blockedReason": f"exact_duplicate_of_queue_row_{target['keepRow']}",
+                },
+            )
+        except RuntimeError as error:
+            if "Unknown graphicsRequestId" not in str(error):
+                raise
+            already_absent += 1
+            continue
+        blocked += 1
+    return {"blocked": blocked, "alreadyAbsent": already_absent}
 
 
 def main() -> int:
     args = parse_args()
     targets = load_duplicate_targets(args.source_json, args.book_title)
     if args.block_ledger_only:
-        block_ledger_targets(targets)
-        print(json.dumps({"blockedLedgerRecords": len(targets)}, indent=2))
+        print(json.dumps(block_ledger_targets(targets), indent=2))
         return 0
 
     access_token = refresh_access_token()
@@ -297,14 +306,15 @@ def main() -> int:
         encoding="utf-8",
     )
     response = update_sheet(access_token, verified)
-    block_ledger_targets(verified)
+    ledger = block_ledger_targets(verified)
     print(
         json.dumps(
             {
                 "summary": summary,
                 "backupJson": str(args.backup_json),
                 "updatedSheetCells": response.get("totalUpdatedCells", 0),
-                "blockedLedgerRecords": len(verified),
+                "blockedLedgerRecords": ledger["blocked"],
+                "alreadyAbsentLedgerRecords": ledger["alreadyAbsent"],
             },
             indent=2,
         )
