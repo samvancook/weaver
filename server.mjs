@@ -248,7 +248,8 @@ function parseIntakeMetadataFromNotes(text) {
     releaseCatalog: "",
     bookShortener: "",
     contentType: "",
-    socialMediaHandle: ""
+    socialMediaHandle: "",
+    sourceEvent: ""
   };
   noteText.split(/\r?\n/).forEach(line => {
     const match = line.match(/^\s*([^:]+):\s*(.+?)\s*$/);
@@ -262,6 +263,8 @@ function parseIntakeMetadataFromNotes(text) {
       result.bookShortener = value;
     } else if (label === "content type" || label === "type") {
       result.contentType = normalizeExcerptContentType(value);
+    } else if (label === "project/event" || label === "source event" || label === "event") {
+      result.sourceEvent = value;
     } else if (
       label === "instagram handle"
       || label === "ig handle"
@@ -2457,17 +2460,24 @@ function buildPendingRecordFromSheetRow(row, index, canonicalBookAuthorMap = nul
 
 function buildApprovedExcerptExportRecordFromSheetRow(row, index, canonicalBookAuthorMap = null) {
   const config = SHEET_SOURCE_CONFIG.columnMap;
-  const excerptText = (row[config.excerpt - 1] || "").toString();
+  const isVideoIntake = cleanSheetWhitespace(row[2]).toLowerCase() === "add a quote from a video";
+  const rawVideoAuthor = isVideoIntake ? (row[9] || "").toString() : "";
+  const rawVideoTitle = isVideoIntake ? (row[11] || "").toString() : "";
+  const rawVideoExcerpt = isVideoIntake ? (row[12] || "").toString() : "";
+  const rawVideoBookTitle = isVideoIntake ? cleanSheetWhitespace(row[13] || "") : "";
+  const excerptText = (isVideoIntake ? rawVideoExcerpt : row[config.excerpt - 1] || "").toString();
   const cleanedExcerptText = cleanSheetWhitespace(excerptText);
   const excluded = isSheetYes(row[config.exclude - 1]);
   const reviewDecision = getSheetExcerptReviewDecision(row);
   const explicitDecision = cleanSheetWhitespace(row[config.excerptReviewDecision - 1]).toUpperCase();
-  const bookTitle = cleanSheetWhitespace(row[config.bookTitle - 1]);
+  const bookTitle = isVideoIntake
+    ? rawVideoBookTitle
+    : cleanSheetWhitespace(row[config.bookTitle - 1]);
   const approvedForUse = (row[config.approved - 1] || "").toString().trim().toUpperCase() === "Y";
   const approvedForExcerpt = isAcceptedExcerptReviewDecision(explicitDecision) || approvedForUse;
   const noteMeta = parseIntakeMetadataFromNotes(row[8] || "");
 
-  if (!bookTitle || !cleanedExcerptText || excluded || !approvedForExcerpt) {
+  if ((!bookTitle && !isVideoIntake) || !cleanedExcerptText || excluded || !approvedForExcerpt) {
     return null;
   }
   if (reviewDecision === "REJECT" || reviewDecision === "NEEDS_CORRECTION") {
@@ -2476,8 +2486,13 @@ function buildApprovedExcerptExportRecordFromSheetRow(row, index, canonicalBookA
 
   const sourceRow = SHEET_SOURCE_CONFIG.startRow + index;
   const sourceRecordId = cleanSheetWhitespace(row[config.recordId - 1]) || `weaver:row-${sourceRow}`;
-  const author = resolveGraphicsAuthor(row[config.author - 1] || "", bookTitle, canonicalBookAuthorMap);
-  const poemTitle = (row[config.title - 1] || "").toString();
+  const author = resolveGraphicsAuthor(
+    isVideoIntake ? rawVideoAuthor : row[config.author - 1] || "",
+    bookTitle,
+    canonicalBookAuthorMap
+  );
+  const poemTitle = (isVideoIntake ? rawVideoTitle : row[config.title - 1] || "").toString();
+  const sourceEvent = cleanSheetWhitespace(row[17]) || noteMeta.sourceEvent;
   const validationStatus = cleanSheetWhitespace(row[config.validationStatus - 1]);
   const canonicalAuthor = cleanSheetWhitespace(row[config.validationCanonicalAuthor - 1]) || author;
   const canonicalPoemTitle = cleanSheetWhitespace(row[config.validationMatchedPoemTitle - 1]) || poemTitle;
@@ -2505,6 +2520,7 @@ function buildApprovedExcerptExportRecordFromSheetRow(row, index, canonicalBookA
     sourceRow,
     sourceApprovedAt: normalizedTimestamp,
     sourceUpdatedAt: normalizedTimestamp,
+    sourceEvent,
     author,
     poemTitle,
     bookTitle,
@@ -2532,7 +2548,8 @@ function buildApprovedExcerptExportRecordFromSheetRow(row, index, canonicalBookA
     metadata: {
       wordCount: cleanedExcerptText ? cleanedExcerptText.split(/\s+/).length : 0,
       lineCount,
-      updatedAt: normalizedTimestamp
+      updatedAt: normalizedTimestamp,
+      sourceEvent
     },
     contentType: noteMeta.contentType || "EXC",
     socialMediaHandle: noteMeta.socialMediaHandle || "",

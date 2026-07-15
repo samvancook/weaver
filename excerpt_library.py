@@ -616,6 +616,8 @@ def ingest_weaver_approved_records(
         inserted = 0
         updated = 0
         skipped = 0
+        archived_inserted = 0
+        archived_updated = 0
         source_cache: dict[tuple[str, str, str], int] = {}
 
         with connection:
@@ -674,6 +676,71 @@ def ingest_weaver_approved_records(
                 normalized_poem_title = normalize_lookup_text(poem_title)
                 normalized_excerpt = normalize_lookup_text(excerpt_text)
                 excerpt_hash = fingerprint_excerpt(excerpt_text)
+
+                archive_payload = {
+                    "source_name": source_name_value,
+                    "source_file": source_path_value,
+                    "source_row_number": source_row_number,
+                    "record_id": external_id,
+                    "timestamp_text": clean_whitespace(
+                        record.get("sourceApprovedAt") or record.get("sourceUpdatedAt")
+                    ),
+                    "email_address": clean_whitespace(record.get("emailAddress")),
+                    "request_type": clean_whitespace(record.get("contentType")) or "EXC",
+                    "author": author,
+                    "title": poem_title,
+                    "book_title": book_title,
+                    "excerpt_text": excerpt_text,
+                    "excerpt_review_decision": review_decision or "approve",
+                    "exclude_from_quote_db": "N",
+                    "row_json": metadata_json,
+                }
+                archive_row = cursor.execute(
+                    """
+                    SELECT id FROM raw_import_rows
+                    WHERE source_name = ? AND source_file = ? AND source_row_number = ?
+                    LIMIT 1
+                    """,
+                    (source_name_value, source_path_value, source_row_number),
+                ).fetchone()
+                if archive_row is None:
+                    cursor.execute(
+                        """
+                        INSERT INTO raw_import_rows (
+                            source_name, source_file, source_row_number, record_id,
+                            timestamp_text, email_address, request_type, author, title,
+                            book_title, excerpt_text, excerpt_review_decision,
+                            exclude_from_quote_db, row_json
+                        ) VALUES (
+                            :source_name, :source_file, :source_row_number, :record_id,
+                            :timestamp_text, :email_address, :request_type, :author, :title,
+                            :book_title, :excerpt_text, :excerpt_review_decision,
+                            :exclude_from_quote_db, :row_json
+                        )
+                        """,
+                        archive_payload,
+                    )
+                    archived_inserted += 1
+                else:
+                    cursor.execute(
+                        """
+                        UPDATE raw_import_rows SET
+                            record_id = :record_id,
+                            timestamp_text = :timestamp_text,
+                            email_address = :email_address,
+                            request_type = :request_type,
+                            author = :author,
+                            title = :title,
+                            book_title = :book_title,
+                            excerpt_text = :excerpt_text,
+                            excerpt_review_decision = :excerpt_review_decision,
+                            exclude_from_quote_db = :exclude_from_quote_db,
+                            row_json = :row_json
+                        WHERE id = :id
+                        """,
+                        {**archive_payload, "id": int(archive_row[0])},
+                    )
+                    archived_updated += 1
 
                 existing_row = None
                 if external_id:
@@ -813,6 +880,8 @@ def ingest_weaver_approved_records(
         "inserted": inserted,
         "updated": updated,
         "skipped": skipped,
+        "archived_inserted": archived_inserted,
+        "archived_updated": archived_updated,
     }
 
 
