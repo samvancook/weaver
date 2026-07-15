@@ -4,6 +4,8 @@ CREATE TABLE IF NOT EXISTS graphics_requests (
     id TEXT PRIMARY KEY,
     request_status TEXT NOT NULL DEFAULT 'OPEN',
     source_type TEXT NOT NULL DEFAULT 'weaver_sheet_queue',
+    content_type TEXT NOT NULL DEFAULT 'QI',
+    image_type TEXT NOT NULL DEFAULT 'QI',
     book_title TEXT NOT NULL,
     poem_title TEXT NOT NULL,
     author TEXT NOT NULL,
@@ -50,6 +52,8 @@ CREATE TABLE IF NOT EXISTS graphics_completions (
     id TEXT PRIMARY KEY,
     graphics_request_id TEXT NOT NULL,
     source_tool TEXT NOT NULL DEFAULT 'P.I.G.',
+    content_type TEXT NOT NULL DEFAULT 'QI',
+    image_type TEXT NOT NULL DEFAULT 'QI',
     asset_url TEXT NOT NULL,
     asset_preview_url TEXT,
     production_notes TEXT NOT NULL DEFAULT '',
@@ -67,6 +71,13 @@ CREATE TABLE IF NOT EXISTS graphics_handoff_ledger (
     graphics_request_id TEXT PRIMARY KEY,
     source_system TEXT NOT NULL DEFAULT 'weaver',
     source_status TEXT NOT NULL DEFAULT 'needs_graphics',
+    content_type TEXT NOT NULL DEFAULT 'QI',
+    image_type TEXT NOT NULL DEFAULT 'QI',
+    source_completion_id TEXT NOT NULL DEFAULT '',
+    revision_of TEXT NOT NULL DEFAULT '',
+    original_graphics_request_id TEXT NOT NULL DEFAULT '',
+    review_status TEXT NOT NULL DEFAULT '',
+    ocr_text TEXT NOT NULL DEFAULT '',
     pig_status TEXT NOT NULL DEFAULT 'not_started',
     handoff_status TEXT NOT NULL DEFAULT 'requested',
     qc_status TEXT NOT NULL DEFAULT 'not_sent',
@@ -99,7 +110,6 @@ CREATE INDEX IF NOT EXISTS idx_graphics_handoff_ledger_queue
     ON graphics_handoff_ledger(handoff_status, pig_status, qc_status, updated_at);
 CREATE INDEX IF NOT EXISTS idx_graphics_handoff_ledger_source_status
     ON graphics_handoff_ledger(source_system, source_status);
-
 CREATE TABLE IF NOT EXISTS graphics_qc_reviews (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     graphics_completion_id TEXT NOT NULL,

@@ -1,4 +1,5 @@
 let runtimeConfig = window.WEAVER_CONFIG || {};
+let currentGraphicsView = "main";
 
 const elements = {
   showGatheringModule: document.getElementById("show-gathering-module"),
@@ -6,10 +7,23 @@ const elements = {
   showWeirdModule: document.getElementById("show-weird-module"),
   showCorrectionsModule: document.getElementById("show-corrections-module"),
   showGraphicsModule: document.getElementById("show-graphics-module"),
+  showGraphicsOps: document.getElementById("show-graphics-ops"),
+  graphicsModuleTitle: document.getElementById("graphics-module-title"),
+  graphicsOpsPanel: document.getElementById("graphics-ops-panel"),
+  graphicsBookPicker: document.getElementById("graphics-book-picker"),
+  graphicsModeField: document.getElementById("graphics-mode-field"),
+  graphicsFilterField: document.getElementById("graphics-filter-field"),
+  graphicsReleaseCatalogField: document.getElementById("graphics-release-catalog-field"),
+  graphicsMainHint: document.getElementById("graphics-main-hint"),
+  graphicsQueueRowsHeader: document.getElementById("graphics-queue-rows-header"),
+  graphicsQueueToolbarTop: document.getElementById("graphics-queue-toolbar-top"),
+  graphicsQueueToolbarBottom: document.getElementById("graphics-queue-toolbar-bottom"),
   gatheringTabBook: document.getElementById("gathering-tab-book"),
   gatheringTabVideo: document.getElementById("gathering-tab-video"),
   gatheringTabFix: document.getElementById("gathering-tab-fix"),
   gatheringTabBatch: document.getElementById("gathering-tab-batch"),
+  gatheringGuidanceLead: document.getElementById("gathering-guidance-lead"),
+  gatheringGuidanceList: document.getElementById("gathering-guidance-list"),
   gatheringModule: document.getElementById("gathering-module"),
   reviewModule: document.getElementById("review-module"),
   reviewQueuePanel: document.getElementById("review-queue-panel"),
@@ -65,13 +79,14 @@ const elements = {
   gatheringBookTitle: document.getElementById("gathering-book-title"),
   gatheringBookBook: document.getElementById("gathering-book-book"),
   gatheringBookQuote: document.getElementById("gathering-book-quote"),
+  gatheringBookBold: document.getElementById("gathering-book-bold"),
+  gatheringBookItalicize: document.getElementById("gathering-book-italicize"),
   gatheringBookQuoteMeta: document.getElementById("gathering-book-quote-meta"),
   gatheringBookSourceHint: document.getElementById("gathering-book-source-hint"),
   gatheringPrevCatalogPoem: document.getElementById("gathering-prev-catalog-poem"),
   gatheringNextCatalogPoem: document.getElementById("gathering-next-catalog-poem"),
   gatheringViewCatalogPoem: document.getElementById("gathering-view-catalog-poem"),
   gatheringBookNotes: document.getElementById("gathering-book-notes"),
-  gatheringBookItalics: document.getElementById("gathering-book-italics"),
   gatheringBookReaction: document.getElementById("gathering-book-reaction"),
   gatheringVideoFields: document.getElementById("gathering-video-fields"),
   gatheringVideoAuthor: document.getElementById("gathering-video-author"),
@@ -80,6 +95,12 @@ const elements = {
   gatheringVideoEvent: document.getElementById("gathering-video-event"),
   gatheringVideoQuote: document.getElementById("gathering-video-quote"),
   gatheringVideoQuoteMeta: document.getElementById("gathering-video-quote-meta"),
+  gatheringVideoPlaylistUrl: document.getElementById("gathering-video-playlist-url"),
+  gatheringVideoLoadPlaylist: document.getElementById("gathering-video-load-playlist"),
+  gatheringVideoPrevItem: document.getElementById("gathering-video-prev-item"),
+  gatheringVideoNextItem: document.getElementById("gathering-video-next-item"),
+  gatheringVideoOpenItem: document.getElementById("gathering-video-open-item"),
+  gatheringVideoPlaylistStatus: document.getElementById("gathering-video-playlist-status"),
   gatheringFixFields: document.getElementById("gathering-fix-fields"),
   gatheringBatchFields: document.getElementById("gathering-batch-fields"),
   gatheringFixPart: document.getElementById("gathering-fix-part"),
@@ -92,6 +113,8 @@ const elements = {
   gatheringBatchContentType: document.getElementById("gathering-batch-content-type"),
   gatheringBatchDefaultNotes: document.getElementById("gathering-batch-default-notes"),
   gatheringBatchSource: document.getElementById("gathering-batch-source"),
+  gatheringBatchBold: document.getElementById("gathering-batch-bold"),
+  gatheringBatchItalicize: document.getElementById("gathering-batch-italicize"),
   gatheringBatchPreview: document.getElementById("gathering-batch-preview"),
   gatheringAuthorOptions: document.getElementById("gathering-author-options"),
   gatheringBookOptions: document.getElementById("gathering-book-options"),
@@ -121,6 +144,7 @@ let currentPendingRecords = [];
 let currentGraphicsRecords = [];
 let currentGraphicsBookSummaries = [];
 let currentGraphicsAssetMatches = new Map();
+let currentGraphicsCoverage = null;
 let currentGraphicsFolderImportPreview = null;
 let currentExcerptHandoffRecords = [];
 let isSaving = false;
@@ -136,6 +160,7 @@ let currentContributorAccess = null;
 let currentGatheringBookPoems = [];
 let currentGatheringCatalogBook = null;
 let currentGatheringBatchRows = [];
+let currentGatheringVideoPlaylist = null;
 let googleSheetsTokenClient = null;
 let googleSheetsAccessToken = "";
 let reviewVisibleCount = 1;
@@ -153,11 +178,11 @@ const contributorShellParams = new URLSearchParams(window.location.search);
 const REVIEW_SINGLE_BATCH_SIZE = 1;
 const REVIEW_MULTI_BATCH_SIZE = 25;
 const EXTRA_REVIEW_BATCH_SIZE = 1;
+const REVIEW_VIDEOS_BOOK_KEY = "__video_excerpts__";
 const GOOGLE_SHEETS_SCOPES = "https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.file";
 const INTAKE_MODE_LABELS = {
   book: "Add a quote from a book",
-  video: "Add a quote from a video",
-  fix: "Fix a quote in one of the quote tools"
+  video: "Add a quote from a video"
 };
 const SHEET_SOURCE_CONFIG = {
   startRow: 2,
@@ -225,12 +250,14 @@ const GRAPHICS_QC_AESTHETIC_OPTIONS = [
 const GRAPHICS_QC_DEFAULT_NOTES = {
   mismatched_graphic: "Mismatched graphic: the image and excerpt are not the same piece.",
   correct_and_recreate: "Correct and recreate: choose the metadata and/or aesthetic issue, then add any needed details.",
-  final_reject: "Final reject: this graphic should not move forward."
+  final_reject: "Final reject: this graphic should not move forward.",
+  replace: "Manual replacement approved in Weaver."
 };
 
 function normalizeGraphicsQcDecisionClient(value) {
   const normalized = String(value || "").trim().toLowerCase();
   if (normalized === "approve") return "approve";
+  if (normalized === "replace" || normalized === "replace_here") return "replace";
   if (
     normalized === "mismatch" ||
     normalized === "mismatched_graphic" ||
@@ -526,11 +553,16 @@ function buildBrowserCatalogValidationPayload(row) {
 
 function buildPendingRecordFromSheetRow(row, index) {
   const config = SHEET_SOURCE_CONFIG.columnMap;
-  const excerptText = (row[config.excerpt - 1] || "").toString();
+  const isVideoIntake = cleanSheetWhitespace(row[2]).toLowerCase() === "add a quote from a video";
+  const rawVideoAuthor = isVideoIntake ? (row[9] || "").toString() : "";
+  const rawVideoTitle = isVideoIntake ? (row[11] || "").toString() : "";
+  const rawVideoExcerpt = isVideoIntake ? (row[12] || "").toString() : "";
+  const rawVideoBookTitle = isVideoIntake ? cleanSheetWhitespace(row[13] || "") : "";
+  const excerptText = (row[config.excerpt - 1] || rawVideoExcerpt).toString();
   const cleanedExcerptText = cleanSheetWhitespace(excerptText);
   const excluded = isSheetYes(row[config.exclude - 1]);
   const reviewDecision = getSheetExcerptReviewDecision(row);
-  const bookTitle = cleanSheetWhitespace(row[config.bookTitle - 1]);
+  const bookTitle = cleanSheetWhitespace(row[config.bookTitle - 1]) || rawVideoBookTitle;
 
   if (!bookTitle || !cleanedExcerptText || excluded || !isPendingSheetReview(reviewDecision)) {
     return null;
@@ -539,8 +571,10 @@ function buildPendingRecordFromSheetRow(row, index) {
   return {
     sourceRow: SHEET_SOURCE_CONFIG.startRow + index,
     recordId: (row[config.recordId - 1] || "").toString(),
-    author: (row[config.author - 1] || "").toString(),
-    title: (row[config.title - 1] || "").toString(),
+    intakeMode: isVideoIntake ? "video" : "book",
+    intakeLabel: cleanSheetWhitespace(row[2]),
+    author: (row[config.author - 1] || rawVideoAuthor).toString(),
+    title: (row[config.title - 1] || rawVideoTitle).toString(),
     bookTitle,
     excerptText,
     wordCount: countWordsFromText(excerptText),
@@ -835,6 +869,12 @@ function syncReleaseCatalogFilterUi() {
 }
 
 function getVisibleReviewBookSummaries() {
+  if (getSelectedReviewFilter() === "videos") {
+    const videoCount = getPendingVideoRecords().length;
+    return videoCount
+      ? [{ key: REVIEW_VIDEOS_BOOK_KEY, title: "Video excerpts", standardCount: videoCount }]
+      : [];
+  }
   const reviewQueueIncludeSet = getReviewQueueIncludeSet();
   if (getSelectedReviewFilter() !== "current_titles" || !reviewQueueIncludeSet.size) {
     return currentReviewBookSummaries;
@@ -924,7 +964,22 @@ function indexBookSummariesByKey(summaries) {
 }
 
 function getPendingRecordsForBookKey(bookKey, records = currentPendingRecords) {
+  if (bookKey === REVIEW_VIDEOS_BOOK_KEY) {
+    return getPendingVideoRecords(records);
+  }
   return records.filter(record => normalizeBookKey(record.bookTitle) === bookKey);
+}
+
+function isVideoReviewRecord(record) {
+  const intakeMode = cleanSheetWhitespace(record?.intakeMode).toLowerCase();
+  if (intakeMode === "video") {
+    return true;
+  }
+  return cleanSheetWhitespace(record?.intakeLabel).toLowerCase() === INTAKE_MODE_LABELS.video.toLowerCase();
+}
+
+function getPendingVideoRecords(records = currentPendingRecords) {
+  return records.filter(isVideoReviewRecord);
 }
 
 async function requestMergedBookRecords(sourceExcerpts) {
@@ -1113,18 +1168,20 @@ function applyContributorAccessMode() {
   currentContributorAccess = getContributorAccessForEmail(elements.gatheringEmail?.value || "");
   const isContributorMode = !!currentContributorAccess;
   const isContributorShell = isContributorShellRequested();
+  const hasRequestedPlaylist = !!getRequestedVideoPlaylistUrl();
   const hideIrrelevantUi = isContributorMode || isContributorShell;
 
   setElementForcedHidden(elements.showReviewModule, hideIrrelevantUi);
   setElementForcedHidden(elements.showWeirdModule, hideIrrelevantUi);
   setElementForcedHidden(elements.showCorrectionsModule, hideIrrelevantUi);
   setElementForcedHidden(elements.showGraphicsModule, hideIrrelevantUi);
-  setElementForcedHidden(elements.gatheringTabVideo, hideIrrelevantUi);
+  setElementForcedHidden(elements.gatheringTabBook, hideIrrelevantUi && hasRequestedPlaylist);
+  setElementForcedHidden(elements.gatheringTabVideo, hideIrrelevantUi && !hasRequestedPlaylist);
   setElementForcedHidden(elements.gatheringTabFix, hideIrrelevantUi);
   setElementForcedHidden(elements.gatheringTabBatch, hideIrrelevantUi);
 
   if (hideIrrelevantUi) {
-    setGatheringMode("book");
+    setGatheringMode(hasRequestedPlaylist ? "video" : "book");
   }
 
   if (isContributorMode) {
@@ -1144,6 +1201,66 @@ function getSelectedGatheringMode() {
   return elements.gatheringMode?.value || "book";
 }
 
+function getRequestedVideoPlaylistUrl() {
+  return contributorShellParams.get("playlist")
+    || contributorShellParams.get("playlistUrl")
+    || contributorShellParams.get("curationForm")
+    || "";
+}
+
+const GATHERING_GUIDANCE_BY_MODE = {
+  book: {
+    lead: "<strong>Working rule of thumb:</strong> copy and paste from the manuscript, capture only the strongest lines, and keep moving past maybes.",
+    items: [
+      "Prefer the best excerpts, not the most excerpts.",
+      "Stay under roughly 3 excerpts per poem and 30 per book.",
+      "Aim for plenty of excerpts in the 10–25 word range.",
+      "You can read poems inside Weaver, so you do not need to open a separate PDF just to check the poem text.",
+      "Use <kbd>Cmd/Ctrl</kbd> + <kbd>Enter</kbd> to submit quickly from a text box."
+    ]
+  },
+  video: {
+    lead: "This form is used to gather excerpts from video and add them into Button's excerpts database.",
+    items: [
+      "<strong>Quote Formatting:</strong> Do not use line breaks.",
+      "<strong>For Interns and Employees New to This Task:</strong> please read the following carefully and ask any questions before beginning the task.",
+      "Please add quotes into this tool directly, one at a time as you review the assigned video.",
+      "Do not create a separate document to stage from.",
+      "If possible copy from the transcript on the video.",
+      "Please select the very best quotes or lines that stand out to you the most. Maybes = NOs.",
+      "Please limit your responses to no more than 3 quotes per poem.",
+      "Please do your best to ensure that at least 1/3 of your quotes fall roughly between 10 and 25 words. More than 1/3 in this range is AOK."
+    ]
+  },
+  fix: {
+    lead: "Use this lane to correct specific fields in existing quote records without creating a fresh intake row.",
+    items: [
+      "Paste the incorrect text exactly as it appears now.",
+      "Paste the corrected text exactly as you want it to read.",
+      "Use the smallest correction that solves the problem.",
+      "If the issue is broader than one field, leave a clear correction note."
+    ]
+  },
+  batch: {
+    lead: "Use batch paste to preview a set of excerpts or poems before importing them into Weaver in one pass.",
+    items: [
+      "Set the release catalog, book title, shortener, and content type before previewing.",
+      "Paste either poem blocks or rows copied from a spreadsheet.",
+      "Review the preview carefully before importing.",
+      "Anything missing an author or poem text should be cleaned up before import."
+    ]
+  }
+};
+
+function updateGatheringGuidance(mode) {
+  if (!elements.gatheringGuidanceLead || !elements.gatheringGuidanceList) return;
+  const guidance = GATHERING_GUIDANCE_BY_MODE[mode] || GATHERING_GUIDANCE_BY_MODE.book;
+  elements.gatheringGuidanceLead.innerHTML = guidance.lead;
+  elements.gatheringGuidanceList.innerHTML = guidance.items
+    .map(item => `<li>${item}</li>`)
+    .join("");
+}
+
 function updateGatheringModeUi() {
   const mode = getSelectedGatheringMode();
   elements.gatheringBookFields?.toggleAttribute("hidden", mode !== "book");
@@ -1152,8 +1269,10 @@ function updateGatheringModeUi() {
   elements.gatheringBatchFields?.toggleAttribute("hidden", mode !== "batch");
   elements.gatheringTabBook?.classList.toggle("gathering-tab--active", mode === "book");
   elements.gatheringTabVideo?.classList.toggle("gathering-tab--active", mode === "video");
-  elements.gatheringTabFix?.classList.toggle("gathering-tab--active", mode === "fix");
   elements.gatheringTabBatch?.classList.toggle("gathering-tab--active", mode === "batch");
+  elements.gatheringTabBook?.setAttribute("aria-pressed", mode === "book" ? "true" : "false");
+  elements.gatheringTabVideo?.setAttribute("aria-pressed", mode === "video" ? "true" : "false");
+  elements.gatheringTabBatch?.setAttribute("aria-pressed", mode === "batch" ? "true" : "false");
   elements.submitGathering?.toggleAttribute("hidden", mode === "batch");
   elements.previewGatheringBatch?.toggleAttribute("hidden", mode !== "batch");
   elements.submitGatheringBatch?.toggleAttribute("hidden", mode !== "batch");
@@ -1161,11 +1280,124 @@ function updateGatheringModeUi() {
     elements.gatheringModeBadge.textContent = (
       mode === "book" ? "Book Excerpts" :
       mode === "video" ? "Video Excerpts" :
-      mode === "fix" ? "Fix Existing Quote" :
       "Batch Paste"
     );
   }
+  updateGatheringGuidance(mode);
+  updateGatheringVideoPlaylistUi();
   updateGatheringQuoteMeta();
+}
+
+function setGatheringVideoPlaylistStatus(message = "") {
+  if (!elements.gatheringVideoPlaylistStatus) return;
+  elements.gatheringVideoPlaylistStatus.textContent = message || "Load a curation form to prefill the event name, author, and poem title, then advance through the playlist as you submit.";
+}
+
+function updateGatheringVideoPlaylistUi() {
+  const playlist = currentGatheringVideoPlaylist;
+  const hasPlaylist = !!(playlist && Array.isArray(playlist.items) && playlist.items.length);
+  const currentItem = hasPlaylist ? playlist.items[playlist.index] : null;
+  if (elements.gatheringVideoPrevItem) {
+    elements.gatheringVideoPrevItem.disabled = !hasPlaylist || playlist.index <= 0;
+  }
+  if (elements.gatheringVideoNextItem) {
+    elements.gatheringVideoNextItem.disabled = !hasPlaylist || playlist.index >= playlist.items.length - 1;
+  }
+  if (elements.gatheringVideoOpenItem) {
+    elements.gatheringVideoOpenItem.disabled = !cleanSheetWhitespace(currentItem?.videoUrl);
+  }
+  if (hasPlaylist) {
+    const label = `${playlist.eventName || "Playlist"}: item ${playlist.index + 1} of ${playlist.items.length}${currentItem?.author ? ` · ${currentItem.author}` : ""}${currentItem?.poemTitle ? ` · ${currentItem.poemTitle}` : ""}`;
+    setGatheringVideoPlaylistStatus(label);
+  } else {
+    setGatheringVideoPlaylistStatus("");
+  }
+}
+
+function applyGatheringVideoPlaylistItem(item, { preserveQuote = false } = {}) {
+  if (!item) return;
+  if (elements.gatheringVideoEvent) {
+    elements.gatheringVideoEvent.value = item.eventName || "";
+  }
+  if (elements.gatheringVideoAuthor) {
+    elements.gatheringVideoAuthor.value = item.author || "";
+  }
+  if (elements.gatheringVideoTitle) {
+    elements.gatheringVideoTitle.value = item.poemTitle || "";
+  }
+  if (!preserveQuote && elements.gatheringVideoQuote) {
+    elements.gatheringVideoQuote.value = "";
+  }
+  updateGatheringVideoPlaylistUi();
+  updateGatheringQuoteMeta();
+}
+
+function normalizeVideoPlaylistItem(rawItem, eventName) {
+  return {
+    author: cleanSheetWhitespace(rawItem?.author),
+    poemTitle: cleanSheetWhitespace(rawItem?.poemTitle),
+    videoUrl: String(rawItem?.videoUrl || "").trim(),
+    eventName: cleanSheetWhitespace(rawItem?.eventName || eventName),
+    formResponseUrl: String(rawItem?.formResponseUrl || "").trim(),
+    scoreEntryId: cleanSheetWhitespace(rawItem?.scoreEntryId),
+    notesEntryId: cleanSheetWhitespace(rawItem?.notesEntryId)
+  };
+}
+
+function getCurrentGatheringVideoPlaylistItem() {
+  return currentGatheringVideoPlaylist?.items?.[currentGatheringVideoPlaylist.index] || null;
+}
+
+async function loadGatheringVideoPlaylist({ auto = false } = {}) {
+  try {
+    const formUrl = elements.gatheringVideoPlaylistUrl?.value.trim() || "";
+    if (!formUrl) {
+      throw new Error("Add a curation form URL first.");
+    }
+    if (!auto) {
+      setStatus("Loading video playlist...");
+    }
+    const result = await requestReviewApi("/api/intake/video-playlist", { formUrl });
+    const items = Array.isArray(result.items)
+      ? result.items.map(item => normalizeVideoPlaylistItem(item, result.eventName)).filter(item => item.author || item.poemTitle)
+      : [];
+    if (!items.length) {
+      throw new Error("No playlist items were found in that form.");
+    }
+    currentGatheringVideoPlaylist = {
+      formUrl,
+      eventName: cleanSheetWhitespace(result.eventName),
+      formTitle: cleanSheetWhitespace(result.formTitle),
+      items,
+      index: 0
+    };
+    applyGatheringVideoPlaylistItem(items[0]);
+    if (getSelectedGatheringMode() !== "video") {
+      setGatheringMode("video");
+    }
+    setStatus(`Loaded ${items.length} playlist items from "${currentGatheringVideoPlaylist.eventName || currentGatheringVideoPlaylist.formTitle || "the curation form"}".`);
+  } catch (error) {
+    currentGatheringVideoPlaylist = null;
+    updateGatheringVideoPlaylistUi();
+    setStatus(`Video playlist load failed: ${error.message}`);
+  }
+}
+
+function navigateGatheringVideoPlaylist(direction) {
+  if (!currentGatheringVideoPlaylist?.items?.length) return;
+  const nextIndex = currentGatheringVideoPlaylist.index + direction;
+  if (nextIndex < 0 || nextIndex >= currentGatheringVideoPlaylist.items.length) {
+    return;
+  }
+  currentGatheringVideoPlaylist.index = nextIndex;
+  applyGatheringVideoPlaylistItem(currentGatheringVideoPlaylist.items[nextIndex]);
+}
+
+function openGatheringVideoPlaylistItem() {
+  const item = currentGatheringVideoPlaylist?.items?.[currentGatheringVideoPlaylist.index];
+  const videoUrl = item?.videoUrl || "";
+  if (!videoUrl) return;
+  window.open(videoUrl, "_blank", "noopener,noreferrer");
 }
 
 function setGatheringMode(mode) {
@@ -1190,7 +1422,8 @@ function setActiveModule(moduleName) {
   elements.showReviewModule?.classList.toggle("hero-pill--active", currentModule === "review");
   elements.showWeirdModule?.classList.toggle("hero-pill--active", currentModule === "weird");
   elements.showCorrectionsModule?.classList.toggle("hero-pill--active", currentModule === "corrections");
-  elements.showGraphicsModule?.classList.toggle("hero-pill--active", currentModule === "graphics");
+  elements.showGraphicsModule?.classList.toggle("hero-pill--active", currentModule === "graphics" && currentGraphicsView === "main");
+  elements.showGraphicsOps?.classList.toggle("hero-ops-button--active", currentModule === "graphics" && currentGraphicsView === "ops");
 }
 
 async function requestReviewApi(path, params = {}) {
@@ -1371,7 +1604,7 @@ async function loadGatheringPoemsForBook(bookTitle, { preserveTitle = false } = 
     elements.gatheringBookAuthor.value = data.author || "";
   }
   if (elements.gatheringBookSourceHint) {
-    elements.gatheringBookSourceHint.textContent = `${data.primarySourceFormat || "Catalog"} source connected. ${poems.length} poem titles loaded for ${data.bookTitle || cleanedBookTitle}. You can also type a manual poem title if needed.`;
+    elements.gatheringBookSourceHint.textContent = `${data.primarySourceFormat || "Catalog"} source connected. ${poems.length} poem titles loaded for ${data.bookTitle || cleanedBookTitle}. You can read the poem in Weaver and also type a manual poem title if needed.`;
   }
   updateGatheringCatalogPreviewState();
 }
@@ -1380,12 +1613,24 @@ function updateGatheringCatalogPreviewState() {
   const bookTitle = elements.gatheringBookBook?.value.trim() || "";
   const poemTitle = elements.gatheringBookTitle?.value.trim() || "";
   const hasCatalogBook = !!currentGatheringCatalogBook || !!currentIntakeCatalogBooksByKey.get(normalizeBookKey(bookTitle));
+  const needsPoemSelection = hasCatalogBook && bookTitle && !poemTitle;
   const currentIndex = currentGatheringBookPoems.indexOf(poemTitle);
   const hasIndexedPoem = currentIndex >= 0;
 
   if (elements.gatheringViewCatalogPoem) {
-    elements.gatheringViewCatalogPoem.disabled = !(hasCatalogBook && bookTitle && poemTitle);
-    elements.gatheringViewCatalogPoem.textContent = hasCatalogBook ? "View Catalog Context" : "Catalog Context Unavailable";
+    elements.gatheringViewCatalogPoem.disabled = !(hasCatalogBook && bookTitle);
+    elements.gatheringViewCatalogPoem.textContent = needsPoemSelection ? "Select a poem first" : (hasCatalogBook ? "Read the Poem" : "Poem View Unavailable");
+    elements.gatheringViewCatalogPoem.title = needsPoemSelection ? "Choose a poem title before reading the poem." : "";
+  }
+  if (elements.gatheringBookTitle) {
+    elements.gatheringBookTitle.classList.toggle("field-error", needsPoemSelection);
+    elements.gatheringBookTitle.title = needsPoemSelection ? "Select a poem title before reading the poem." : "";
+  }
+  if (elements.gatheringBookSourceHint && hasCatalogBook && bookTitle) {
+    elements.gatheringBookSourceHint.classList.toggle("gathering-source-hint--warning", needsPoemSelection);
+    elements.gatheringBookSourceHint.textContent = needsPoemSelection
+      ? "Select a poem title next, then use Read the Poem to open the catalog context."
+      : `${currentGatheringCatalogBook?.primarySourceFormat || "Catalog"} source connected. ${currentGatheringBookPoems.length} poem titles loaded for ${currentGatheringCatalogBook?.title || bookTitle}. You can read the poem in Weaver and also type a manual poem title if needed.`;
   }
   if (elements.gatheringPrevCatalogPoem) {
     elements.gatheringPrevCatalogPoem.disabled = !(hasCatalogBook && hasIndexedPoem && currentIndex > 0);
@@ -1481,12 +1726,14 @@ function resetGatheringForm() {
     elements.gatheringBookBook,
     elements.gatheringBookQuote,
     elements.gatheringBookNotes,
-    elements.gatheringBookItalics,
     elements.gatheringVideoAuthor,
     elements.gatheringVideoTitle,
     elements.gatheringVideoBook,
     elements.gatheringVideoEvent,
+    elements.gatheringVideoScore,
+    elements.gatheringVideoScoreNotes,
     elements.gatheringVideoQuote,
+    elements.gatheringVideoPlaylistUrl,
     elements.gatheringFixPart,
     elements.gatheringFixAuthor,
     elements.gatheringFixIncorrect,
@@ -1513,7 +1760,6 @@ function resetGatheringAfterSubmit(mode) {
   if (mode === "book") {
     if (elements.gatheringBookQuote) elements.gatheringBookQuote.value = "";
     if (elements.gatheringBookNotes) elements.gatheringBookNotes.value = "";
-    if (elements.gatheringBookItalics) elements.gatheringBookItalics.value = "";
     if (elements.gatheringBookReaction) elements.gatheringBookReaction.value = "";
     updateGatheringCatalogPreviewState();
     updateGatheringQuoteMeta();
@@ -1523,6 +1769,19 @@ function resetGatheringAfterSubmit(mode) {
 
   if (mode === "video") {
     if (elements.gatheringVideoQuote) elements.gatheringVideoQuote.value = "";
+    if (elements.gatheringVideoScore) elements.gatheringVideoScore.value = "";
+    if (elements.gatheringVideoScoreNotes) elements.gatheringVideoScoreNotes.value = "";
+    if (currentGatheringVideoPlaylist?.items?.length) {
+      if (currentGatheringVideoPlaylist.index < currentGatheringVideoPlaylist.items.length - 1) {
+        currentGatheringVideoPlaylist.index += 1;
+        applyGatheringVideoPlaylistItem(
+          currentGatheringVideoPlaylist.items[currentGatheringVideoPlaylist.index],
+          { preserveQuote: false }
+        );
+      } else {
+        updateGatheringVideoPlaylistUi();
+      }
+    }
     updateGatheringQuoteMeta();
     elements.gatheringVideoQuote?.focus();
     return;
@@ -1587,6 +1846,36 @@ function handleGatheringQuickSubmit(event) {
     }
     submitGathering();
   }
+}
+
+function wrapTextareaSelectionWithItalics(textarea) {
+  if (!(textarea instanceof HTMLTextAreaElement)) return;
+  const start = textarea.selectionStart ?? 0;
+  const end = textarea.selectionEnd ?? 0;
+  const value = textarea.value || "";
+  const selected = value.slice(start, end);
+  const replacement = `*${selected || "italic text"}*`;
+  textarea.setRangeText(replacement, start, end, "end");
+  if (!selected) {
+    textarea.setSelectionRange(start + 1, start + replacement.length - 1);
+  }
+  textarea.focus();
+  updateGatheringQuoteMeta();
+}
+
+function wrapTextareaSelectionWithBold(textarea) {
+  if (!(textarea instanceof HTMLTextAreaElement)) return;
+  const start = textarea.selectionStart ?? 0;
+  const end = textarea.selectionEnd ?? 0;
+  const value = textarea.value || "";
+  const selected = value.slice(start, end);
+  const replacement = `**${selected || "bold text"}**`;
+  textarea.setRangeText(replacement, start, end, "end");
+  if (!selected) {
+    textarea.setSelectionRange(start + 2, start + replacement.length - 2);
+  }
+  textarea.focus();
+  updateGatheringQuoteMeta();
 }
 
 function splitGatheringBatchBlocks(text) {
@@ -1660,7 +1949,7 @@ function buildGatheringBatchNotes(defaults, igHandle) {
     defaults.catalog ? `Release Catalog: ${defaults.catalog}` : "",
     defaults.bookShortener ? `Book Shortener: ${defaults.bookShortener}` : "",
     defaults.contentType ? `Content Type: ${defaults.contentType}` : "",
-    igHandle ? `Instagram handle: ${igHandle}` : "",
+    igHandle ? `Social media handle: ${igHandle}` : "",
     defaults.defaultNotes || ""
   ].filter(Boolean).join("\n\n");
 }
@@ -1916,14 +2205,12 @@ function buildGatheringPayload() {
     const quote = elements.gatheringBookQuote?.value.trim() || "";
     const bookTitle = elements.gatheringBookBook?.value.trim() || "";
     const notes = elements.gatheringBookNotes?.value.trim() || "";
-    const italicsMarkup = elements.gatheringBookItalics?.value.trim() || "";
     const reaction = elements.gatheringBookReaction?.value.trim() || "";
     if (!author || !title || !quote) {
       throw new Error("Book intake needs an author, poem title, and quote.");
     }
     const combinedNotes = [
       notes,
-      italicsMarkup ? `Italics markup: ${italicsMarkup}` : "",
       reaction ? `Full-poem reaction: ${reaction}` : ""
     ]
       .filter(Boolean)
@@ -1979,6 +2266,13 @@ function buildGatheringPayload() {
 async function submitGathering() {
   try {
     const payload = buildGatheringPayload();
+    if (payload.mode === "book") {
+      const shouldContinue = await confirmGatheringBookQuoteAgainstCatalog(payload);
+      if (!shouldContinue) {
+        setStatus("Excerpt submission canceled so you can review the poem text.");
+        return;
+      }
+    }
     setStatus(`Submitting ${INTAKE_MODE_LABELS[payload.mode] || "excerpt gathering"} row...`);
     const result = await postReviewApi("/api/intake/submit", payload);
     resetGatheringAfterSubmit(payload.mode);
@@ -1998,6 +2292,8 @@ function openGatheringCatalogPoem() {
   const excerptText = elements.gatheringBookQuote?.value.trim() || "";
   if (!bookTitle || !poemTitle) {
     setStatus("Choose a catalog-backed book and poem before opening catalog context.");
+    elements.gatheringBookTitle?.focus();
+    updateGatheringCatalogPreviewState();
     return;
   }
   const url = new URL("/catalog-poem", window.location.origin);
@@ -2007,6 +2303,50 @@ function openGatheringCatalogPoem() {
     url.searchParams.set("excerptText", excerptText);
   }
   gatheringCatalogPopup = openComparisonWindow(url.toString(), "weaverGatheringCatalogPoem");
+}
+
+async function confirmGatheringBookQuoteAgainstCatalog(payload) {
+  const normalizedBookKey = normalizeBookKey(payload.bookTitle || "");
+  const hasCatalogBook = !!currentGatheringCatalogBook || !!currentIntakeCatalogBooksByKey.get(normalizedBookKey);
+  if (!hasCatalogBook || !payload.bookTitle || !payload.title || !payload.quote) {
+    return true;
+  }
+
+  try {
+    const response = await fetch("/api/catalog/validate", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        records: [{
+          recordId: "gathering-preview",
+          sourceRow: 0,
+          author: payload.author,
+          title: payload.title,
+          bookTitle: payload.bookTitle,
+          excerptText: payload.quote
+        }]
+      })
+    });
+    const data = await response.json();
+    if (!data.ok) return true;
+    const validation = Array.isArray(data.results) ? data.results[0] : null;
+    if (!validation) return true;
+
+    const safeStatuses = new Set([
+      "catalog_match",
+      "formatting_only",
+      "author_match_only"
+    ]);
+    if (safeStatuses.has(validation.status)) {
+      return true;
+    }
+
+    return window.confirm("This text doesn't appear to be in the poem. Are you sure?\n\nYes = submit anyway\nNo = go back");
+  } catch (_error) {
+    return true;
+  }
 }
 
 function ensureGoogleSheetsTokenClient() {
@@ -2516,7 +2856,7 @@ function populateBookSelect(select, books, previousSelection, labelBuilder) {
 }
 
 function getSelectedGraphicsMode() {
-  return elements.graphicsMode?.value || "queue";
+  return elements.graphicsMode?.value || "qc";
 }
 
 function getSelectedGraphicsFilter() {
@@ -2524,10 +2864,95 @@ function getSelectedGraphicsFilter() {
 }
 
 function getGraphicsModeLabel(mode = getSelectedGraphicsMode()) {
-  if (mode === "cleanup") return "graphics QC";
+  if (mode === "qc") return "graphics QC";
+  if (mode === "cleanup") return "under the hood";
   if (mode === "mismatch") return "mismatch pairing";
   if (mode === "handoff") return "Poetry Please handoff";
+  if (mode === "handoff_retry") return "retry failed handoffs";
+  if (mode === "rework") return "send back to P.I.G.";
+  if (mode === "coverage_needs") return "coverage needs";
+  if (mode === "coverage") return "coverage";
+  if (mode === "queue") return "needs graphics";
   return "graphics creation";
+}
+
+function syncGraphicsModeOptionsForView() {
+  if (!elements.graphicsMode) return;
+  const isOpsView = currentGraphicsView === "ops";
+  let reworkOption = elements.graphicsMode.querySelector('option[value="rework"]');
+  if (!reworkOption) {
+    reworkOption = document.createElement("option");
+    reworkOption.value = "rework";
+    reworkOption.hidden = true;
+    elements.graphicsMode.appendChild(reworkOption);
+  }
+  let handoffRetryOption = elements.graphicsMode.querySelector('option[value="handoff_retry"]');
+  if (!handoffRetryOption) {
+    handoffRetryOption = document.createElement("option");
+    handoffRetryOption.value = "handoff_retry";
+    handoffRetryOption.hidden = true;
+    elements.graphicsMode.appendChild(handoffRetryOption);
+  }
+  const queueOption = elements.graphicsMode.querySelector('option[value="queue"]');
+  const qcOption = elements.graphicsMode.querySelector('option[value="qc"]');
+  const mismatchOption = elements.graphicsMode.querySelector('option[value="mismatch"]');
+  const handoffOption = elements.graphicsMode.querySelector('option[value="handoff"]');
+  const coverageNeedsOption = elements.graphicsMode.querySelector('option[value="coverage_needs"]');
+  const coverageOption = elements.graphicsMode.querySelector('option[value="coverage"]');
+
+  if (queueOption) {
+    queueOption.hidden = !isOpsView;
+    queueOption.textContent = "Needs graphics";
+  }
+  if (handoffOption) {
+    handoffOption.hidden = !isOpsView;
+    handoffOption.textContent = "Poetry Please handoff";
+  }
+  if (handoffRetryOption) {
+    handoffRetryOption.hidden = !isOpsView;
+    handoffRetryOption.textContent = "Retry failed handoffs";
+  }
+  if (reworkOption) {
+    reworkOption.hidden = !isOpsView;
+    reworkOption.textContent = "Send back to P.I.G.";
+  }
+  if (coverageNeedsOption) {
+    coverageNeedsOption.hidden = !isOpsView;
+    coverageNeedsOption.textContent = "Coverage needs";
+  }
+  if (coverageOption) {
+    coverageOption.hidden = !isOpsView;
+    coverageOption.textContent = "Coverage";
+  }
+  if (qcOption) qcOption.hidden = isOpsView;
+  if (mismatchOption) mismatchOption.hidden = isOpsView;
+
+  if (isOpsView && !["queue", "handoff", "handoff_retry", "coverage_needs", "coverage", "rework"].includes(elements.graphicsMode.value)) {
+    elements.graphicsMode.value = "queue";
+  }
+  if (!isOpsView && !["qc", "mismatch"].includes(elements.graphicsMode.value)) {
+    elements.graphicsMode.value = "qc";
+  }
+}
+
+function updateGraphicsModuleTitle() {
+  if (!elements.graphicsModuleTitle) return;
+  const isOpsView = currentGraphicsView === "ops";
+  const isOpsHandoff = isOpsView && getSelectedGraphicsMode() === "handoff";
+  elements.graphicsModuleTitle.textContent = isOpsView
+    ? "Under the Hood"
+    : "Graphics QC";
+  setElementForcedHidden(elements.graphicsOpsPanel, !isOpsHandoff);
+  setElementForcedHidden(elements.graphicsModeField, !isOpsView);
+  setElementForcedHidden(elements.graphicsFilterField, isOpsView);
+  setElementForcedHidden(elements.graphicsReleaseCatalogField, isOpsView);
+  setElementForcedHidden(elements.graphicsMainHint, isOpsView);
+  setElementForcedHidden(elements.graphicsFolderImportPanel, isOpsView);
+  setElementForcedHidden(elements.graphicsBookPicker, isOpsHandoff);
+  setElementForcedHidden(elements.graphicsQueueRowsHeader, isOpsHandoff);
+  setElementForcedHidden(elements.graphicsQueueToolbarTop, isOpsHandoff);
+  setElementForcedHidden(elements.graphicsList, isOpsHandoff);
+  setElementForcedHidden(elements.graphicsQueueToolbarBottom, isOpsHandoff);
 }
 
 function getVisibleGraphicsBookSummaries() {
@@ -2554,7 +2979,7 @@ function refreshGraphicsBookSelect(preserveSelection = true) {
   const previousSelection = preserveSelection ? elements.graphicsBookSelect?.value || "" : "";
   let visibleBooks = getVisibleGraphicsBookSummaries();
 
-  if (getSelectedGraphicsMode() === "cleanup") {
+  if (getSelectedGraphicsMode() === "qc") {
     const totalCount = visibleBooks.reduce((sum, book) => sum + Number(book.count || 0), 0);
     visibleBooks = [
       { title: "QC Sweep", count: totalCount, key: "__qc_sweep__" },
@@ -2869,7 +3294,9 @@ async function loadGraphicsBooks(options = {}) {
     setStatus(`Loading ${getGraphicsModeLabel(mode)} books...`);
     let data;
     try {
-      data = await requestReviewApi("/api/review/graphics-books", { mode });
+      data = mode === "coverage_needs"
+        ? await requestReviewApi("/graphics-handoff/books", { filter: "coverage_needs" })
+        : await requestReviewApi("/api/review/graphics-books", { mode });
     } catch (primaryError) {
       if (!runtimeConfig.sheetReadFallbackEnabled) {
         throw primaryError;
@@ -2880,15 +3307,21 @@ async function loadGraphicsBooks(options = {}) {
       data = await loadGraphicsBooksFromSheetsFallback(mode);
     }
 
-    currentGraphicsBookSummaries = Array.isArray(data.books) ? data.books : [];
+    currentGraphicsBookSummaries = Array.isArray(data.books)
+      ? data.books.map(book => ({
+        ...book,
+        key: book.key || book.bookKey || normalizeBookKey(book.title || book.bookTitle || ""),
+        title: book.title || book.bookTitle || "",
+        count: Number(book.count ?? book.actionableCount ?? book.remainingActionableNeeded ?? 0)
+      }))
+      : [];
     graphicsBookSummaryByKey = new Map(
-      currentGraphicsBookSummaries.map(book => [normalizeBookKey(book.title), book])
+      currentGraphicsBookSummaries.map(book => [book.key || normalizeBookKey(book.title), book])
     );
     refreshGraphicsBookSelect(preserveSelection);
 
     setStatus(
-      `Loaded ${getVisibleGraphicsBookSummaries().length} ${getGraphicsModeLabel(mode)} books. Backend ${data.version || "unknown"}.`,
-      getVisibleGraphicsBookSummaries().slice(0, 10)
+      `Loaded ${getVisibleGraphicsBookSummaries().length} ${getGraphicsModeLabel(mode)} books. Backend ${data.version || "unknown"}.`
     );
   } catch (error) {
     setStatus(`Graphics book load failed: ${error.message}`);
@@ -2990,7 +3423,15 @@ async function loadGraphicsRecords() {
     setStatus(`Loading ${getGraphicsModeLabel(mode)} rows for "${statusLabel}"...`);
     let data;
     try {
-      data = await requestReviewApi("/api/review/graphics-records", { mode, bookTitle });
+      if (mode === "coverage_needs") {
+        const queueData = await requestReviewApi("/graphics-handoff/queue", { filter: "coverage_needs", limit: 500 });
+        const records = Array.isArray(queueData.records)
+          ? queueData.records.filter(record => normalizeBookKey(record.bookTitle || "") === bookKey)
+          : [];
+        data = { ...queueData, records };
+      } else {
+        data = await requestReviewApi("/api/review/graphics-records", { mode, bookTitle });
+      }
     } catch (primaryError) {
       if (!runtimeConfig.sheetReadFallbackEnabled) {
         throw primaryError;
@@ -3002,8 +3443,11 @@ async function loadGraphicsRecords() {
     }
 
     currentGraphicsRecords = Array.isArray(data.records) ? data.records : [];
-    currentGraphicsAssetMatches = await loadGraphicsAssetMatches(currentGraphicsRecords);
-    renderGraphicsRecords(currentGraphicsRecords);
+    currentGraphicsCoverage = data.coverage || null;
+    currentGraphicsAssetMatches = mode === "coverage_needs"
+      ? new Map()
+      : await loadGraphicsAssetMatches(currentGraphicsRecords);
+    renderGraphicsRecords(currentGraphicsRecords, currentGraphicsCoverage);
     setStatus(
       `Loaded ${currentGraphicsRecords.length} ${getGraphicsModeLabel(mode)} rows for "${statusLabel}".`,
       currentGraphicsRecords.slice(0, 5)
@@ -3243,12 +3687,15 @@ function updateCorrectionBookOptionCount(bookTitle, delta) {
 
 function renderGraphicsRecords(records) {
   refreshGraphicsFolderImportVisibility();
+  const coverage = arguments[1] || null;
   if (elements.graphicsCountBadge) {
-    elements.graphicsCountBadge.textContent = `${records.length} Rows`;
+    elements.graphicsCountBadge.textContent = getSelectedGraphicsMode() === "coverage"
+      ? `${Number(coverage?.summary?.totalExcerpts || 0)} Excerpts`
+      : `${records.length} Rows`;
   }
   [elements.submitGraphicsQc, elements.submitGraphicsQcBottom].forEach(button => {
     if (button) {
-      button.hidden = getSelectedGraphicsMode() !== "cleanup";
+      button.hidden = !["qc", "cleanup"].includes(getSelectedGraphicsMode());
     }
   });
   if (elements.exportGraphicsSheet) {
@@ -3261,21 +3708,279 @@ function renderGraphicsRecords(records) {
 
   elements.graphicsList.innerHTML = "";
 
+  if (getSelectedGraphicsMode() === "coverage" && coverage) {
+    elements.graphicsList.appendChild(buildCoverageCard(coverage));
+    return;
+  }
+
+  if (getSelectedGraphicsMode() === "rework") {
+    elements.graphicsList.appendChild(buildGraphicsReworkPanel(records));
+    if (!records.length) {
+      return;
+    }
+  }
+
+  if (getSelectedGraphicsMode() === "handoff_retry") {
+    elements.graphicsList.appendChild(buildGraphicsHandoffRetryPanel(records));
+    if (!records.length) {
+      return;
+    }
+  }
+
   if (!records.length) {
     const empty = document.createElement("p");
     empty.className = "empty-state";
-    empty.textContent = getSelectedGraphicsMode() === "cleanup"
+    empty.textContent = getSelectedGraphicsMode() === "qc"
       ? "No QC rows remain for this book."
+      : getSelectedGraphicsMode() === "cleanup"
+      ? "No oddities remain for this book."
       : getSelectedGraphicsMode() === "mismatch"
         ? "No mismatched graphics remain for this book."
+      : getSelectedGraphicsMode() === "rework"
+        ? "No approved P.I.G. graphics are available for manual rework in this book."
+      : getSelectedGraphicsMode() === "handoff_retry"
+        ? "No failed Poetry Please handoffs remain for this book."
+      : getSelectedGraphicsMode() === "coverage_needs"
+        ? "No coverage needs remain for this book."
       : "No graphics creation rows remain for this book.";
     elements.graphicsList.appendChild(empty);
     return;
   }
 
   records.forEach(record => {
-    elements.graphicsList.appendChild(buildGraphicsCard(record));
+    elements.graphicsList.appendChild(
+      getSelectedGraphicsMode() === "rework"
+        ? buildGraphicsReworkCard(record)
+        : getSelectedGraphicsMode() === "handoff_retry"
+          ? buildGraphicsHandoffRetryCard(record)
+          : buildGraphicsCard(record)
+    );
   });
+}
+
+function buildGraphicsReworkPanel(records) {
+  const panel = document.createElement("article");
+  panel.className = "excerpt-card";
+  panel.innerHTML = `
+    <div class="excerpt-card__meta">
+      <span class="badge badge--muted">${records.length} eligible graphic${records.length === 1 ? "" : "s"}</span>
+      <span class="badge badge--warn">Original approvals stay in history</span>
+    </div>
+    <label class="field">
+      <span>Rework note</span>
+      <textarea id="graphics-rework-note" rows="3" placeholder="What needs to change before this goes back to P.I.G.?"></textarea>
+    </label>
+    <p class="hint">Select one or more approved P.I.G. graphics below, then send them back as fresh rework requests.</p>
+    <button id="submit-graphics-rework" class="button">Send selected back to P.I.G.</button>
+  `;
+  panel.querySelector("#submit-graphics-rework")?.addEventListener("click", submitGraphicsReworkRequests);
+  return panel;
+}
+
+function buildGraphicsReworkCard(record) {
+  const card = document.createElement("article");
+  card.className = "excerpt-card";
+  card.dataset.recordId = record.recordId || "";
+  card.dataset.pigCompletionId = record.pigCompletionId || "";
+  card.dataset.graphicsRequestId = record.graphicsRequestId || "";
+  card.dataset.author = record.author || "";
+  card.dataset.poemTitle = record.poemTitle || "";
+  card.dataset.bookTitle = record.bookTitle || "";
+  card.dataset.quoteText = record.quoteText || record.text || "";
+  card.innerHTML = `
+    <div class="excerpt-card__meta">
+      <label><input class="graphics-rework-checkbox" type="checkbox"> Select</label>
+      <span class="badge badge--muted">Completion ${escapeHtml(record.pigCompletionId || "none")}</span>
+      <span class="badge badge--muted">Book ${escapeHtml(record.bookTitle || "(blank)")}</span>
+      <span class="excerpt-card__title">${escapeHtml(record.poemTitle || "Untitled poem")}</span>
+      <span class="excerpt-card__author">${escapeHtml(record.author || "Unknown author")}</span>
+    </div>
+    <blockquote class="excerpt-card__quote">${escapeHtml(record.quoteText || "")}</blockquote>
+    ${record.assetLinkUrl ? `<p class="hint"><a href="${escapeAttribute(record.assetLinkUrl)}" target="_blank" rel="noopener noreferrer">View current graphic</a></p>` : ""}
+  `;
+  return card;
+}
+
+async function submitGraphicsReworkRequests() {
+  const note = document.getElementById("graphics-rework-note")?.value?.trim() || "";
+  const selectedRecords = Array.from(elements.graphicsList?.querySelectorAll(".excerpt-card") || [])
+    .filter(card => card.querySelector(".graphics-rework-checkbox:checked"))
+    .map(card => ({
+      recordId: card.dataset.recordId || "",
+      pigCompletionId: card.dataset.pigCompletionId || "",
+      graphicsRequestId: card.dataset.graphicsRequestId || "",
+      author: card.dataset.author || "",
+      poemTitle: card.dataset.poemTitle || "",
+      bookTitle: card.dataset.bookTitle || "",
+      quoteText: card.dataset.quoteText || ""
+    }));
+
+  if (!selectedRecords.length) {
+    setStatus("Select at least one approved graphic to send back to P.I.G.");
+    return;
+  }
+  if (!note) {
+    setStatus("Add a rework note before sending approved graphics back to P.I.G.");
+    return;
+  }
+
+  try {
+    setStatus(`Sending ${selectedRecords.length} approved graphic${selectedRecords.length === 1 ? "" : "s"} back to P.I.G....`);
+    const response = await fetch("/api/graphics/rework-request", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ records: selectedRecords, note })
+    });
+    const result = await response.json();
+    if (!response.ok || !result.ok) {
+      throw new Error(result.error || `/api/graphics/rework-request returned ${response.status}`);
+    }
+    await loadGraphicsBooks({ preserveSelection: false });
+    if (elements.graphicsBookSelect?.value) {
+      await loadGraphicsRecords();
+    } else {
+      currentGraphicsRecords = [];
+      currentGraphicsCoverage = null;
+      currentGraphicsAssetMatches = new Map();
+      renderGraphicsRecords([], null);
+    }
+    setStatus(`Sent ${Number(result.createdCount || 0)} approved graphic${Number(result.createdCount || 0) === 1 ? "" : "s"} back to P.I.G. for rework.`);
+  } catch (error) {
+    setStatus(`Graphics rework request failed: ${error.message}`);
+  }
+}
+
+function buildGraphicsHandoffRetryPanel(records) {
+  const panel = document.createElement("article");
+  panel.className = "excerpt-card";
+  panel.innerHTML = `
+    <div class="excerpt-card__meta">
+      <span class="badge badge--warn">${records.length} failed handoff${records.length === 1 ? "" : "s"}</span>
+      <span class="badge badge--muted">Retry sends these approved graphics to Poetry Please again</span>
+    </div>
+    <p class="hint">Select one or more failed records below, then retry their Poetry Please handoff.</p>
+    <button id="submit-graphics-handoff-retry" class="button">Retry selected handoffs</button>
+  `;
+  panel.querySelector("#submit-graphics-handoff-retry")?.addEventListener("click", submitGraphicsHandoffRetries);
+  return panel;
+}
+
+function buildGraphicsHandoffRetryCard(record) {
+  const card = document.createElement("article");
+  card.className = "excerpt-card";
+  card.dataset.recordId = record.recordId || "";
+  card.dataset.pigCompletionId = record.pigCompletionId || "";
+  card.dataset.graphicsRequestId = record.graphicsRequestId || "";
+  card.dataset.sheetRow = String(record.sheetRow || "");
+  card.dataset.author = record.author || "";
+  card.dataset.poemTitle = record.poemTitle || "";
+  card.dataset.bookTitle = record.bookTitle || "";
+  card.dataset.quoteText = record.quoteText || "";
+  card.dataset.assetLinkUrl = record.assetLinkUrl || "";
+  card.dataset.assetPreviewUrl = record.assetPreviewUrl || "";
+  card.dataset.completedAt = record.completedAt || "";
+  card.dataset.graphicsQcUpdatedAt = record.graphicsQcUpdatedAt || "";
+  card.dataset.graphicsQcDecision = record.graphicsQcDecision || "";
+  card.dataset.graphicsQcNote = record.graphicsQcNote || "";
+  card.dataset.notes = record.notes || "";
+  card.dataset.sourceTool = record.sourceTool || "";
+  card.innerHTML = `
+    <div class="excerpt-card__meta">
+      <label><input class="graphics-handoff-retry-checkbox" type="checkbox"> Select</label>
+      <span class="badge badge--warn">${escapeHtml(record.poetryPleaseStatus || "FAILED")}</span>
+      <span class="badge badge--muted">Book ${escapeHtml(record.bookTitle || "(blank)")}</span>
+      <span class="excerpt-card__title">${escapeHtml(record.poemTitle || "Untitled poem")}</span>
+      <span class="excerpt-card__author">${escapeHtml(record.author || "Unknown author")}</span>
+    </div>
+    <blockquote class="excerpt-card__quote">${escapeHtml(record.quoteText || "")}</blockquote>
+    ${record.assetLinkUrl ? `<p class="hint"><a href="${escapeAttribute(record.assetLinkUrl)}" target="_blank" rel="noopener noreferrer">View approved graphic</a></p>` : ""}
+    ${record.poetryPleaseNote ? `<p class="hint">Last failure: ${escapeHtml(record.poetryPleaseNote)}</p>` : ""}
+  `;
+  return card;
+}
+
+async function submitGraphicsHandoffRetries() {
+  const selectedRecords = Array.from(elements.graphicsList?.querySelectorAll(".excerpt-card") || [])
+    .filter(card => card.querySelector(".graphics-handoff-retry-checkbox:checked"))
+    .map(card => ({
+      recordId: card.dataset.recordId || "",
+      pigCompletionId: card.dataset.pigCompletionId || "",
+      graphicsRequestId: card.dataset.graphicsRequestId || "",
+      sheetRow: card.dataset.sheetRow || "",
+      author: card.dataset.author || "",
+      poemTitle: card.dataset.poemTitle || "",
+      bookTitle: card.dataset.bookTitle || "",
+      quoteText: card.dataset.quoteText || "",
+      assetLinkUrl: card.dataset.assetLinkUrl || "",
+      assetPreviewUrl: card.dataset.assetPreviewUrl || "",
+      completedAt: card.dataset.completedAt || "",
+      graphicsQcUpdatedAt: card.dataset.graphicsQcUpdatedAt || "",
+      graphicsQcDecision: card.dataset.graphicsQcDecision || "",
+      graphicsQcNote: card.dataset.graphicsQcNote || "",
+      notes: card.dataset.notes || "",
+      sourceTool: card.dataset.sourceTool || ""
+    }));
+
+  if (!selectedRecords.length) {
+    setStatus("Select at least one failed graphics handoff to retry.");
+    return;
+  }
+
+  try {
+    setStatus(`Retrying ${selectedRecords.length} failed graphics handoff${selectedRecords.length === 1 ? "" : "s"}...`);
+    const response = await fetch("/api/graphics/handoffs/retry", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ records: selectedRecords })
+    });
+    const result = await response.json();
+    if (!response.ok || !result.ok) {
+      throw new Error(result.error || `/api/graphics/handoffs/retry returned ${response.status}`);
+    }
+    const handoff = result.poetryPlease || {};
+    const suffix = handoff.ok ? "" : ` Poetry Please still needs attention: ${handoff.error || handoff.reason || "handoff_failed"}.`;
+    await loadGraphicsBooks({ preserveSelection: false });
+    if (elements.graphicsBookSelect?.value) {
+      await loadGraphicsRecords();
+    } else {
+      currentGraphicsRecords = [];
+      currentGraphicsCoverage = null;
+      currentGraphicsAssetMatches = new Map();
+      renderGraphicsRecords([], null);
+    }
+    setStatus(`Retried ${Number(result.retriedCount || 0)} failed graphics handoff${Number(result.retriedCount || 0) === 1 ? "" : "s"}.${suffix}`);
+  } catch (error) {
+    setStatus(`Graphics handoff retry failed: ${error.message}`);
+  }
+}
+
+function buildCoverageCard(coverage) {
+  const card = document.createElement("article");
+  card.className = "excerpt-card";
+  const summary = coverage.summary || {};
+  const topPoems = Array.isArray(coverage.topPoems) ? coverage.topPoems : [];
+  const missingPoems = Array.isArray(coverage.missingPoems) ? coverage.missingPoems : [];
+  const contributors = Array.isArray(coverage.contributors) ? coverage.contributors : [];
+
+  card.innerHTML = `
+    <div class="excerpt-card__meta">
+      <span class="badge badge--muted">Book ${escapeHtml(coverage.bookTitle || "(blank)")}</span>
+      <span class="badge badge--signal">${escapeHtml(String(summary.totalExcerpts || 0))} excerpts</span>
+      <span class="badge badge--muted">${escapeHtml(String(summary.poemsWithExcerpts || 0))} poems covered</span>
+      <span class="badge badge--warn">${escapeHtml(String(summary.poemsWithoutExcerpts || 0))} poems missing</span>
+      <span class="badge badge--muted">${escapeHtml(String(summary.contributors || 0))} contributors</span>
+    </div>
+    <div class="correction-source__grid">
+      <div><strong>Catalog poems</strong><span>${escapeHtml(String(summary.totalCatalogPoems || 0))}</span></div>
+      <div><strong>Covered poems</strong><span>${escapeHtml(String(summary.poemsWithExcerpts || 0))}</span></div>
+      <div><strong>Missing poems</strong><span>${escapeHtml(String(summary.poemsWithoutExcerpts || 0))}</span></div>
+      <div><strong>Total pulls</strong><span>${escapeHtml(String(summary.totalExcerpts || 0))}</span></div>
+    </div>
+    <div class="hint"><strong>Most-covered poems</strong><br>${topPoems.length ? topPoems.map(poem => `${escapeHtml(poem.poemTitle)} · ${escapeHtml(String(poem.excerptCount))} pulls · ${escapeHtml(String(poem.contributorCount))} people`).join("<br>") : "No excerpt pulls yet."}</div>
+    <div class="hint"><strong>Contributors</strong><br>${contributors.length ? contributors.map(person => `${escapeHtml(person.email)} · ${escapeHtml(String(person.excerptCount))} pulls · ${escapeHtml(String(person.uniquePoems))} poems`).join("<br>") : "No contributor activity yet."}</div>
+    <div class="hint"><strong>Poems still missing</strong><br>${missingPoems.length ? missingPoems.map(title => escapeHtml(title)).join("<br>") : "No missing catalog poems in this snapshot."}</div>
+  `;
+  return card;
 }
 
 function renderExcerptCollection(excerpts, container, countBadge, emptyMessage, options = {}) {
@@ -3308,7 +4013,7 @@ function renderExcerptCollection(excerpts, container, countBadge, emptyMessage, 
     `;
     section.appendChild(header);
 
-    group.excerpts.forEach((excerpt, index) => {
+    collapseExactQueueDuplicates(group.excerpts).forEach((excerpt, index) => {
       section.appendChild(buildExcerptCard(excerpt, `${slugify(group.title)}-${index}`));
     });
 
@@ -3445,6 +4150,9 @@ function applyReviewFilter(excerpts) {
       reviewQueueIncludeSet.has(normalizeBookKey(excerpt.bookTitle))
       && matchesSelectedReleaseCatalog(excerpt.bookTitle, selectedCatalog)
     ));
+  }
+  if (mode === "videos") {
+    return excerpts.filter(isVideoReviewRecord);
   }
   if (mode === "new_only") {
     return excerpts.filter(excerpt => !hasLibraryExcerptMatch(excerpt));
@@ -3651,6 +4359,9 @@ function getEmptyStateMessage() {
   if (getSelectedReviewFilter() === "current_titles") {
     return "No pending excerpts in this book are currently in the release-catalog lane.";
   }
+  if (getSelectedReviewFilter() === "videos") {
+    return "No pending video excerpts are currently loaded.";
+  }
   if (getSelectedReviewFilter() === "new_only") {
     return "No currently loaded excerpts appear to be net new to the excerpt library.";
   }
@@ -3703,11 +4414,45 @@ function groupExcerptsByTitle(excerpts) {
   return Array.from(groups.values());
 }
 
+function normalizeExactQueueDuplicateText(text) {
+  return (text || "").toString().replace(/\r\n/g, "\n").trim();
+}
+
+function collapseExactQueueDuplicates(excerpts) {
+  const byText = new Map();
+  const collapsed = [];
+
+  excerpts.forEach(excerpt => {
+    const key = normalizeExactQueueDuplicateText(excerpt.excerptText || excerpt.rawExcerptText || "");
+    if (!key) {
+      collapsed.push(excerpt);
+      return;
+    }
+    if (!byText.has(key)) {
+      byText.set(key, excerpt);
+      collapsed.push(excerpt);
+      return;
+    }
+    const canonical = byText.get(key);
+    canonical.queueDuplicateRows = [
+      ...(Array.isArray(canonical.queueDuplicateRows) ? canonical.queueDuplicateRows : []),
+      {
+        sourceRow: Number(excerpt.sourceRow),
+        recordId: excerpt.recordId || "",
+        note: `Auto-rejected by Weaver as exact queue duplicate of row ${canonical.sourceRow}.`
+      }
+    ];
+  });
+
+  return collapsed;
+}
+
 function buildExcerptCard(excerpt, uniqueKey) {
   const card = document.createElement("article");
   card.className = "excerpt-card";
   card.dataset.sourceRow = excerpt.sourceRow;
   card.dataset.recordId = excerpt.recordId || "";
+  card.dataset.queueDuplicateRows = JSON.stringify(excerpt.queueDuplicateRows || []);
 
   const validation =
     currentValidationByRecordId.get(excerpt.recordId || String(excerpt.sourceRow)) || null;
@@ -3718,6 +4463,10 @@ function buildExcerptCard(excerpt, uniqueKey) {
   const overlapBadge =
     excerpt.duplicateGroupId
       ? `<span class="badge badge--signal">Group ${escapeHtml(excerpt.duplicateGroupId)}</span>`
+      : "";
+  const queueDuplicateBadge =
+    Array.isArray(excerpt.queueDuplicateRows) && excerpt.queueDuplicateRows.length
+      ? `<span class="badge badge--warn">Exact queue duplicate x${escapeHtml(String(excerpt.queueDuplicateRows.length + 1))}</span>`
       : "";
   const libraryMatch = validation?.libraryExcerptMatch || null;
   const displayAuthor = resolveExcerptDisplayAuthor(excerpt, validation);
@@ -3739,8 +4488,8 @@ function buildExcerptCard(excerpt, uniqueKey) {
     normalizeCorrectionNote(excerpt.correctedExcerpt)
   );
 
-  const decisionBadge = reviewDecision === "accept"
-    ? `<span class="badge badge--signal">Accepted excerpt</span>`
+  const decisionBadge = reviewDecision === "accept" || reviewDecision === "accept_skip_graphic"
+    ? `<span class="badge badge--signal">${reviewDecision === "accept_skip_graphic" ? "Accepted excerpt, no graphic" : "Accepted excerpt"}</span>`
     : reviewDecision === "reject"
       ? `<span class="badge badge--muted">Rejected excerpt</span>`
       : reviewDecision === "needs_correction"
@@ -3767,6 +4516,7 @@ function buildExcerptCard(excerpt, uniqueKey) {
         <span class="badge ${wordCountBadgeClass}" title="${escapeHtml(wordCountTooltip)}">Words ${wordCount}</span>
         ${pullBadge}
         ${overlapBadge}
+        ${queueDuplicateBadge}
         ${libraryBadge}
         ${libraryRecommendation}
         ${decisionBadge}
@@ -3777,10 +4527,12 @@ function buildExcerptCard(excerpt, uniqueKey) {
       <span class="excerpt-card__author">${escapeHtml(displayAuthor || "Unknown author")}</span>
     </div>
     ${validationMarkup}
+    ${queueDuplicateBadge ? `<p class="hint">This card represents ${escapeHtml(String(excerpt.queueDuplicateRows.length + 1))} exact queue duplicates. Accepting it will keep row ${escapeHtml(String(excerpt.sourceRow))} and auto-reject the duplicate row${excerpt.queueDuplicateRows.length === 1 ? "" : "s"} with an explicit Weaver duplicate note.</p>` : ""}
     <blockquote class="excerpt-card__quote">${escapeHtml(excerpt.excerptText)}</blockquote>
-    <p class="hint excerpt-card__hint">Accept now means send to the quote-image queue. Reject and Needs correction do not.</p>
+    <p class="hint excerpt-card__hint">Accept sends this to the quote-image queue. Accept excerpt, skip graphic approves the excerpt for Poetry Please without sending it to P.I.G.</p>
     <div class="decision-group">
       <label><input type="radio" name="approval-${uniqueKey}" value="accept" ${currentDecision === "accept" ? "checked" : ""}> Accept</label>
+      <label><input type="radio" name="approval-${uniqueKey}" value="accept_skip_graphic" ${currentDecision === "accept_skip_graphic" ? "checked" : ""}> Accept excerpt, skip graphic</label>
       <label><input type="radio" name="approval-${uniqueKey}" value="reject" ${currentDecision === "reject" ? "checked" : ""}> Reject</label>
       <label><input type="radio" name="approval-${uniqueKey}" value="needs_correction" ${currentDecision === "needs_correction" ? "checked" : ""}> Needs correction</label>
       <label><input type="radio" name="approval-${uniqueKey}" value="" ${currentDecision === "" ? "checked" : ""}> No decision</label>
@@ -3877,12 +4629,14 @@ function buildGraphicsCard(record) {
   card.dataset.storageTarget = record.storageTarget || "sheet_cleanup";
   card.dataset.graphicsRequestId = record.graphicsRequestId || "";
   card.dataset.pigCompletionId = record.pigCompletionId || "";
+  card.dataset.requestKind = record.requestKind || "";
   card.dataset.author = record.author || "";
   card.dataset.poemTitle = record.poemTitle || "";
   card.dataset.bookTitle = record.bookTitle || "";
   card.dataset.quoteText = record.quoteText || "";
   card.dataset.currentQcDecision = normalizeGraphicsQcDecisionClient(record.graphicsQcDecision || "");
   card.dataset.currentQcNote = record.graphicsQcNote || "";
+  card.dataset.currentReplacementAssetUrl = record.assetLinkUrl || "";
   card.dataset.poetryPleaseStatus = record.poetryPleaseStatus || "";
   card.dataset.poetryPleaseUpdatedAt = record.poetryPleaseUpdatedAt || "";
   card.dataset.poetryPleaseNote = record.poetryPleaseNote || "";
@@ -3891,15 +4645,33 @@ function buildGraphicsCard(record) {
   const created = normalizeApprovalForCompare(record.created) === "Y";
   const workflowStatus = (record.workflowStatus || "").trim();
   const notes = (record.notes || "").trim();
-  const wordCount = countWordsFromText(record.quoteText || "");
+  const quoteText = record.quoteText || record.text || "";
+  const wordCount = countWordsFromText(quoteText);
   const assetMatch = currentGraphicsAssetMatches.get(record.recordId || String(record.sheetRow || ""));
   const displayAuthor = record.author || assetMatch?.author || "";
-  const assetLinkUrl = record.assetLinkUrl || assetMatch?.linkUrl || assetMatch?.lowResLinkUrl || assetMatch?.folderLink || "";
-  const assetLinkLabel = assetMatch?.fileName || (assetMatch?.folderLink ? "View Drive folder" : "View graphic on Drive");
-  const assetPreviewUrl = normalizeGraphicsPreviewUrl(assetLinkUrl || record.assetPreviewUrl, assetLinkUrl || record.assetPreviewUrl) || buildGraphicsPreviewUrl(assetMatch);
-  const isQcMode = getSelectedGraphicsMode() === "cleanup";
+  const assetFolderUrl = record.assetFolderUrl || "";
+  const assetLinkUrl = record.assetLinkUrl || record.previousAssetUrl || assetMatch?.linkUrl || assetMatch?.lowResLinkUrl || assetMatch?.folderLink || "";
+  const assetLinkLabel = assetFolderUrl && !record.assetPreviewUrl
+    ? "Open returned folder"
+    : (assetMatch?.fileName || (assetMatch?.folderLink ? "View Drive folder" : "View graphic on Drive"));
+  const rawAssetPreviewUrl = record.assetPreviewUrl || record.previousAssetPreviewUrl || "";
+  const assetPreviewUrl = normalizeGraphicsPreviewUrl(rawAssetPreviewUrl || assetLinkUrl, assetLinkUrl || rawAssetPreviewUrl) || buildGraphicsPreviewUrl(assetMatch);
+  const isQcMode = ["qc", "cleanup"].includes(getSelectedGraphicsMode());
   const isMismatchMode = getSelectedGraphicsMode() === "mismatch";
   const isHandoffMode = getSelectedGraphicsMode() === "handoff";
+  const isCoverageNeedsMode = getSelectedGraphicsMode() === "coverage_needs";
+  const isReworkCompletion = record.requestKind === "rework_completion" || record.isReworkCompletion === true;
+  const approvedCount = Number(record.approvedCount || 0);
+  const poetryPleaseQiCount = record.poetryPleaseQiCount ?? "";
+  const weaverCompletedQiCount = record.weaverCompletedQiCount ?? "";
+  const pendingQcCount = Number(record.pendingQcCount || 0);
+  const inProgressCount = Number(record.inProgressCount || 0);
+  const targetCount = Number(record.targetCount || 25);
+  const remainingActionableNeeded = Number(record.remainingActionableNeeded || 0);
+  const priorityTier = record.priorityTier || "";
+  const priorityScore = record.priorityScore ?? "";
+  const excerptRating = record.excerptRating ?? "";
+  const poemRating = record.poemRating ?? "";
   const currentQcDecision = normalizeGraphicsQcDecisionClient(record.graphicsQcDecision || "");
   const currentQcNote = record.graphicsQcNote || "";
   const qcUpdatedAt = record.graphicsQcUpdatedAt || "";
@@ -3911,7 +4683,9 @@ function buildGraphicsCard(record) {
   const qcMetadataIssue = parsedQcNote.metadataIssue;
   const qcAestheticIssue = parsedQcNote.aestheticIssue;
   const qcDetailText = parsedQcNote.details || currentQcNote || "";
-  const defaultQcNote = GRAPHICS_QC_DEFAULT_NOTES[qcRejectReason] || "";
+  const defaultQcNote = currentQcDecision === "replace"
+    ? (GRAPHICS_QC_DEFAULT_NOTES.replace || "")
+    : (GRAPHICS_QC_DEFAULT_NOTES[qcRejectReason] || "");
 
   card.innerHTML = `
     <div class="excerpt-card__meta">
@@ -3920,27 +4694,41 @@ function buildGraphicsCard(record) {
       <span class="badge badge--muted">Book ${escapeHtml(record.bookTitle || "(blank)")}</span>
       <span class="badge ${getWordCountBadgeClass(wordCount)}">Words ${wordCount}</span>
       ${workflowStatus ? `<span class="badge badge--warn">${escapeHtml(workflowStatus)}</span>` : ""}
+      ${isReworkCompletion ? '<span class="badge badge--warn">Rework completion</span>' : ""}
       ${approved ? '<span class="badge badge--signal">Approved</span>' : '<span class="badge badge--muted">Not approved</span>'}
       ${created ? '<span class="badge badge--signal">Created</span>' : '<span class="badge badge--muted">Not created</span>'}
       ${isHandoffMode && poetryPleaseStatus ? `<span class="badge ${poetryPleaseStatus === "HANDED_OFF" ? "badge--signal" : poetryPleaseStatus === "FAILED" ? "badge--warn" : "badge--muted"}">${escapeHtml(poetryPleaseStatus.replace(/_/g, " "))}</span>` : ""}
+      ${isCoverageNeedsMode ? `<span class="badge badge--signal">${escapeHtml(record.statusLabel || "Needs coverage")}</span>` : ""}
+      ${isCoverageNeedsMode ? `<span class="badge badge--muted">${approvedCount} approved + ${pendingQcCount} pending / ${targetCount}</span>` : ""}
+      ${isCoverageNeedsMode ? `<span class="badge badge--warn">${remainingActionableNeeded} still needed</span>` : ""}
       <span class="excerpt-card__title">${escapeHtml(record.poemTitle || "Untitled poem")}</span>
       <span class="excerpt-card__author">${escapeHtml(displayAuthor || "Unknown author")}</span>
     </div>
-    <blockquote class="excerpt-card__quote">${escapeHtml(record.quoteText || "")}</blockquote>
+    <blockquote class="excerpt-card__quote">${escapeHtml(quoteText)}</blockquote>
     ${(isQcMode || isHandoffMode || isMismatchMode) && assetPreviewUrl ? `
       <figure class="graphics-preview">
         <img class="graphics-preview__image" src="${escapeAttribute(assetPreviewUrl)}" alt="Existing graphic preview for ${escapeAttribute(record.poemTitle || "this excerpt")}" loading="lazy" />
       </figure>
     ` : ""}
+    ${isQcMode && assetFolderUrl && !assetPreviewUrl ? `<p class="hint">P.I.G. returned a Drive folder for this rework, not a directly previewable image file.</p>` : ""}
+    ${isQcMode && isReworkCompletion ? `<p class="hint">This graphic is a returned rework from P.I.G. It is back in Weaver for a fresh QC decision.</p>` : ""}
     <div class="correction-source__grid">
       <div><strong>Book</strong><span>${escapeHtml(record.bookTitle || "")}</span></div>
       <div><strong>Approved?</strong><span>${escapeHtml(record.approved || "")}</span></div>
       <div><strong>Created?</strong><span>${escapeHtml(record.created || "")}</span></div>
       <div><strong>Workflow</strong><span>${escapeHtml(workflowStatus || "—")}</span></div>
+      ${isReworkCompletion ? `<div><strong>Request kind</strong><span>Rework completion</span></div>` : ""}
       <div><strong>Record ID</strong><span>${escapeHtml(record.recordId || "—")}</span></div>
       <div><strong>Request ID</strong><span>${escapeHtml(record.graphicsRequestId || "—")}</span></div>
       <div><strong>Sheet Row</strong><span>${escapeHtml(String(record.sheetRow || "—"))}</span></div>
       ${isHandoffMode ? `<div><strong>Handoff</strong><span>${escapeHtml(poetryPleaseStatus || "Pending")}</span></div>` : ""}
+      ${isCoverageNeedsMode ? `<div><strong>Coverage</strong><span>${approvedCount} approved + ${pendingQcCount} pending + ${inProgressCount} in progress / ${targetCount}</span></div>` : ""}
+      ${isCoverageNeedsMode ? `<div><strong>Poetry Please QI</strong><span>${escapeHtml(String(poetryPleaseQiCount === null || poetryPleaseQiCount === "" ? "fallback unavailable" : poetryPleaseQiCount))} imported / approved</span></div>` : ""}
+      ${isCoverageNeedsMode ? `<div><strong>Weaver completed QI</strong><span>${escapeHtml(String(weaverCompletedQiCount === null || weaverCompletedQiCount === "" ? "—" : weaverCompletedQiCount))} diagnostic only</span></div>` : ""}
+      ${isCoverageNeedsMode ? `<div><strong>Still needed</strong><span>${remainingActionableNeeded} actionable</span></div>` : ""}
+      ${isCoverageNeedsMode ? `<div><strong>Priority</strong><span>Tier ${escapeHtml(String(priorityTier || "—"))} · Score ${escapeHtml(String(priorityScore || "—"))}</span></div>` : ""}
+      ${isCoverageNeedsMode ? `<div><strong>Ratings</strong><span>Excerpt ${escapeHtml(String(excerptRating || "—"))} · Poem ${escapeHtml(String(poemRating || "—"))}</span></div>` : ""}
+      ${isCoverageNeedsMode && (record.reworkReason || record.rejectReason || record.qcNote) ? `<div><strong>Why present</strong><span>${escapeHtml(record.reworkReason || record.rejectReason || record.qcNote || "")}</span></div>` : ""}
     </div>
     ${assetLinkUrl ? `<p class="hint"><a href="${escapeAttribute(assetLinkUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(assetLinkLabel)}</a>${assetMatch?.matchType === "cleanup_override" ? " · matched from cleanup override" : ""}${card.dataset.storageTarget === "pig_sheet" ? " · returned from P.I.G." : ""}</p>` : ""}
     ${isMismatchMode ? `<p class="hint">Mismatch reason: ${escapeHtml(record.rejectReason || "mismatched_graphic")}${record.graphicsQcUpdatedAt ? ` · ${escapeHtml(record.graphicsQcUpdatedAt)}` : ""}</p>` : ""}
@@ -3950,6 +4738,7 @@ function buildGraphicsCard(record) {
         <legend>QC decision</legend>
         <label><input type="radio" name="graphics-qc-${escapeAttribute(record.recordId || String(record.sheetRow || ""))}" value="approve" ${currentQcDecision === "approve" ? "checked" : ""}> Approve</label>
         <label><input type="radio" name="graphics-qc-${escapeAttribute(record.recordId || String(record.sheetRow || ""))}" value="reject" ${currentQcDecision === "reject" ? "checked" : ""}> Reject</label>
+        <label><input type="radio" name="graphics-qc-${escapeAttribute(record.recordId || String(record.sheetRow || ""))}" value="replace" ${currentQcDecision === "replace" ? "checked" : ""}> Replace here</label>
       </fieldset>
       <div class="graphics-qc-details" ${currentQcDecision === "reject" ? "" : "hidden"}>
         <label class="field">
@@ -3971,6 +4760,13 @@ function buildGraphicsCard(record) {
           </select>
         </label>
       </div>
+      <div class="graphics-qc-replacement" ${currentQcDecision === "replace" ? "" : "hidden"}>
+        <label class="field">
+          <span>Replacement graphic Drive link</span>
+          <input class="graphics-qc-replacement-url" type="url" value="" placeholder="https://drive.google.com/file/d/...">
+        </label>
+        <p class="hint">Use a Google Drive image file link or a Drive folder link. If you use a folder, Weaver will choose the best-matching image for this card and send it forward to Poetry Please.</p>
+      </div>
       <label class="field">
         <span>QC note</span>
         <textarea class="graphics-qc-note" rows="3" placeholder="Required for mismatched graphics. Required for correct-and-recreate metadata fixes and aesthetic 'other'." data-default-note="${escapeAttribute(defaultQcNote)}">${escapeHtml(qcDetailText || defaultQcNote)}</textarea>
@@ -3983,6 +4779,7 @@ function buildGraphicsCard(record) {
   if (isQcMode) {
     const textarea = card.querySelector(".graphics-qc-note");
     const detailsBlock = card.querySelector(".graphics-qc-details");
+    const replacementBlock = card.querySelector(".graphics-qc-replacement");
     const rejectReasonSelect = card.querySelector(".graphics-qc-reject-reason");
     const metadataSelect = card.querySelector(".graphics-qc-metadata");
     const aestheticSelect = card.querySelector(".graphics-qc-aesthetic");
@@ -3990,6 +4787,9 @@ function buildGraphicsCard(record) {
     const syncQcFields = decision => {
       if (detailsBlock) {
         detailsBlock.hidden = decision !== "reject";
+      }
+      if (replacementBlock) {
+        replacementBlock.hidden = decision !== "replace";
       }
       const rejectReason = rejectReasonSelect?.value || "";
       const allowReworkFields = decision === "reject" && rejectReason === "correct_and_recreate";
@@ -4010,9 +4810,11 @@ function buildGraphicsCard(record) {
       if (!textarea) return;
       const currentDecision = card.querySelector(`input[name="graphics-qc-${CSS.escape(record.recordId || String(record.sheetRow || ""))}"]:checked`)?.value || "";
       const currentRejectReason = rejectReasonSelect?.value || "";
-      const nextDefault = currentDecision === "reject"
-        ? (GRAPHICS_QC_DEFAULT_NOTES[currentRejectReason] || "")
-        : "";
+      const nextDefault = currentDecision === "replace"
+        ? (GRAPHICS_QC_DEFAULT_NOTES.replace || "")
+        : currentDecision === "reject"
+          ? (GRAPHICS_QC_DEFAULT_NOTES[currentRejectReason] || "")
+          : "";
       const previousDefault = textarea.dataset.defaultNote || "";
       const currentValue = textarea.value.trim();
       if (!currentValue || currentValue === previousDefault) {
@@ -4047,6 +4849,7 @@ function collectGraphicsQcUpdates() {
     const rejectReason = card.querySelector(".graphics-qc-reject-reason")?.value || "";
     const metadataIssue = card.querySelector(".graphics-qc-metadata")?.value || "";
     const aestheticIssue = card.querySelector(".graphics-qc-aesthetic")?.value || "";
+    const replacementAssetUrl = card.querySelector(".graphics-qc-replacement-url")?.value?.trim() || "";
     const qcDetailText = card.querySelector(".graphics-qc-note")?.value?.trim() || "";
     const qcNote = buildGraphicsQcNotePayload(qcDecision, rejectReason, metadataIssue, aestheticIssue, qcDetailText);
     return {
@@ -4062,6 +4865,7 @@ function collectGraphicsQcUpdates() {
       rejectReason,
       metadataIssue,
       aestheticIssue,
+      replacementAssetUrl,
       qcDecision,
       qcNote
     };
@@ -4074,14 +4878,18 @@ function filterChangedGraphicsQcUpdates(updates) {
     if (!card) return false;
     return (
       (update.qcDecision || "") !== (card.dataset.currentQcDecision || "") ||
-      (update.qcNote || "") !== (card.dataset.currentQcNote || "")
+      (update.qcNote || "") !== (card.dataset.currentQcNote || "") ||
+      (
+        (update.qcDecision || "") === "replace" &&
+        (update.replacementAssetUrl || "") !== (card.dataset.currentReplacementAssetUrl || "")
+      )
     );
   });
 }
 
 async function submitGraphicsQc() {
-  if (getSelectedGraphicsMode() !== "cleanup") {
-    setStatus("Graphics QC decisions only apply in Graphics QC mode.");
+  if (!["qc", "cleanup"].includes(getSelectedGraphicsMode())) {
+    setStatus("Graphics QC decisions only apply in Graphics QC or Oddities mode.");
     return;
   }
 
@@ -4092,6 +4900,14 @@ async function submitGraphicsQc() {
   }
 
   const noteRequired = updates.find(update => (
+    (
+      update.qcDecision === "replace" &&
+      !update.replacementAssetUrl
+    ) ||
+    (
+      update.qcDecision === "replace" &&
+      update.storageTarget !== "pig_sheet"
+    ) ||
     (
       update.qcDecision === "reject" &&
       !update.rejectReason
@@ -4112,7 +4928,7 @@ async function submitGraphicsQc() {
     )
   ));
   if (noteRequired) {
-    setStatus("Add the missing QC detail. Rejects need a reason. Mismatched graphics need a note. Correct and recreate needs at least one issue selected, plus a note for metadata fixes or aesthetic 'other'.");
+    setStatus("Add the missing QC detail. Replace here needs a Google Drive image or folder link and currently only works for returned P.I.G. graphics. Rejects need a reason. Mismatched graphics need a note. Correct and recreate needs at least one issue selected, plus a note for metadata fixes or aesthetic 'other'.");
     return;
   }
 
@@ -4364,10 +5180,12 @@ function buildLibraryMatchMarkup(match) {
     match.author
   ].filter(Boolean).join(" / ");
   const excerptLink = buildLibraryExcerptLink(match);
+  const locationLabel = `${escapeHtml(meta || "Existing source row")}${match.sourceRow ? `, row ${escapeHtml(String(match.sourceRow))}` : ""}.`;
+  const matchMarkup = `<p class="validation validation--library-match"><strong>Library match:</strong> ${escapeHtml(label)} ${locationLabel} ${excerptLink}</p>`;
   const statusMarkup = statusLabel
-    ? ` <span class="library-status-note">${escapeHtml(statusLabel)}</span>`
+    ? `<p class="validation validation--library-status"><strong>Production status:</strong> ${escapeHtml(statusLabel)}</p>`
     : "";
-  return `<p class="validation validation--warn">${escapeHtml(label)} ${escapeHtml(meta || "Existing source row")}${match.sourceRow ? `, row ${escapeHtml(String(match.sourceRow))}` : ""}.${statusMarkup} ${excerptLink}</p>`;
+  return `${matchMarkup}${statusMarkup}`;
 }
 
 function getLibraryBadgeLabel(match) {
@@ -4565,7 +5383,7 @@ function collectWeirdUpdates() {
 }
 
 function collectUpdatesFromContainer(container) {
-  return Array.from(container.querySelectorAll(".excerpt-card")).map(card => {
+  return Array.from(container.querySelectorAll(".excerpt-card")).flatMap(card => {
     const reviewDecision = card.querySelector('input[type="radio"]:checked')?.value || "";
     const sourceRow = Number(card.dataset.sourceRow);
     const validation =
@@ -4579,7 +5397,7 @@ function collectUpdatesFromContainer(container) {
         ? `library-variant:${libraryMatch.sourceRow}`
         : "";
 
-    return {
+    const update = {
       sourceRow,
       recordId: card.dataset.recordId || "",
       reviewDecision,
@@ -4592,6 +5410,28 @@ function collectUpdatesFromContainer(container) {
       useForQi: reviewDecision === "accept",
       useForInt: card.dataset.currentUseForInt === "1"
     };
+
+    const updates = [update];
+    const duplicateRows = JSON.parse(card.dataset.queueDuplicateRows || "[]");
+    if (reviewDecision === "accept" || reviewDecision === "accept_skip_graphic") {
+      duplicateRows.forEach(duplicate => {
+        updates.push({
+          sourceRow: Number(duplicate.sourceRow),
+          recordId: duplicate.recordId || "",
+          reviewDecision: "reject",
+          correctionNote: duplicate.note || `Auto-rejected by Weaver as exact queue duplicate of row ${sourceRow}.`,
+          correctedAuthor: "",
+          correctedTitle: "",
+          correctedBookTitle: "",
+          correctedExcerpt: "",
+          duplicateGroupId: `queue-exact:${sourceRow}`,
+          useForQi: false,
+          useForInt: false
+        });
+      });
+    }
+
+    return updates;
   });
 }
 
@@ -4638,12 +5478,14 @@ function normalizeCorrectionNote(value) {
 }
 
 function normalizeDecision(value) {
-  return (value || "").toString().trim().toLowerCase();
+  const normalized = (value || "").toString().trim().toLowerCase();
+  if (normalized === "accept_skip_graphics") return "accept_skip_graphic";
+  return normalized;
 }
 
 function normalizeApprovalForCompare(value) {
   const normalized = (value || "").toString().trim().toLowerCase();
-  if (normalized === "accept" || normalized === "y") return "Y";
+  if (normalized === "accept" || normalized === "accept_skip_graphic" || normalized === "accept_skip_graphics" || normalized === "y") return "Y";
   if (normalized === "reject" || normalized === "n") return "N";
   return "";
 }
@@ -4955,8 +5797,11 @@ elements.showGatheringModule?.addEventListener("click", () => {
 });
 elements.gatheringTabBook?.addEventListener("click", () => setGatheringMode("book"));
 elements.gatheringTabVideo?.addEventListener("click", () => setGatheringMode("video"));
-elements.gatheringTabFix?.addEventListener("click", () => setGatheringMode("fix"));
 elements.gatheringTabBatch?.addEventListener("click", () => setGatheringMode("batch"));
+elements.gatheringBookBold?.addEventListener("click", () => wrapTextareaSelectionWithBold(elements.gatheringBookQuote));
+elements.gatheringBookItalicize?.addEventListener("click", () => wrapTextareaSelectionWithItalics(elements.gatheringBookQuote));
+elements.gatheringBatchBold?.addEventListener("click", () => wrapTextareaSelectionWithBold(elements.gatheringBatchSource));
+elements.gatheringBatchItalicize?.addEventListener("click", () => wrapTextareaSelectionWithItalics(elements.gatheringBatchSource));
 elements.showReviewModule?.addEventListener("click", () => setActiveModule("review"));
 elements.showWeirdModule?.addEventListener("click", () => {
   setActiveModule("weird");
@@ -4971,11 +5816,24 @@ elements.showCorrectionsModule?.addEventListener("click", () => {
   }
 });
 elements.showGraphicsModule?.addEventListener("click", () => {
+  currentGraphicsView = "main";
+  syncGraphicsModeOptionsForView();
   setActiveModule("graphics");
+  updateGraphicsModuleTitle();
+  syncReleaseCatalogFilterUi();
   loadExcerptHandoffs();
   if (elements.graphicsBookSelect?.options.length <= 1) {
     loadGraphicsBooks();
   }
+});
+elements.showGraphicsOps?.addEventListener("click", () => {
+  currentGraphicsView = "ops";
+  syncGraphicsModeOptionsForView();
+  setActiveModule("graphics");
+  updateGraphicsModuleTitle();
+  syncReleaseCatalogFilterUi();
+  loadExcerptHandoffs();
+  loadGraphicsBooks({ preserveSelection: false });
 });
 elements.loadGraphicsBooks?.addEventListener("click", loadGraphicsBooks);
 elements.loadGraphicsRecords?.addEventListener("click", loadGraphicsRecords);
@@ -5045,6 +5903,10 @@ elements.gatheringBookAuthor?.addEventListener("input", () => {
 elements.gatheringViewCatalogPoem?.addEventListener("click", openGatheringCatalogPoem);
 elements.gatheringBookQuote?.addEventListener("input", updateGatheringQuoteMeta);
 elements.gatheringVideoQuote?.addEventListener("input", updateGatheringQuoteMeta);
+elements.gatheringVideoLoadPlaylist?.addEventListener("click", () => loadGatheringVideoPlaylist());
+elements.gatheringVideoPrevItem?.addEventListener("click", () => navigateGatheringVideoPlaylist(-1));
+elements.gatheringVideoNextItem?.addEventListener("click", () => navigateGatheringVideoPlaylist(1));
+elements.gatheringVideoOpenItem?.addEventListener("click", openGatheringVideoPlaylistItem);
 [
     elements.gatheringBookQuote,
     elements.gatheringBookNotes,
@@ -5060,6 +5922,11 @@ if (elements.reviewFilter) {
     refreshReviewBookSelect(true);
     reviewVisibleCount = getReviewBatchSize();
     reviewPinnedRowOrder = [];
+    if (getSelectedReviewFilter() === "videos" && elements.bookSelect?.querySelector(`option[value="${REVIEW_VIDEOS_BOOK_KEY}"]`)) {
+      elements.bookSelect.value = REVIEW_VIDEOS_BOOK_KEY;
+      loadExcerpts();
+      return;
+    }
     renderCurrentExcerpts();
   });
 }
@@ -5087,9 +5954,20 @@ if (elements.weirdReviewFilter) {
 }
 if (elements.graphicsMode) {
   elements.graphicsMode.addEventListener("change", () => {
+    if (getSelectedGraphicsMode() === "fix") {
+      setActiveModule("gathering");
+      setGatheringMode("fix");
+      if (!intakeOptionsLoaded) {
+        loadGatheringOptions().catch(error => {
+          setStatus(`Excerpt gathering option load failed: ${error.message}`);
+        });
+      }
+      return;
+    }
     if (elements.graphicsFilter) {
       elements.graphicsFilter.disabled = getSelectedGraphicsMode() !== "queue";
     }
+    updateGraphicsModuleTitle();
     syncReleaseCatalogFilterUi();
     refreshGraphicsFolderImportVisibility();
     currentGraphicsRecords = [];
@@ -5120,9 +5998,14 @@ async function initializeApp() {
   if (elements.gatheringEmail && !elements.gatheringEmail.value.trim()) {
     elements.gatheringEmail.value = getContributorShellPrefillEmail();
   }
+  if (elements.gatheringVideoPlaylistUrl && !elements.gatheringVideoPlaylistUrl.value.trim()) {
+    elements.gatheringVideoPlaylistUrl.value = getRequestedVideoPlaylistUrl();
+  }
   populateReleaseCatalogSelect(elements.reviewReleaseCatalog);
   populateReleaseCatalogSelect(elements.graphicsReleaseCatalog);
+  syncGraphicsModeOptionsForView();
   syncReleaseCatalogFilterUi();
+  updateGraphicsModuleTitle();
   applyRuntimeMode();
   applyContributorAccessMode();
   updateGatheringModeUi();
@@ -5137,6 +6020,10 @@ async function initializeApp() {
     });
   } else {
     loadBooks();
+  }
+  if (getRequestedVideoPlaylistUrl()) {
+    setGatheringMode("video");
+    loadGatheringVideoPlaylist({ auto: true });
   }
 }
 

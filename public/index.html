@@ -11,7 +11,7 @@
     })();
   </script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
-  <link rel="stylesheet" href="/style.css?v=20260521a" />
+  <link rel="stylesheet" href="/style.css?v=20260608b" />
 </head>
 <body>
   <div class="shell">
@@ -28,7 +28,10 @@
         <button class="hero-pill hero-pill--active" id="show-review-module" type="button">Review queue</button>
         <button class="hero-pill" id="show-weird-module" type="button">Extra review</button>
         <button class="hero-pill" id="show-corrections-module" type="button">Needs correction</button>
-        <button class="hero-pill hero-pill--graphics" id="show-graphics-module" type="button">Graphics creation queue</button>
+        <div class="hero-pill-group">
+          <button class="hero-pill hero-pill--graphics" id="show-graphics-module" type="button">Graphics QC</button>
+          <button class="hero-ops-button" id="show-graphics-ops" type="button" aria-label="Open under the hood graphics queue" title="Open under the hood graphics queue">⚙</button>
+        </div>
       </div>
     </header>
 
@@ -40,10 +43,9 @@
         </div>
         <div class="gathering-topline">
           <div class="gathering-tabs" role="tablist" aria-label="Excerpt gathering lanes">
-            <button class="button button--secondary gathering-tab gathering-tab--active" id="gathering-tab-book" type="button">Book excerpts</button>
-            <button class="button button--secondary gathering-tab" id="gathering-tab-batch" type="button">Batch paste</button>
-            <button class="button button--secondary gathering-tab" id="gathering-tab-video" type="button">Video excerpts</button>
-            <button class="button button--secondary gathering-tab" id="gathering-tab-fix" type="button">Fix existing quote</button>
+            <button class="button button--secondary gathering-tab gathering-tab--active" id="gathering-tab-book" type="button" aria-pressed="true">Book excerpts</button>
+            <button class="button button--secondary gathering-tab" id="gathering-tab-batch" type="button" aria-pressed="false">Batch paste</button>
+            <button class="button button--secondary gathering-tab" id="gathering-tab-video" type="button" aria-pressed="false">Video excerpts</button>
           </div>
           <label class="field field--grow">
             <span>Email</span>
@@ -55,14 +57,14 @@
           <option value="book">Add a quote from a book</option>
           <option value="batch">Paste a batch of book excerpts</option>
           <option value="video">Add a quote from a video</option>
-          <option value="fix">Fix a quote in one of the quote tools</option>
         </select>
-        <div class="gathering-guidance">
-          <p><strong>Working rule of thumb:</strong> copy and paste from the manuscript, capture only the strongest lines, and keep moving past maybes.</p>
-          <ul class="gathering-guidance__list">
+        <div class="gathering-guidance" id="gathering-guidance">
+          <p id="gathering-guidance-lead"><strong>Working rule of thumb:</strong> copy and paste from the manuscript, capture only the strongest lines, and keep moving past maybes.</p>
+          <ul class="gathering-guidance__list" id="gathering-guidance-list">
             <li>Prefer the best excerpts, not the most excerpts.</li>
             <li>Stay under roughly 3 excerpts per poem and 30 per book.</li>
             <li>Aim for plenty of excerpts in the 10–25 word range.</li>
+            <li>You can read poems inside Weaver, so you do not need to open a separate PDF just to check the poem text.</li>
             <li>Use <kbd>Cmd/Ctrl</kbd> + <kbd>Enter</kbd> to submit quickly from a text box.</li>
           </ul>
         </div>
@@ -81,23 +83,27 @@
               <input id="gathering-book-author" list="gathering-author-options" type="text" placeholder="Auto-filled from catalog or enter manually" />
             </label>
             <div class="gathering-inline-tools field--full">
-              <button id="gathering-prev-catalog-poem" class="button button--secondary" type="button" disabled>Previous Poem</button>
-              <button id="gathering-next-catalog-poem" class="button button--secondary" type="button" disabled>Next Poem</button>
-              <button id="gathering-view-catalog-poem" class="button button--secondary" type="button" disabled>View EPUB Context</button>
-              <p class="hint gathering-source-hint" id="gathering-book-source-hint">Select a book to load poem titles from the catalog/EPUB source, or keep going manually for non-EPUB titles.</p>
+              <div class="gathering-inline-tools__left">
+                <button id="gathering-view-catalog-poem" class="button button--secondary" type="button" disabled>Read the Poem</button>
+                <p class="hint gathering-source-hint" id="gathering-book-source-hint">Select a book to load poem titles from the catalog/EPUB source, or keep going manually for non-EPUB titles.</p>
+              </div>
+              <div class="gathering-inline-tools__actions">
+                <button id="gathering-prev-catalog-poem" class="button button--secondary" type="button" disabled>Previous Poem</button>
+                <button id="gathering-next-catalog-poem" class="button button--secondary" type="button" disabled>Next Poem</button>
+              </div>
             </div>
             <label class="field field--full">
               <span>Quote</span>
-              <textarea id="gathering-book-quote" rows="6" placeholder="Paste the quote exactly as it appears in the manuscript"></textarea>
+              <div class="gathering-text-tools">
+                <button id="gathering-book-bold" class="button button--secondary gathering-text-tools__button" type="button">Bold</button>
+                <button id="gathering-book-italicize" class="button button--secondary gathering-text-tools__button" type="button">Italic</button>
+              </div>
+              <textarea id="gathering-book-quote" rows="6" placeholder="Paste the quote exactly as it appears in the manuscript. Use *italics* inline when needed."></textarea>
             </label>
             <p class="gathering-quote-meta" id="gathering-book-quote-meta">Word count: 0. Rough sweet spot: 10–25 words.</p>
             <label class="field field--full">
               <span>Notes</span>
-              <textarea id="gathering-book-notes" rows="3" placeholder="Optional notes about formatting, italics, line breaks, or source context"></textarea>
-            </label>
-            <label class="field field--full">
-              <span>Italics Markup</span>
-              <textarea id="gathering-book-italics" rows="2" placeholder="Optional: note italicized words or phrases here if the plain text field cannot capture them cleanly"></textarea>
+              <textarea id="gathering-book-notes" rows="3" placeholder="Optional notes about formatting, line breaks, or source context"></textarea>
             </label>
             <label class="field field--full">
               <span>Full-Poem Reaction</span>
@@ -106,6 +112,17 @@
           </div>
 
           <div class="gathering-fields gathering-fields--video" id="gathering-video-fields" hidden>
+            <label class="field field--full">
+              <span>Playlist / Curation Form</span>
+              <input id="gathering-video-playlist-url" type="url" placeholder="Paste a Google Form or playlist URL to prefill the event queue" />
+            </label>
+            <div class="gathering-inline-tools field--full">
+              <button id="gathering-video-load-playlist" class="button button--secondary" type="button">Load Playlist</button>
+              <button id="gathering-video-prev-item" class="button button--secondary" type="button" disabled>Previous Item</button>
+              <button id="gathering-video-next-item" class="button button--secondary" type="button" disabled>Next Item</button>
+              <button id="gathering-video-open-item" class="button button--secondary" type="button" disabled>Open Video</button>
+              <p class="hint gathering-source-hint" id="gathering-video-playlist-status">Load a curation form to prefill the event name, author, and poem title, then advance through the playlist as you submit.</p>
+            </div>
             <label class="field field--span-3">
               <span>Author</span>
               <input id="gathering-video-author" list="gathering-author-options" type="text" placeholder="Start typing an author name" />
@@ -173,6 +190,7 @@
               <select id="gathering-batch-content-type">
                 <option value="EXC">Excerpt</option>
                 <option value="FP">Full Poem</option>
+                <option value="FPI">Full Poem Image</option>
               </select>
             </label>
             <label class="field field--span-12">
@@ -181,9 +199,13 @@
             </label>
             <label class="field field--full">
               <span>Paste Blocks</span>
-              <textarea id="gathering-batch-source" rows="14" placeholder="Paste poem blocks, or paste rows copied directly from a spreadsheet.&#10;&#10;Supported poem-block lines:&#10;Title: ...&#10;Author: ...&#10;IG: @handle&#10;&#10;Spreadsheet rows can map columns like First Name, Last Name, Public Instagram Handle, and Submission."></textarea>
+              <div class="gathering-text-tools">
+                <button id="gathering-batch-bold" class="button button--secondary gathering-text-tools__button" type="button">Bold</button>
+                <button id="gathering-batch-italicize" class="button button--secondary gathering-text-tools__button" type="button">Italic</button>
+              </div>
+              <textarea id="gathering-batch-source" rows="14" placeholder="Paste poem blocks, or paste rows copied directly from a spreadsheet. Use *italics* inline when needed.&#10;&#10;Supported poem-block lines:&#10;Title: ...&#10;Author: ...&#10;IG: @handle&#10;&#10;Spreadsheet rows can map columns like First Name, Last Name, Public Instagram Handle, and Submission."></textarea>
             </label>
-            <p class="hint">Use one block per poem, or paste tabular rows copied from Google Sheets. Block mode supports <code>Title:</code>, <code>Author:</code>, and <code>IG:</code>. Spreadsheet mode looks for columns like <code>First Name</code>, <code>Last Name</code>, <code>Public Instagram Handle</code>, and <code>Submission</code>. Release catalog, shortener, and type will be applied to every imported row.</p>
+            <p class="hint">Use one block per poem, or paste tabular rows copied from Google Sheets. Block mode supports <code>Title:</code>, <code>Author:</code>, and <code>IG:</code>. Use <code>*italics*</code> inline when needed. Spreadsheet mode looks for columns like <code>First Name</code>, <code>Last Name</code>, <code>Public Instagram Handle</code>, and <code>Submission</code>. Release catalog, shortener, and type will be applied to every imported row.</p>
             <div id="gathering-batch-preview" class="excerpt-list">
               <p class="empty-state">Parse preview will appear here before import.</p>
             </div>
@@ -208,7 +230,7 @@
           <h2>Book Selection</h2>
           <span class="badge badge--muted" id="book-count-badge">0 Books</span>
         </div>
-        <div class="book-picker">
+        <div class="book-picker" id="graphics-book-picker">
           <label class="field field--grow">
             <span>Book Title</span>
             <select id="book-select">
@@ -220,6 +242,7 @@
             <select id="review-filter">
               <option value="current_titles">Release Catalog</option>
               <option value="all">All pending</option>
+              <option value="videos">Video excerpts</option>
               <option value="new_only">New to library only</option>
               <option value="exact_library">Exact library matches</option>
               <option value="possible_library">Possible library matches</option>
@@ -345,27 +368,29 @@
 
       <section class="panel panel--wide module-panel" id="graphics-module">
         <div class="panel__header">
-          <h2>Graphics Creation Queue</h2>
+          <h2 id="graphics-module-title">Graphics QC</h2>
           <span class="badge badge--muted" id="graphics-book-count-badge">0 Books</span>
         </div>
         <div class="book-picker">
-          <label class="field">
+          <label class="field" id="graphics-mode-field">
             <span>Mode</span>
             <select id="graphics-mode">
-              <option value="queue">Needs graphics</option>
-              <option value="cleanup">Graphics QC</option>
+              <option value="queue" hidden>Needs graphics</option>
+              <option value="qc" selected>Graphics QC</option>
               <option value="mismatch">Mismatch pairing</option>
               <option value="handoff">Poetry Please handoff</option>
+              <option value="coverage_needs" hidden>Coverage needs</option>
+              <option value="coverage" hidden>Coverage</option>
             </select>
           </label>
-          <label class="field">
+          <label class="field" id="graphics-filter-field">
             <span>Queue Mode</span>
             <select id="graphics-filter">
               <option value="current_titles">Release Catalog</option>
               <option value="all">All books</option>
             </select>
           </label>
-          <label class="field">
+          <label class="field" id="graphics-release-catalog-field">
             <span>Release Catalog</span>
             <select id="graphics-release-catalog">
               <option value="__all__">All release catalogs</option>
@@ -380,19 +405,21 @@
           <button id="load-graphics-books" class="button button--secondary">Load Graphics Books</button>
           <button id="load-graphics-records" class="button">Load Queue Rows</button>
         </div>
-        <p class="hint">
-          This replaces the old quote-image creation browser. `Needs graphics` is the true creation queue. `Release Catalog` narrows that queue to books with publishing-order release metadata. `Graphics QC` is for graphics that already exist and should be reviewed. `Mismatch pairing` is for QC-rejected graphics that need to be matched to the correct excerpt. `Poetry Please handoff` is for approved graphics and their downstream status.
+        <p class="hint" id="graphics-main-hint">
+          This replaces the old quote-image creation browser. `Release Catalog` narrows the graphics work to books with publishing-order release metadata. `Graphics QC` is for graphics that already exist and should be reviewed. `Mismatch pairing` is for QC-rejected graphics that need to be matched to the correct excerpt. `Poetry Please handoff` is for approved graphics and their downstream status.
         </p>
-        <div class="panel__header module-panel__subheader">
-          <h3>EXC Handoff</h3>
-          <span class="badge badge--muted" id="excerpt-handoff-count-badge">0 Records</span>
-        </div>
-        <div class="toolbar">
-          <button id="refresh-excerpt-handoffs" class="button button--secondary" type="button">Refresh EXC Handoffs</button>
-          <button id="retry-failed-excerpt-handoffs" class="button button--secondary" type="button">Retry Failed EXC</button>
-        </div>
-        <div id="excerpt-handoff-summary" class="excerpt-list">
-          <p class="empty-state">Load the EXC handoff summary to monitor queued, failed, and sent excerpt exports.</p>
+        <div id="graphics-ops-panel">
+          <div class="panel__header module-panel__subheader">
+            <h3>EXC Handoff</h3>
+            <span class="badge badge--muted" id="excerpt-handoff-count-badge">0 Records</span>
+          </div>
+          <div class="toolbar">
+            <button id="refresh-excerpt-handoffs" class="button button--secondary" type="button">Refresh EXC Handoffs</button>
+            <button id="retry-failed-excerpt-handoffs" class="button button--secondary" type="button">Retry Failed EXC</button>
+          </div>
+          <div id="excerpt-handoff-summary" class="excerpt-list">
+            <p class="empty-state">Load the EXC handoff summary to monitor queued, failed, and sent excerpt exports.</p>
+          </div>
         </div>
         <details class="folder-import-panel" id="graphics-folder-import-panel">
           <summary class="folder-import-panel__summary">Import Made Graphics From Drive</summary>
@@ -412,18 +439,18 @@
             <p class="empty-state">Preview a Drive folder to see which open graphics requests can be matched safely.</p>
           </div>
         </details>
-        <div class="panel__header module-panel__subheader">
+        <div class="panel__header module-panel__subheader" id="graphics-queue-rows-header">
           <h3>Queue Rows</h3>
           <span class="badge badge--muted" id="graphics-count-badge">0 Rows</span>
         </div>
-        <div class="toolbar">
+        <div class="toolbar" id="graphics-queue-toolbar-top">
           <button id="export-graphics-sheet" class="button button--secondary" hidden>Export Google Sheet</button>
           <button id="submit-graphics-qc" class="button button--accent" hidden>Save QC Decisions</button>
         </div>
         <div id="graphics-list" class="excerpt-list">
           <p class="empty-state">Load graphics books to start browsing the graphics creation or QC queue.</p>
         </div>
-        <div class="toolbar">
+        <div class="toolbar" id="graphics-queue-toolbar-bottom">
           <button id="submit-graphics-qc-bottom" class="button button--accent" hidden>Save QC Decisions</button>
         </div>
       </section>
@@ -438,6 +465,6 @@
     </main>
   </div>
 
-  <script src="/app.js?v=20260601c"></script>
+  <script src="/app.js?v=20260708a"></script>
 </body>
 </html>

@@ -1,6 +1,6 @@
 import http from "node:http";
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -45,6 +45,9 @@ const poetryPleaseApiUrl =
   "https://poetryplease.org/api";
 const poetryPleaseApiKey =
   String(process.env.POETRY_PLEASE_API_KEY || "").trim();
+const weaverPublicBaseUrl =
+  cleanSheetWhitespace(process.env.WEAVER_PUBLIC_BASE_URL) ||
+  "https://weaver.buttonpoetry.com";
 const fallbackReviewQueueIncludeTitles = [
   "A Choir of Honest Killers",
   "all the ugly bits",
@@ -186,6 +189,16 @@ function cleanSheetWhitespace(text) {
   return String(text || "").replace(/\s+/g, " ").trim();
 }
 
+function slugToken(text) {
+  return cleanSheetWhitespace(text)
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/['’]/g, "")
+    .replace(/[^A-Za-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .toUpperCase();
+}
+
 function normalizeExcerptTransferText(text) {
   return String(text || "").replace(/\r\n?/g, "\n").trim();
 }
@@ -193,7 +206,40 @@ function normalizeExcerptTransferText(text) {
 function normalizeExcerptContentType(value) {
   const cleaned = cleanSheetWhitespace(value).toUpperCase();
   if (cleaned === "FP" || cleaned === "FULL POEM") return "FP";
+  if (
+    cleaned === "FPI"
+    || cleaned === "FULL POEM IMAGE"
+    || cleaned === "FULL POEM IMAGE-BACKED"
+    || cleaned === "FULL POEM IMAGE BACKED"
+  ) return "FPI";
   return "EXC";
+}
+
+function normalizePoetryPleaseContentType(value, fallback = "EXC") {
+  const cleaned = cleanSheetWhitespace(value).toUpperCase();
+  if (cleaned === "QI" || cleaned === "QUOTE IMAGE") return "QI";
+  if (cleaned === "FP" || cleaned === "FULL POEM") return "FP";
+  if (
+    cleaned === "FPI"
+    || cleaned === "FULL POEM IMAGE"
+    || cleaned === "FULL POEM IMAGE-BACKED"
+    || cleaned === "FULL POEM IMAGE BACKED"
+  ) return "FPI";
+  return fallback;
+}
+
+function inferPoetryPleaseContentType(record, fallback = "QI") {
+  const explicitType = normalizePoetryPleaseContentType(record?.contentType || record?.imageType, fallback);
+  const ids = [
+    record?.graphicsRequestId,
+    record?.sourceRequestId,
+    record?.sourceRecordId,
+    record?.recordId
+  ].map(cleanSheetWhitespace);
+  if (explicitType === "QI" && ids.some(id => /(^|[-:])FP[-:]/i.test(id))) {
+    return "FPI";
+  }
+  return explicitType;
 }
 
 function parseIntakeMetadataFromNotes(text) {
@@ -201,7 +247,8 @@ function parseIntakeMetadataFromNotes(text) {
   const result = {
     releaseCatalog: "",
     bookShortener: "",
-    contentType: ""
+    contentType: "",
+    socialMediaHandle: ""
   };
   noteText.split(/\r?\n/).forEach(line => {
     const match = line.match(/^\s*([^:]+):\s*(.+?)\s*$/);
@@ -215,8 +262,248 @@ function parseIntakeMetadataFromNotes(text) {
       result.bookShortener = value;
     } else if (label === "content type" || label === "type") {
       result.contentType = normalizeExcerptContentType(value);
+    } else if (
+      label === "instagram handle"
+      || label === "ig handle"
+      || label === "social media handle"
+      || label === "instagram"
+      || label === "handle"
+    ) {
+      result.socialMediaHandle = value;
     }
   });
+  return result;
+}
+
+function decodeUnicodeEscapes(text) {
+  return String(text || "").replace(/\\u([0-9a-fA-F]{4})/g, (_match, hex) => {
+    try {
+      return String.fromCharCode(parseInt(hex, 16));
+    } catch {
+      return "";
+    }
+  });
+}
+
+function decodeHtmlEntities(text) {
+  return String(text || "")
+    .replace(/&amp;/g, "&")
+    .replace(/&#39;/g, "'")
+    .replace(/&quot;/g, "\"")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">");
+}
+
+function decodeJsString(text) {
+  return decodeHtmlEntities(
+    decodeUnicodeEscapes(String(text || ""))
+      .replace(/\\"/g, "\"")
+      .replace(/\\\\/g, "\\")
+  );
+}
+
+function stripHtmlTags(text) {
+  return String(text || "").replace(/<[^>]+>/g, " ");
+}
+
+function normalizeVideoPlaylistLabel(text) {
+  return decodeHtmlEntities(decodeUnicodeEscapes(String(text || "")))
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function derivePlaylistEventName(formTitle) {
+  const cleaned = normalizeVideoPlaylistLabel(formTitle);
+  return cleaned
+    .replace(/^Curation Form\s*-?\s*/i, "")
+    .replace(/^Vertical Versions\s*-?\s*/i, "")
+    .trim();
+}
+
+function parseVideoQuestionLabel(labelText) {
+  const cleaned = normalizeVideoPlaylistLabel(labelText);
+  if (!cleaned.includes("[Vertical Version]")) return null;
+  const versionIndex = cleaned.indexOf("[Vertical Version]");
+  const labelStart = versionIndex >= 0 ? versionIndex + "[Vertical Version]".length : 0;
+  const movIndex = cleaned.indexOf(".mov");
+  if (movIndex < 0) return null;
+  const coreLabel = normalizeVideoPlaylistLabel(cleaned.slice(labelStart, movIndex));
+  const separatorIndex = coreLabel.indexOf(" - ");
+  if (separatorIndex < 0) return null;
+  const author = normalizeVideoPlaylistLabel(coreLabel.slice(0, separatorIndex));
+  const poemTitle = normalizeVideoPlaylistLabel(coreLabel.slice(separatorIndex + 3));
+  const videoUrlMatch = cleaned.match(/https:\/\/drive\.google\.com\/file\/d\/[A-Za-z0-9_-]+\/view\?usp=drivesdk/i);
+  const videoUrl = String(videoUrlMatch?.[0] || "").trim();
+  if (!author || !poemTitle || !videoUrl) return null;
+  return { author, poemTitle, videoUrl };
+}
+
+function extractGoogleFormResponseUrl(html) {
+  const formIdMatch = String(html || "").match(/"e\/1FAIpQL[^"]+"/);
+  if (!formIdMatch?.[0]) return "";
+  const formId = formIdMatch[0].slice(1, -1);
+  return `https://docs.google.com/forms/d/${formId}/formResponse`;
+}
+
+function parseVideoPlaylistItemsFromFormHtml(html, sourceUrl) {
+  const decodedHtml = decodeUnicodeEscapes(String(html || ""));
+  const titleMatch = String(html || "").match(/<title>([^<]+)<\/title>/i);
+  const formTitle = normalizeVideoPlaylistLabel(titleMatch?.[1] || "");
+  const eventName = derivePlaylistEventName(formTitle);
+  const formResponseUrl = extractGoogleFormResponseUrl(html);
+  const items = [];
+  const seen = new Set();
+  const questionRecords = [];
+  const normalizedQuestionSource = decodeHtmlEntities(decodedHtml);
+  const questionPattern = /\[(\d+),"((?:[^"\\]|\\.)*)",(?:null|"((?:[^"\\]|\\.)*)"),([01]),\[\[(\d+)(?:,[^\]]*)?\]\]/g;
+  let questionMatch;
+  while ((questionMatch = questionPattern.exec(normalizedQuestionSource))) {
+    questionRecords.push({
+      questionId: cleanSheetWhitespace(questionMatch[1]),
+      label: normalizeVideoPlaylistLabel(stripHtmlTags(decodeJsString(questionMatch[2] || ""))),
+      required: questionMatch[4] === "0",
+      entryId: cleanSheetWhitespace(questionMatch[5])
+    });
+  }
+
+  const byCompositeKey = new Map();
+  for (let index = 0; index < questionRecords.length; index += 1) {
+    const record = questionRecords[index];
+    if (!record.label.includes("[Vertical Version]")) continue;
+    const noteRecord = questionRecords[index + 1];
+    const parsed = parseVideoQuestionLabel(record.label);
+    if (!parsed) continue;
+    const compositeKey = `${parsed.author}||${parsed.poemTitle}||${parsed.videoUrl}`;
+    byCompositeKey.set(compositeKey, {
+      scoreEntryId: record.entryId,
+      notesEntryId: noteRecord?.label?.startsWith("Additional Notes - ") ? noteRecord.entryId : "",
+      formResponseUrl
+    });
+  }
+  const spanPattern = /<span class="M7eMe">([\s\S]*?)<\/span>/g;
+  let match;
+  while ((match = spanPattern.exec(decodedHtml))) {
+    const spanText = normalizeVideoPlaylistLabel(stripHtmlTags(match[1] || ""));
+    if (!spanText.includes("[Vertical Version]") || !spanText.includes("drive.google.com/file/d/")) {
+      continue;
+    }
+    const versionIndex = spanText.indexOf("[Vertical Version]");
+    const labelStart = versionIndex >= 0 ? versionIndex + "[Vertical Version]".length : 0;
+    const movIndex = spanText.indexOf(".mov");
+    if (movIndex < 0) continue;
+    const label = normalizeVideoPlaylistLabel(spanText.slice(labelStart, movIndex));
+    const videoUrlMatch = spanText.match(/https:\/\/drive\.google\.com\/file\/d\/[A-Za-z0-9_-]+\/view\?usp=drivesdk/i);
+    const videoUrl = String(videoUrlMatch?.[0] || "").trim();
+    if (!label || !videoUrl) continue;
+    const separatorIndex = label.indexOf(" - ");
+    if (separatorIndex < 0) continue;
+    const author = normalizeVideoPlaylistLabel(label.slice(0, separatorIndex));
+    const poemTitle = normalizeVideoPlaylistLabel(label.slice(separatorIndex + 3));
+    if (!author || !poemTitle) continue;
+    const responseMeta = byCompositeKey.get(`${author}||${poemTitle}||${videoUrl}`) || {};
+    const key = `${author}||${poemTitle}||${videoUrl}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    items.push({
+      author,
+      poemTitle,
+      videoUrl,
+      eventName,
+      formResponseUrl: responseMeta.formResponseUrl || formResponseUrl,
+      scoreEntryId: responseMeta.scoreEntryId || "",
+      notesEntryId: responseMeta.notesEntryId || ""
+    });
+  }
+  return {
+    ok: true,
+    sourceUrl,
+    formTitle,
+    eventName,
+    formResponseUrl,
+    count: items.length,
+    items
+  };
+}
+
+function validateVideoPlaylistScore(scoreText) {
+  const raw = String(scoreText || "").trim();
+  if (!raw) {
+    throw new Error("Curation score is required.");
+  }
+  const score = Number(raw);
+  if (!Number.isFinite(score) || score < 0 || score > 10) {
+    throw new Error("Curation score must be a number between 0 and 10.");
+  }
+  return raw;
+}
+
+async function submitVideoPlaylistScore(payload) {
+  const formResponseUrl = String(payload?.formResponseUrl || "").trim();
+  const scoreEntryId = cleanSheetWhitespace(payload?.scoreEntryId);
+  const notesEntryId = cleanSheetWhitespace(payload?.notesEntryId);
+  const score = validateVideoPlaylistScore(payload?.score);
+  const notes = String(payload?.notes || "").trim();
+  if (!formResponseUrl || !scoreEntryId) {
+    throw new Error("Missing playlist scoring metadata.");
+  }
+  const formData = new URLSearchParams();
+  formData.set(`entry.${scoreEntryId}`, score);
+  if (notesEntryId && notes) {
+    formData.set(`entry.${notesEntryId}`, notes);
+  }
+  formData.set("fvv", "1");
+  formData.set("pageHistory", "0");
+  const response = await fetch(formResponseUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+      "User-Agent": "Weaver video playlist scorer"
+    },
+    body: formData.toString(),
+    redirect: "manual"
+  });
+  if (!(response.status >= 200 && response.status < 400)) {
+    throw new Error(`Form score submit failed with ${response.status}.`);
+  }
+  return {
+    ok: true,
+    formResponseUrl,
+    scoreEntryId,
+    notesEntryId,
+    score,
+    notes
+  };
+}
+
+async function loadVideoPlaylistFromFormUrl(formUrl) {
+  const sourceUrl = String(formUrl || "").trim();
+  if (!sourceUrl) {
+    throw new Error("formUrl is required.");
+  }
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(sourceUrl);
+  } catch {
+    throw new Error("Invalid form URL.");
+  }
+  const allowedHost = /(^|\.)forms\.gle$|(^|\.)docs\.google\.com$/i.test(parsedUrl.hostname);
+  if (!allowedHost) {
+    throw new Error("Only Google Form URLs are supported.");
+  }
+  const response = await fetch(sourceUrl, {
+    redirect: "follow",
+    headers: {
+      "User-Agent": "Weaver video playlist loader"
+    }
+  });
+  if (!response.ok) {
+    throw new Error(`Form fetch failed with ${response.status}.`);
+  }
+  const html = await response.text();
+  const result = parseVideoPlaylistItemsFromFormHtml(html, sourceUrl);
+  if (!result.items.length) {
+    throw new Error("No playable video entries were found in that form.");
+  }
   return result;
 }
 
@@ -367,12 +654,34 @@ async function getReleaseCatalogMetadata() {
 }
 
 function resolvePublishingBookMeta(bookTitle = "", canonicalBookTitle = "") {
-  const keys = [normalizeBookKey(bookTitle), normalizeBookKey(canonicalBookTitle)].filter(Boolean);
+  const rawTitles = [bookTitle, canonicalBookTitle].filter(Boolean);
+  const keys = new Set();
+  rawTitles.forEach(title => {
+    const cleaned = cleanSheetWhitespace(title);
+    const normalized = normalizeBookKey(cleaned);
+    if (normalized) {
+      keys.add(normalized);
+    }
+    if (cleaned.includes(":")) {
+      const baseTitle = cleanSheetWhitespace(cleaned.split(/\s*:\s*/, 1)[0] || "");
+      const baseKey = normalizeBookKey(baseTitle);
+      if (baseKey) {
+        keys.add(baseKey);
+      }
+    }
+  });
   for (const key of keys) {
     const match = publishingBooksCache?.get(key);
     if (match) {
       return match;
     }
+  }
+  if (keys.has(normalizeBookKey("Tooth Gaps in the Archives"))) {
+    return {
+      title: "Tooth Gaps in the Archives",
+      releaseCatalog: "Fall 2026",
+      bookShortener: "TGIT"
+    };
   }
   return null;
 }
@@ -497,7 +806,7 @@ function extractGoogleDriveFolderId(input) {
 }
 
 function extractGoogleDriveFileId(input) {
-  const raw = cleanSheetWhitespace(input);
+  const raw = cleanSheetWhitespace(input).replace(/[.,;:!?]+$/, "");
   if (!raw) {
     return "";
   }
@@ -759,6 +1068,7 @@ function isTruthyParam(value) {
 function normalizeDecision(value) {
   const normalized = String(value || "").trim().toLowerCase();
   if (normalized === "accept") return "accept";
+  if (normalized === "accept_skip_graphic" || normalized === "accept_skip_graphics") return "accept_skip_graphic";
   if (normalized === "reject") return "reject";
   if (normalized === "needs_correction") return "needs_correction";
   return "";
@@ -767,9 +1077,15 @@ function normalizeDecision(value) {
 function normalizeReviewDecisionValue(value) {
   const normalized = normalizeDecision(value);
   if (normalized === "accept") return "ACCEPT";
+  if (normalized === "accept_skip_graphic") return "ACCEPT_SKIP_GRAPHIC";
   if (normalized === "reject") return "REJECT";
   if (normalized === "needs_correction") return "NEEDS_CORRECTION";
   return "";
+}
+
+function isAcceptedExcerptReviewDecision(value) {
+  const normalized = normalizeReviewDecisionValue(value);
+  return normalized === "ACCEPT" || normalized === "ACCEPT_SKIP_GRAPHIC";
 }
 
 function getBookTitleDisplayScore(title) {
@@ -914,6 +1230,7 @@ function buildGraphicsRequestRecordFromQueueRow(row, index, canonicalBookAuthorM
   const poemTitle = String(row[1] || "");
   const quoteText = String(row[3] || "");
   const notes = String(row[4] || "");
+  const noteMeta = parseIntakeMetadataFromNotes(notes);
   const approved = cleanSheetWhitespace(row[5]);
   const created = cleanSheetWhitespace(row[6]);
   const workflowStatus = cleanSheetWhitespace(row[7]);
@@ -934,6 +1251,9 @@ function buildGraphicsRequestRecordFromQueueRow(row, index, canonicalBookAuthorM
     author,
     quoteText,
     notes,
+    socialMediaHandle: noteMeta.socialMediaHandle || "",
+    instagramHandle: noteMeta.socialMediaHandle || "",
+    igHandle: noteMeta.socialMediaHandle || "",
     approved,
     created,
     workflowStatus,
@@ -949,9 +1269,52 @@ function buildGraphicsRequestRecordFromQueueRow(row, index, canonicalBookAuthorM
   };
 }
 
+function buildGraphicsHandoffLedgerRequest(record) {
+  const socialMediaHandle = cleanSheetWhitespace(
+    record?.socialMediaHandle || record?.instagramHandle || record?.igHandle
+  );
+  const source = cleanSheetWhitespace(record?.source);
+  const isRework = source === "weaver_qc_rework" || cleanSheetWhitespace(record?.queueView) === "rework";
+  const contentType = normalizePoetryPleaseContentType(
+    record?.contentType || record?.imageType,
+    "QI"
+  );
+  return {
+    graphicsRequestId: cleanSheetWhitespace(record?.graphicsRequestId),
+    sourceSystem: isRework ? "weaver_qc_rework" : "weaver",
+    sourceStatus: cleanSheetWhitespace(record?.requestStatus || (isRework ? "rework_requested" : "open")),
+    sourcePayload: {
+      graphicsRequestId: cleanSheetWhitespace(record?.graphicsRequestId),
+      originalGraphicsRequestId: cleanSheetWhitespace(record?.originalGraphicsRequestId),
+      sourceCompletionId: cleanSheetWhitespace(record?.sourceCompletionId),
+      revisionOf: cleanSheetWhitespace(record?.revisionOf),
+      queueSheetRow: record?.queueSheetRow || "",
+      recordId: cleanSheetWhitespace(record?.recordId),
+      author: String(record?.author || ""),
+      poemTitle: String(record?.poemTitle || ""),
+      bookTitle: String(record?.bookTitle || ""),
+      quoteText: String(record?.quoteText || ""),
+      contentType,
+      imageType: contentType,
+      reworkReason: cleanSheetWhitespace(record?.reworkReason || record?.rejectReason),
+      requestedChanges: String(record?.requestedChanges || record?.qcNote || ""),
+      previousAssetUrl: cleanSheetWhitespace(record?.previousAssetUrl || record?.assetUrl),
+      previousAssetPreviewUrl: cleanSheetWhitespace(record?.previousAssetPreviewUrl || record?.assetPreviewUrl),
+      socialMediaHandle,
+      instagramHandle: socialMediaHandle,
+      igHandle: socialMediaHandle
+    }
+  };
+}
+
 function sendJson(res, statusCode, body) {
   res.writeHead(statusCode, { "Content-Type": "application/json; charset=utf-8" });
   res.end(JSON.stringify(body, null, 2));
+}
+
+function getRequestCorrelationId(req) {
+  const headerValue = cleanSheetWhitespace(req?.headers?.["x-request-id"]);
+  return headerValue || `weaver-${randomUUID()}`;
 }
 
 function escapeHtml(text) {
@@ -1239,7 +1602,27 @@ async function ensureExcerptPoetryPleaseColumnsServer() {
   ]);
 }
 
+function isDriveFolderAssetUrl(value) {
+  const text = cleanSheetWhitespace(value);
+  return /drive\.google\.com\/drive\/folders\//i.test(text) || /\/folders\//i.test(text);
+}
+
+function assertPigCompletionFileAsset(completion) {
+  const assetUrl = cleanSheetWhitespace(completion.assetUrl || completion.assetLinkUrl || completion.driveUrl);
+  const assetPreviewUrl = cleanSheetWhitespace(completion.assetPreviewUrl || completion.previewUrl || completion.thumbnailUrl || assetUrl);
+  if (!assetUrl) {
+    throw new Error('P.I.G. completion must include a row-level assetUrl.');
+  }
+  if (!assetPreviewUrl) {
+    throw new Error('P.I.G. completion must include a row-level assetPreviewUrl.');
+  }
+  if (isDriveFolderAssetUrl(assetUrl) || isDriveFolderAssetUrl(assetPreviewUrl)) {
+    throw new Error('P.I.G. completion assetUrl/assetPreviewUrl must point to the specific image file, not a Drive folder.');
+  }
+}
+
 function buildPigCompletionRowValues(completion, existingRow = []) {
+  assertPigCompletionFileAsset(completion);
   const completionId = buildPigCompletionId(completion);
   const requestId = cleanSheetWhitespace(completion.requestId || completion.graphicsRequestId);
   const sourceRecordId = cleanSheetWhitespace(completion.sourceRecordId || completion.recordId);
@@ -1248,6 +1631,11 @@ function buildPigCompletionRowValues(completion, existingRow = []) {
   const assetPreviewUrl = cleanSheetWhitespace(completion.assetPreviewUrl || completion.previewUrl || completion.thumbnailUrl || assetUrl);
   const completedAt = cleanSheetWhitespace(completion.completedAt || new Date().toISOString());
   const sourceTool = cleanSheetWhitespace(completion.sourceTool || "P.I.G.");
+  const contentType = normalizePoetryPleaseContentType(completion.contentType || completion.imageType || "", "");
+  let productionNotes = String(completion.productionNotes || completion.notes || "");
+  if (contentType && !/^\s*(content type|image type)\s*:/im.test(productionNotes)) {
+    productionNotes = `${productionNotes}${productionNotes.trim() ? "\n" : ""}Content Type: ${contentType}`;
+  }
 
   return [
     completionId,
@@ -1260,7 +1648,7 @@ function buildPigCompletionRowValues(completion, existingRow = []) {
     assetPreviewUrl,
     sourceRecordId,
     sourceSheetRow,
-    String(completion.productionNotes || completion.notes || ""),
+    productionNotes,
     completedAt,
     existingRow[PIG_COMPLETION_COLUMNS.qcDecision - 1] || "",
     existingRow[PIG_COMPLETION_COLUMNS.qcNote - 1] || "",
@@ -1277,6 +1665,7 @@ function buildPigQcRecordFromSheetRow(row, index, canonicalBookAuthorMap = null)
   if (!completionId) return null;
 
   const requestId = cleanSheetWhitespace(row[PIG_COMPLETION_COLUMNS.requestId - 1]);
+  const isReworkCompletion = requestId.toLowerCase().startsWith("rework:");
   const poemTitle = String(row[PIG_COMPLETION_COLUMNS.poemTitle - 1] || "");
   const bookTitle = String(row[PIG_COMPLETION_COLUMNS.bookTitle - 1] || "");
   const author = resolveGraphicsAuthor(row[PIG_COMPLETION_COLUMNS.author - 1] || "", bookTitle, canonicalBookAuthorMap);
@@ -1286,6 +1675,7 @@ function buildPigQcRecordFromSheetRow(row, index, canonicalBookAuthorMap = null)
   const sourceRecordId = cleanSheetWhitespace(row[PIG_COMPLETION_COLUMNS.sourceRecordId - 1]);
   const sourceSheetRow = parseInt(row[PIG_COMPLETION_COLUMNS.sourceSheetRow - 1], 10) || "";
   const productionNotes = String(row[PIG_COMPLETION_COLUMNS.productionNotes - 1] || "");
+  const noteMeta = parseIntakeMetadataFromNotes(productionNotes);
   const completedAt = cleanSheetWhitespace(row[PIG_COMPLETION_COLUMNS.completedAt - 1]);
   const sourceTool = cleanSheetWhitespace(row[PIG_COMPLETION_COLUMNS.sourceTool - 1]) || "P.I.G.";
   const qcDecision = cleanSheetWhitespace(row[PIG_COMPLETION_COLUMNS.qcDecision - 1]);
@@ -1299,6 +1689,8 @@ function buildPigQcRecordFromSheetRow(row, index, canonicalBookAuthorMap = null)
     storageTarget: "pig_sheet",
     pigCompletionId: completionId,
     pigRequestId: requestId,
+    isReworkCompletion,
+    requestKind: isReworkCompletion ? "rework_completion" : "completion",
     sheetRow: index + 2,
     author,
     poemTitle,
@@ -1307,7 +1699,7 @@ function buildPigQcRecordFromSheetRow(row, index, canonicalBookAuthorMap = null)
     notes: productionNotes ? `${sourceTool}: ${productionNotes}` : `Returned by ${sourceTool}`,
     approved: "Y",
     created: "Y",
-    workflowStatus: "Returned by P.I.G.",
+    workflowStatus: isReworkCompletion ? "Rework returned by P.I.G." : "Returned by P.I.G.",
     recordId: `pig:${completionId}`,
     graphicsRequestId: requestId || buildWeaverGraphicsRequestId({ recordId: sourceRecordId, sheetRow: sourceSheetRow, author, poemTitle, bookTitle }),
     assetLinkUrl: assetUrl,
@@ -1322,6 +1714,8 @@ function buildPigQcRecordFromSheetRow(row, index, canonicalBookAuthorMap = null)
     metadataIssue: "",
     aestheticIssue: "",
     sourceTool,
+    contentType: normalizePoetryPleaseContentType(noteMeta.contentType, "QI"),
+    imageType: normalizePoetryPleaseContentType(noteMeta.contentType, "QI"),
     poetryPleaseStatus,
     poetryPleaseUpdatedAt,
     poetryPleaseNote
@@ -1408,6 +1802,8 @@ function overlayRuntimeHandoffState(record, handoffStateByRequestId = null) {
 
   return {
     ...record,
+    contentType: normalizePoetryPleaseContentType(handoff.contentType || handoff.imageType || record.contentType || record.imageType, record.contentType || "QI"),
+    imageType: normalizePoetryPleaseContentType(handoff.imageType || handoff.contentType || record.imageType || record.contentType, record.imageType || "QI"),
     graphicsQcDecision: (
       qcStatus === "approved"
         ? "APPROVE"
@@ -1511,6 +1907,132 @@ async function listDriveFolderImageFiles(folderId) {
   } while (pageToken);
 
   return files;
+}
+
+function chooseBestDriveFolderImageFile(files = []) {
+  if (!Array.isArray(files) || files.length === 0) {
+    return null;
+  }
+
+  return files
+    .slice()
+    .sort((left, right) => {
+      const leftTime = Date.parse(left?.createdTime || "") || 0;
+      const rightTime = Date.parse(right?.createdTime || "") || 0;
+      if (leftTime !== rightTime) {
+        return rightTime - leftTime;
+      }
+      return String(right?.name || "").localeCompare(String(left?.name || ""));
+    })[0] || null;
+}
+
+function buildAuthorMatchTokens(author) {
+  const withoutParens = String(author || "").replace(/\([^)]*\)/g, " ");
+  return Array.from(new Set(
+    normalizeDriveMatchText(withoutParens)
+      .split(/\s+/)
+      .filter(token => token.length >= 3)
+  ));
+}
+
+function chooseMatchingDriveFolderImageFile(files = [], record = null) {
+  if (!Array.isArray(files) || files.length === 0 || !record) {
+    return null;
+  }
+
+  const titleNeedle = normalizeDriveMatchText(record.poemTitle || "");
+  const authorTokens = buildAuthorMatchTokens(record.author || "");
+  const scored = files.map(file => {
+    const haystack = normalizeDriveMatchText(file?.name || "");
+    let score = 0;
+
+    if (titleNeedle && haystack.includes(titleNeedle)) {
+      score += 200;
+    }
+
+    authorTokens.forEach(token => {
+      if (haystack.includes(token)) {
+        score += 25;
+      }
+    });
+
+    if (String(file?.mimeType || "").startsWith("image/")) {
+      score += 5;
+    }
+
+    return { file, score };
+  }).sort((left, right) => {
+    if (left.score !== right.score) {
+      return right.score - left.score;
+    }
+    const leftTime = Date.parse(left.file?.createdTime || "") || 0;
+    const rightTime = Date.parse(right.file?.createdTime || "") || 0;
+    return rightTime - leftTime;
+  });
+
+  return scored[0]?.score > 0 ? scored[0].file : null;
+}
+
+async function hydrateGraphicsFolderAssets(records = []) {
+  const folderIds = Array.from(new Set(records
+    .map(record => extractGoogleDriveFolderId(record?.assetLinkUrl || record?.assetPreviewUrl || ""))
+    .filter(Boolean)));
+
+  if (folderIds.length === 0) {
+    return records;
+  }
+
+  const folderFilesById = new Map();
+  await Promise.all(folderIds.map(async folderId => {
+    try {
+      folderFilesById.set(folderId, await listDriveFolderImageFiles(folderId));
+    } catch (_error) {
+      folderFilesById.set(folderId, []);
+    }
+  }));
+
+  const repairedWrites = [];
+  const hydratedRecords = records.map(record => {
+    const folderUrl = cleanSheetWhitespace(record?.assetLinkUrl || record?.assetPreviewUrl || "");
+    const folderId = extractGoogleDriveFolderId(folderUrl);
+    if (!folderId) {
+      return record;
+    }
+
+    const chosenFile = chooseMatchingDriveFolderImageFile(folderFilesById.get(folderId) || [], record)
+      || chooseBestDriveFolderImageFile(folderFilesById.get(folderId) || []);
+    if (!chosenFile) {
+      return {
+        ...record,
+        assetFolderUrl: folderUrl,
+        assetLinkUrl: folderUrl,
+        assetPreviewUrl: ""
+      };
+    }
+
+    const repairedAssetUrl = cleanSheetWhitespace(chosenFile.webViewLink) || `https://drive.google.com/file/d/${encodeURIComponent(chosenFile.id)}/view`;
+    const repairedPreviewUrl = cleanSheetWhitespace(chosenFile.thumbnailLink) || buildDrivePreviewUrl(chosenFile.id);
+    const sheetRow = parseInt(record?.sheetRow, 10) || 0;
+    if (sheetRow > 1) {
+      repairedWrites.push({
+        range: `'${pigCompletedGraphicsSheetName.replace(/'/g, "''")}'!G${sheetRow}:H${sheetRow}`,
+        values: [[repairedAssetUrl, repairedPreviewUrl]]
+      });
+    }
+
+    return {
+      ...record,
+      assetFolderUrl: folderUrl,
+      assetLinkUrl: repairedAssetUrl,
+      assetPreviewUrl: repairedPreviewUrl
+    };
+  });
+
+  if (repairedWrites.length > 0) {
+    await batchUpdateSheetValuesServer(repairedWrites);
+  }
+
+  return hydratedRecords;
 }
 
 function chooseDriveFolderImportMatch(files, openRequests, metadata = {}, completedRecords = []) {
@@ -1898,11 +2420,16 @@ function buildCatalogValidationPayload(row) {
 
 function buildPendingRecordFromSheetRow(row, index, canonicalBookAuthorMap = null) {
   const config = SHEET_SOURCE_CONFIG.columnMap;
-  const excerptText = (row[config.excerpt - 1] || "").toString();
+  const isVideoIntake = cleanSheetWhitespace(row[2]).toLowerCase() === "add a quote from a video";
+  const rawVideoAuthor = isVideoIntake ? (row[9] || "").toString() : "";
+  const rawVideoTitle = isVideoIntake ? (row[11] || "").toString() : "";
+  const rawVideoExcerpt = isVideoIntake ? (row[12] || "").toString() : "";
+  const rawVideoBookTitle = isVideoIntake ? cleanSheetWhitespace(row[13] || "") : "";
+  const excerptText = (row[config.excerpt - 1] || rawVideoExcerpt).toString();
   const cleanedExcerptText = cleanSheetWhitespace(excerptText);
   const excluded = isSheetYes(row[config.exclude - 1]);
   const reviewDecision = getSheetExcerptReviewDecision(row);
-  const bookTitle = cleanSheetWhitespace(row[config.bookTitle - 1]);
+  const bookTitle = cleanSheetWhitespace(row[config.bookTitle - 1]) || rawVideoBookTitle;
   const noteMeta = parseIntakeMetadataFromNotes(row[8] || "");
   const bookMeta = resolvePublishingBookMeta(bookTitle, bookTitle);
 
@@ -1913,13 +2440,16 @@ function buildPendingRecordFromSheetRow(row, index, canonicalBookAuthorMap = nul
   return {
     sourceRow: SHEET_SOURCE_CONFIG.startRow + index,
     recordId: (row[config.recordId - 1] || "").toString(),
-    author: resolveGraphicsAuthor(row[config.author - 1] || "", bookTitle, canonicalBookAuthorMap),
-    title: (row[config.title - 1] || "").toString(),
+    intakeMode: isVideoIntake ? "video" : "book",
+    intakeLabel: cleanSheetWhitespace(row[2]),
+    author: resolveGraphicsAuthor(row[config.author - 1] || rawVideoAuthor, bookTitle, canonicalBookAuthorMap),
+    title: (row[config.title - 1] || rawVideoTitle).toString(),
     bookTitle,
     excerptText,
     releaseCatalog: noteMeta.releaseCatalog || cleanSheetWhitespace(bookMeta?.releaseCatalog),
     bookShortener: noteMeta.bookShortener || cleanSheetWhitespace(bookMeta?.bookShortener),
     contentType: noteMeta.contentType || "EXC",
+    socialMediaHandle: noteMeta.socialMediaHandle || "",
     bookPrimarySourceFormat: cleanSheetWhitespace(row[config.validationPrimarySourceFormat - 1]),
     catalogValidation: buildCatalogValidationPayload(row)
   };
@@ -1934,9 +2464,10 @@ function buildApprovedExcerptExportRecordFromSheetRow(row, index, canonicalBookA
   const explicitDecision = cleanSheetWhitespace(row[config.excerptReviewDecision - 1]).toUpperCase();
   const bookTitle = cleanSheetWhitespace(row[config.bookTitle - 1]);
   const approvedForUse = (row[config.approved - 1] || "").toString().trim().toUpperCase() === "Y";
+  const approvedForExcerpt = isAcceptedExcerptReviewDecision(explicitDecision) || approvedForUse;
   const noteMeta = parseIntakeMetadataFromNotes(row[8] || "");
 
-  if (!bookTitle || !cleanedExcerptText || excluded || !approvedForUse) {
+  if (!bookTitle || !cleanedExcerptText || excluded || !approvedForExcerpt) {
     return null;
   }
   if (reviewDecision === "REJECT" || reviewDecision === "NEEDS_CORRECTION") {
@@ -1979,8 +2510,8 @@ function buildApprovedExcerptExportRecordFromSheetRow(row, index, canonicalBookA
     bookTitle,
     excerptText,
     approval: {
-      reviewDecision: explicitDecision === "APPROVE" || approvedForUse ? "approve" : explicitDecision.toLowerCase(),
-      approvedForUse: true,
+      reviewDecision: isAcceptedExcerptReviewDecision(explicitDecision) || approvedForUse ? "approve" : explicitDecision.toLowerCase(),
+      approvedForUse: approvedForExcerpt,
       approvedForQuoteImage: approvedForUse,
       approvedForGraphics: approvedForUse
     },
@@ -2004,6 +2535,9 @@ function buildApprovedExcerptExportRecordFromSheetRow(row, index, canonicalBookA
       updatedAt: normalizedTimestamp
     },
     contentType: noteMeta.contentType || "EXC",
+    socialMediaHandle: noteMeta.socialMediaHandle || "",
+    instagramHandle: noteMeta.socialMediaHandle || "",
+    igHandle: noteMeta.socialMediaHandle || "",
     bookShortener: noteMeta.bookShortener || bookMeta?.bookShortener || "",
     bookLink: "",
     releaseCatalog: noteMeta.releaseCatalog || bookMeta?.releaseCatalog || "",
@@ -2461,21 +2995,6 @@ function buildExcerptGatheringAppendRow(payload = {}) {
     return row;
   }
 
-  if (mode === "fix") {
-    const wrongPart = cleanSheetWhitespace(payload.wrongPart);
-    const incorrectText = String(payload.incorrectText || "").trim();
-    const correctedText = String(payload.correctedText || "").trim();
-    if (!wrongPart || !incorrectText || !correctedText) {
-      throw new Error("Fix intake requires the wrong-part label, incorrect text, and corrected text.");
-    }
-    row[2] = "Fix a quote in one of the quote tools";
-    row[14] = wrongPart;
-    row[15] = incorrectText;
-    row[16] = correctedText;
-    row[18] = cleanSheetWhitespace(payload.author);
-    return row;
-  }
-
   throw new Error("Unsupported excerpt gathering mode.");
 }
 
@@ -2487,7 +3006,7 @@ async function appendExcerptGatheringRow(payload = {}) {
   const rowNumber = rowMatch ? Number(rowMatch[1]) : 0;
   const mode = cleanSheetWhitespace(payload.mode).toLowerCase();
 
-  if (rowNumber && mode === "book") {
+  if (rowNumber && (mode === "book" || mode === "video")) {
     const config = SHEET_SOURCE_CONFIG.columnMap;
     const writes = [
       {
@@ -2694,6 +3213,49 @@ function buildPoetryPleaseGraphicRecord(record) {
   if (qcDecision !== "APPROVE" || !assetUrl) {
     return null;
   }
+  const bookMeta = resolvePublishingBookMeta(record.bookTitle, record.bookTitle);
+  const bookShortener = cleanSheetWhitespace(record.bookShortener) || cleanSheetWhitespace(bookMeta?.bookShortener);
+  const releaseCatalog = cleanSheetWhitespace(record.releaseCatalog) || cleanSheetWhitespace(bookMeta?.releaseCatalog);
+  const sourceTool = cleanSheetWhitespace(record.sourceTool || "P.I.G.");
+  const driveFileId = extractGoogleDriveFileId(assetUrl || record.assetPreviewUrl || "");
+  const proxyAssetUrl = driveFileId
+    ? `${weaverPublicBaseUrl.replace(/\/$/, "")}/api/drive-image?fileId=${encodeURIComponent(driveFileId)}`
+    : "";
+  const handoffAssetUrl = sourceTool === "Weaver replacement" && proxyAssetUrl
+    ? proxyAssetUrl
+    : assetUrl;
+  const handoffPreviewUrl = sourceTool === "Weaver replacement" && proxyAssetUrl
+    ? proxyAssetUrl
+    : cleanSheetWhitespace(record.assetPreviewUrl);
+  const contentType = inferPoetryPleaseContentType(record, "QI");
+
+  if (contentType === "FPI") {
+    const fpiSourceRecordId = bookShortener && cleanSheetWhitespace(record.poemTitle || record.title)
+      ? `${bookShortener}-FPI-${slugToken(record.poemTitle || record.title)}`
+      : cleanSheetWhitespace(record.sourceRecordId || record.recordId) || `pig:${cleanSheetWhitespace(record.pigCompletionId)}`;
+    return {
+      contentType: "FPI",
+      sourceSystem: "weaver",
+      sourceRecordId: fpiSourceRecordId,
+      bookShortener,
+      author: String(record.author || ""),
+      book: String(record.bookTitle || ""),
+      title: String(record.poemTitle || ""),
+      releaseCatalog,
+      driveLink: handoffAssetUrl,
+      imageUrl: handoffPreviewUrl,
+      pageNumber: cleanSheetWhitespace(record.pageNumber),
+      ocrText: String(record.ocrText || record.quoteText || ""),
+      reviewStatus: cleanSheetWhitespace(record.reviewStatus || "needs_ocr"),
+      sourceCompletionId: cleanSheetWhitespace(record.pigCompletionId),
+      sourceRequestId: cleanSheetWhitespace(record.graphicsRequestId),
+      completedAt: cleanSheetWhitespace(record.completedAt),
+      qcApprovedAt: cleanSheetWhitespace(record.graphicsQcUpdatedAt),
+      qcNote: String(record.graphicsQcNote || ""),
+      productionNotes: String(record.notes || ""),
+      sourceTool
+    };
+  }
 
   return {
     source: "weaver_qc_approved_graphic",
@@ -2704,15 +3266,16 @@ function buildPoetryPleaseGraphicRecord(record) {
     author: String(record.author || ""),
     book: String(record.bookTitle || ""),
     excerpt: String(record.quoteText || ""),
-    driveLink: assetUrl,
-    previewUrl: cleanSheetWhitespace(record.assetPreviewUrl),
+    driveLink: handoffAssetUrl,
+    previewUrl: handoffPreviewUrl,
     completedAt: cleanSheetWhitespace(record.completedAt),
     qcApprovedAt: cleanSheetWhitespace(record.graphicsQcUpdatedAt),
     qcNote: String(record.graphicsQcNote || ""),
     productionNotes: String(record.notes || ""),
-    sourceTool: cleanSheetWhitespace(record.sourceTool || "P.I.G."),
+    sourceTool,
     bookLink: "",
-    releaseCatalog: ""
+    bookShortener,
+    releaseCatalog
   };
 }
 
@@ -2740,6 +3303,109 @@ async function getPoetryPleaseApprovedGraphicBooks() {
   return summarizeBooks(records.map(record => ({ bookTitle: record.book })));
 }
 
+async function getManualGraphicsReworkCandidates(bookTitle = "") {
+  const requestedKey = normalizeBookKey(bookTitle);
+  const rows = await readPigCompletedGraphicsRows();
+  const canonicalBookAuthorMap = await getCanonicalGraphicsBookAuthorMap();
+  const runtimeState = await getRuntimeGraphicsState(rows.map(row => row[PIG_COMPLETION_COLUMNS.completionId - 1]));
+  const handoffState = await getRuntimeGraphicsHandoffState(
+    rows.map(row => cleanSheetWhitespace(row[PIG_COMPLETION_COLUMNS.requestId - 1]))
+  );
+  let existingManualReworkCompletionIds = new Set();
+  try {
+    const runtimeQueue = await syncWeaverRuntimeDb("get_handoff_queue", { limit: 5000 });
+    existingManualReworkCompletionIds = new Set(
+      (Array.isArray(runtimeQueue?.records) ? runtimeQueue.records : [])
+        .filter(record => cleanSheetWhitespace(record?.sourceSystem) === "weaver_manual_rework")
+        .map(record => cleanSheetWhitespace(
+          record?.sourcePayload?.sourceCompletionId
+          || record?.sourceCompletionId
+        ))
+        .filter(Boolean)
+    );
+  } catch {
+    existingManualReworkCompletionIds = new Set();
+  }
+  return rows
+    .map((row, index) => overlayRuntimeHandoffState(
+      overlayRuntimeGraphicsState(buildPigQcRecordFromSheetRow(row, index, canonicalBookAuthorMap), runtimeState),
+      handoffState
+    ))
+    .filter(Boolean)
+    .filter(record => normalizeGraphicsQcDecision(record.graphicsQcDecision) === "APPROVE")
+    .filter(record => cleanSheetWhitespace(record.sourceTool) === "P.I.G.")
+    .filter(record => !existingManualReworkCompletionIds.has(cleanSheetWhitespace(record.pigCompletionId)))
+    .filter(record => !requestedKey || normalizeBookKey(record.bookTitle) === requestedKey);
+}
+
+async function createManualGraphicsReworkRequests(records = [], note = "") {
+  const selected = Array.isArray(records) ? records.filter(Boolean) : [];
+  const trimmedNote = String(note || "").trim();
+  if (!selected.length) {
+    return { ok: false, error: "No approved graphics were selected." };
+  }
+  if (!trimmedNote) {
+    return { ok: false, error: "A rework note is required." };
+  }
+
+  const now = new Date().toISOString();
+  const requests = selected.map((record, index) => {
+    const originalCompletionId = cleanSheetWhitespace(record.pigCompletionId || record.sourceCompletionId);
+    const requestId = `manual-rework:${originalCompletionId}:${Date.now()}-${index + 1}`;
+    const contentType = inferPoetryPleaseContentType(record, "QI");
+    return {
+      graphicsRequestId: requestId,
+      sourceSystem: "weaver_manual_rework",
+      sourceStatus: "manual_rework",
+      contentType,
+      imageType: contentType,
+      sourceCompletionId: originalCompletionId,
+      revisionOf: originalCompletionId,
+      originalGraphicsRequestId: cleanSheetWhitespace(record.graphicsRequestId),
+      handoffStatus: "requested",
+      pigStatus: "not_started",
+      qcStatus: "needs_revision",
+      sourcePayload: {
+        queueSheetRow: record.sourceSheetRow || record.sheetRow || "",
+        bookTitle: record.bookTitle || "",
+        poemTitle: record.poemTitle || "",
+        author: record.author || "",
+        quoteText: record.quoteText || "",
+        contentType,
+        imageType: contentType,
+        notes: `Manual rework requested from approved graphic. ${trimmedNote}`,
+        approved: "Y",
+        created: "",
+        workflowStatus: "Manual rework requested",
+        recordId: requestId,
+        graphicsRequestId: requestId,
+        rejectReason: "correct_and_recreate",
+        metadataIssue: "",
+        aestheticIssue: "",
+        qcNote: trimmedNote,
+        source: "weaver_manual_rework",
+        sourceRequestId: cleanSheetWhitespace(record.graphicsRequestId),
+        sourceCompletionId: originalCompletionId,
+        revisionOf: originalCompletionId,
+        originalGraphicsRequestId: cleanSheetWhitespace(record.graphicsRequestId),
+        previousAssetUrl: cleanSheetWhitespace(record.assetLinkUrl || record.assetUrl),
+        previousAssetPreviewUrl: cleanSheetWhitespace(record.assetPreviewUrl),
+        requestedAt: now
+      }
+    };
+  });
+
+  const runtime = await syncWeaverRuntimeDb("upsert_handoff_requests", { requests });
+  invalidateQueueSnapshots();
+  return {
+    ok: true,
+    version: `${appVersion}-service-account`,
+    createdCount: requests.length,
+    requests,
+    runtime
+  };
+}
+
 async function getPoetryPleaseHandoffRecords(bookTitle = "") {
   const requestedKey = normalizeBookKey(bookTitle);
   const rows = await readPigCompletedGraphicsRows();
@@ -2758,6 +3424,11 @@ async function getPoetryPleaseHandoffRecords(bookTitle = "") {
     .filter(record => !requestedKey || normalizeBookKey(record.bookTitle) === requestedKey);
 }
 
+async function getFailedPoetryPleaseHandoffRecords(bookTitle = "") {
+  const records = await getPoetryPleaseHandoffRecords(bookTitle);
+  return records.filter(record => cleanSheetWhitespace(record.poetryPleaseStatus).toUpperCase() === "FAILED");
+}
+
 async function handoffApprovedGraphicsToPoetryPlease(records = []) {
   const approvedRecords = Array.isArray(records) ? records.filter(Boolean) : [];
   if (!approvedRecords.length) {
@@ -2767,30 +3438,191 @@ async function handoffApprovedGraphicsToPoetryPlease(records = []) {
     return { ok: false, skipped: true, reason: "missing_poetry_please_api_key" };
   }
 
-  const response = await fetch(`${poetryPleaseApiUrl.replace(/\/$/, "")}/internal/weaverImport`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": poetryPleaseApiKey
-    },
-    body: JSON.stringify({
-      imageType: "QI",
-      payload: {
-        records: approvedRecords
-      }
-    })
+  const byContentType = new Map();
+  approvedRecords.forEach(record => {
+    const contentType = normalizePoetryPleaseContentType(record.contentType || record.imageType, "QI");
+    if (!byContentType.has(contentType)) byContentType.set(contentType, []);
+    byContentType.get(contentType).push(record);
   });
 
-  const result = await response.json().catch(() => ({}));
-  if (!response.ok || !result.ok) {
-    const message = result.error || `Poetry Please handoff failed with ${response.status}`;
-    const error = new Error(message);
-    error.responseStatus = response.status;
-    error.responseBody = result;
-    throw error;
+  const combinedResults = [];
+  let createdCount = 0;
+  let updatedCount = 0;
+  let errorCount = 0;
+
+  for (const [contentType, groupedRecords] of byContentType.entries()) {
+    const requestBody = contentType === "FPI"
+      ? {
+          records: Array.from(new Map(groupedRecords.map(record => ({
+            contentType: "FPI",
+            sourceSystem: cleanSheetWhitespace(record.sourceSystem || "weaver"),
+            sourceRecordId: cleanSheetWhitespace(record.sourceRecordId),
+            bookShortener: cleanSheetWhitespace(record.bookShortener),
+            author: String(record.author || ""),
+            book: String(record.book || record.bookTitle || ""),
+            title: String(record.title || record.poemTitle || ""),
+            releaseCatalog: cleanSheetWhitespace(record.releaseCatalog),
+            driveLink: cleanSheetWhitespace(record.driveLink),
+            imageUrl: cleanSheetWhitespace(record.imageUrl || record.previewUrl),
+            pageNumber: String(record.pageNumber || ""),
+            ocrText: String(record.ocrText || ""),
+            reviewStatus: cleanSheetWhitespace(record.reviewStatus || "needs_ocr")
+          })).map(record => [record.sourceRecordId, record])).values())
+        }
+      : {
+          imageType: "QI",
+          payload: {
+            records: groupedRecords
+          }
+        };
+    console.log("[poetry-please/weaverImport] request", {
+      contentType,
+      recordCount: groupedRecords.length,
+      payload: requestBody
+    });
+
+    const response = await fetch(`${poetryPleaseApiUrl.replace(/\/$/, "")}/internal/weaverImport`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": poetryPleaseApiKey
+      },
+      body: JSON.stringify(requestBody)
+    });
+
+    const result = await response.json().catch(() => ({}));
+    console.log("[poetry-please/weaverImport] response", {
+      contentType,
+      status: response.status,
+      ok: response.ok,
+      result
+    });
+    if (!response.ok || !result.ok) {
+      const message = result.error || `Poetry Please ${contentType} handoff failed with ${response.status}`;
+      const error = new Error(message);
+      error.responseStatus = response.status;
+      error.responseBody = result;
+      error.requestBody = requestBody;
+      throw error;
+    }
+
+    const resultErrorCount = Number(result?.errorCount || 0);
+    const failedResults = Array.isArray(result?.results)
+      ? result.results.filter(item => item && item.ok === false)
+      : [];
+    if (resultErrorCount > 0 || failedResults.length > 0) {
+      const message = failedResults
+        .map(item => cleanSheetWhitespace(item?.error || item?.message))
+        .filter(Boolean)
+        .join(" | ")
+        || result.error
+        || `Poetry Please ${contentType} handoff reported ${Math.max(resultErrorCount, failedResults.length)} error${Math.max(resultErrorCount, failedResults.length) === 1 ? "" : "s"}`;
+      const error = new Error(message);
+      error.responseStatus = response.status;
+      error.responseBody = result;
+      error.requestBody = requestBody;
+      throw error;
+    }
+
+    createdCount += Number(result?.createdCount || 0);
+    updatedCount += Number(result?.updatedCount || 0);
+    errorCount += resultErrorCount;
+    combinedResults.push({ contentType, count: groupedRecords.length, request: requestBody, response: result });
   }
 
-  return result;
+  return {
+    ok: true,
+    createdCount,
+    updatedCount,
+    errorCount,
+    results: combinedResults
+  };
+}
+
+async function retryFailedGraphicsHandoffs(records = []) {
+  const failedRecords = Array.isArray(records) ? records.filter(Boolean) : [];
+  if (!failedRecords.length) {
+    return { ok: true, skipped: true, reason: "no_records", retriedCount: 0 };
+  }
+
+  const approvedRecords = failedRecords
+    .map(buildPoetryPleaseGraphicRecord)
+    .filter(Boolean);
+  if (!approvedRecords.length) {
+    return { ok: false, error: "No retryable approved graphics were selected." };
+  }
+
+  let poetryPlease;
+  try {
+    poetryPlease = await handoffApprovedGraphicsToPoetryPlease(approvedRecords);
+  } catch (error) {
+    poetryPlease = {
+      ok: false,
+      error: error.message,
+      responseStatus: error.responseStatus || 0,
+      responseBody: error.responseBody || null,
+      requestBody: error.requestBody || null
+    };
+  }
+
+  const handoffUpdatedAt = new Date().toISOString();
+  const handoffStatus = poetryPlease.ok ? "HANDED_OFF" : "FAILED";
+  const handoffNote = poetryPlease.ok
+    ? `retry created=${Number(poetryPlease.createdCount || 0)} updated=${Number(poetryPlease.updatedCount || 0)} errors=${Number(poetryPlease.errorCount || 0)}`
+    : `retry failed: ${String(poetryPlease.error || poetryPlease.reason || "handoff_failed")}`;
+
+  const handoffRequests = failedRecords.flatMap(record => {
+    const rowNumber = Number(record.sheetRow || 0);
+    if (!rowNumber) return [];
+    return [
+      {
+        range: `'${pigCompletedGraphicsSheetName.replace(/'/g, "''")}'!Q${rowNumber}`,
+        values: [[handoffStatus]]
+      },
+      {
+        range: `'${pigCompletedGraphicsSheetName.replace(/'/g, "''")}'!R${rowNumber}`,
+        values: [[handoffUpdatedAt]]
+      },
+      {
+        range: `'${pigCompletedGraphicsSheetName.replace(/'/g, "''")}'!S${rowNumber}`,
+        values: [[handoffNote]]
+      }
+    ];
+  });
+  if (handoffRequests.length) {
+    await batchUpdateSheetValuesServer(handoffRequests);
+  }
+
+  try {
+    await syncWeaverRuntimeDb("insert_poetry_please_handoffs", {
+      handoffs: approvedRecords.map(record => ({
+        graphicsCompletionId: record.sourceCompletionId,
+        handoffStatus,
+        handedOffAt: handoffUpdatedAt,
+        handoffMode: "retry",
+        payload: {
+          qcApprovedAt: record.qcApprovedAt,
+          sourceRequestId: record.sourceRequestId,
+          createdCount: Number(poetryPlease.createdCount || 0),
+          updatedCount: Number(poetryPlease.updatedCount || 0),
+          errorCount: Number(poetryPlease.errorCount || 0),
+          results: poetryPlease.results || [],
+          responseStatus: poetryPlease.responseStatus || 0,
+          responseBody: poetryPlease.responseBody || null,
+          requestBody: poetryPlease.requestBody || null,
+          note: handoffNote
+        }
+      }))
+    });
+  } catch {
+    // Keep the sheet as source of truth if DB handoff shadow write fails.
+  }
+
+  return {
+    ok: true,
+    retriedCount: approvedRecords.length,
+    poetryPlease
+  };
 }
 
 function buildPoetryPleaseExcerptRecord(record) {
@@ -2828,6 +3660,9 @@ function buildPoetryPleaseExcerptRecord(record) {
     bookShortener,
     bookLink: String(record.bookLink || ""),
     releaseCatalog,
+    socialMediaHandle: cleanSheetWhitespace(record.socialMediaHandle || record.instagramHandle || record.igHandle),
+    instagramHandle: cleanSheetWhitespace(record.socialMediaHandle || record.instagramHandle || record.igHandle),
+    igHandle: cleanSheetWhitespace(record.socialMediaHandle || record.instagramHandle || record.igHandle),
     driveLink: String(record.driveLink || ""),
     sourceUrl: String(record.sourceUrl || ""),
     pageNumber: String(record.pageNumber || "")
@@ -3117,6 +3952,8 @@ function buildCleanupSheetGraphicsRecords(values = [], qcState = new Map(), cano
 
     const recordId = (row[8] || "").toString();
     const qc = qcState.get(String(index + 2)) || {};
+    const notes = (row[4] || "").toString();
+    const noteMeta = parseIntakeMetadataFromNotes(notes);
     records.push({
       sheetRow: index + 2,
       storageTarget: "cleanup_sheet",
@@ -3124,7 +3961,10 @@ function buildCleanupSheetGraphicsRecords(values = [], qcState = new Map(), cano
       poemTitle: (row[1] || "").toString(),
       bookTitle: currentBookTitle,
       quoteText: (row[3] || "").toString(),
-      notes: (row[4] || "").toString(),
+      notes,
+      socialMediaHandle: noteMeta.socialMediaHandle || "",
+      instagramHandle: noteMeta.socialMediaHandle || "",
+      igHandle: noteMeta.socialMediaHandle || "",
       approved: cleanSheetWhitespace(row[5]),
       created: cleanSheetWhitespace(row[6]),
       workflowStatus: cleanSheetWhitespace(row[7]),
@@ -3145,8 +3985,8 @@ function buildCleanupSheetGraphicsRecords(values = [], qcState = new Map(), cano
   return records;
 }
 
-async function getPendingGraphicsQcRecords() {
-  return getCachedQueueSnapshot("graphics-qc-pending", async () => {
+async function getPendingGraphicsQcRecords({ includeCleanup = true } = {}) {
+  return getCachedQueueSnapshot(`graphics-qc-pending:${includeCleanup ? "all" : "pig-only"}`, async () => {
     const range = `'${graphicsCleanupSheetName.replace(/'/g, "''")}'!A2:I`;
     const [values, qcState, pigRows, canonicalBookAuthorMap] = await Promise.all([
       fetchSheetValuesServer(range),
@@ -3159,13 +3999,15 @@ async function getPendingGraphicsQcRecords() {
       pigRows.map(row => cleanSheetWhitespace(row[PIG_COMPLETION_COLUMNS.requestId - 1]))
     );
 
-    const cleanupRecords = buildCleanupSheetGraphicsRecords(values, qcState, canonicalBookAuthorMap);
-    const pigRecords = pigRows
+    const cleanupRecords = includeCleanup
+      ? buildCleanupSheetGraphicsRecords(values, qcState, canonicalBookAuthorMap)
+      : [];
+    const pigRecords = await hydrateGraphicsFolderAssets(pigRows
       .map((row, index) => overlayRuntimeHandoffState(
         overlayRuntimeGraphicsState(buildPigQcRecordFromSheetRow(row, index, canonicalBookAuthorMap), runtimeState),
         handoffState
       ))
-      .filter(Boolean);
+      .filter(Boolean));
 
     return collapsePendingGraphicsQcRecords(
       mergeRecordCollections([cleanupRecords, pigRecords])
@@ -3194,23 +4036,54 @@ function buildGraphicsReworkRequestRecord(completion) {
     aestheticIssue ? `Aesthetic issue: ${aestheticIssue}` : "",
     parsedNote.details ? `Details: ${parsedNote.details}` : ""
   ].filter(Boolean).join(" ");
+  const originalGraphicsRequestId = cleanSheetWhitespace(completion.graphicsRequestId);
+  const revisionOf = cleanSheetWhitespace(completion.pigCompletionId);
+  const sourceRecordId = cleanSheetWhitespace(completion.sourceRecordId || completion.recordId);
+  const contentType = normalizePoetryPleaseContentType(completion.contentType || completion.imageType, "QI");
+  const contentId = cleanSheetWhitespace(completion.contentId || completion.imageId || sourceRecordId || `pig:${revisionOf}`);
+  const requestedChanges = parsedNote.details || completion.graphicsQcNote || reworkNotes;
 
   return {
     queueSheetRow: completion.sourceSheetRow || completion.sheetRow || "",
+    sourceSheetRow: completion.sourceSheetRow || completion.sheetRow || "",
     bookTitle: completion.bookTitle,
     poemTitle: completion.poemTitle,
     author: completion.author,
     quoteText: completion.quoteText,
+    text: completion.quoteText,
     notes: reworkNotes,
     approved: "Y",
     created: "",
     workflowStatus: "QC requested rework",
     recordId: `rework:${cleanSheetWhitespace(completion.pigCompletionId)}`,
     graphicsRequestId: buildGraphicsReworkRequestId(completion),
+    originalGraphicsRequestId,
+    revisionOf,
+    version: 2,
+    pigProjectId: cleanSheetWhitespace(completion.pigProjectId),
+    sourceRecordId,
+    contentId,
+    imageId: contentId,
+    contentType,
+    imageType: contentType,
+    queueView: "rework",
+    isActionable: true,
+    statusLabel: "rework requested",
+    nextAction: "rework",
+    reworkReason: rejectReason,
     rejectReason,
+    rejectedReason: rejectReason,
     metadataIssue,
     aestheticIssue,
     qcNote: completion.graphicsQcNote || "",
+    requestedChanges,
+    previousAssetUrl: cleanSheetWhitespace(completion.assetLinkUrl),
+    previousAssetPreviewUrl: cleanSheetWhitespace(completion.assetPreviewUrl),
+    assetUrl: cleanSheetWhitespace(completion.assetLinkUrl),
+    assetPreviewUrl: cleanSheetWhitespace(completion.assetPreviewUrl),
+    handoffStatus: "rework_requested",
+    pigStatus: "needs_rework",
+    qcStatus: "rejected",
     source: "weaver_qc_rework",
     sourceRequestId: cleanSheetWhitespace(completion.graphicsRequestId),
     sourceCompletionId: cleanSheetWhitespace(completion.pigCompletionId)
@@ -3325,6 +4198,32 @@ function buildCompletedRequestLookup(rows = []) {
   return { requestIds, sourceSheetRows, sourceRecordIds };
 }
 
+function dedupeGraphicsQueueRecords(records = []) {
+  const byKey = new Map();
+
+  records.forEach(record => {
+    const key = [
+      normalizeBookKey(record?.bookTitle),
+      cleanSheetWhitespace(record?.author).toLowerCase(),
+      cleanSheetWhitespace(record?.poemTitle).toLowerCase(),
+      cleanSheetWhitespace(record?.quoteText)
+    ].join("::");
+    if (!key.replace(/:+/g, "")) return;
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, record);
+      return;
+    }
+    const existingRow = Number(existing.queueSheetRow || 0) || Number.MAX_SAFE_INTEGER;
+    const nextRow = Number(record.queueSheetRow || 0) || Number.MAX_SAFE_INTEGER;
+    if (nextRow < existingRow) {
+      byKey.set(key, record);
+    }
+  });
+
+  return Array.from(byKey.values());
+}
+
 async function getPigGraphicsRequests(filterMode = "all", { includeCompleted = false } = {}) {
   const cacheKey = `graphics-requests:${cleanSheetWhitespace(filterMode).toLowerCase() || "all"}:${includeCompleted ? "with-completed" : "open-only"}`;
   return getCachedQueueSnapshot(cacheKey, async () => {
@@ -3350,20 +4249,9 @@ async function getPigGraphicsRequests(filterMode = "all", { includeCompleted = f
           && (!recordId || !completedLookup.sourceRecordIds.has(recordId));
       });
 
-    const queueLedgerRequests = records.map(record => ({
-      graphicsRequestId: record.graphicsRequestId,
-      sourceSystem: "weaver",
-      sourceStatus: record.requestStatus || "open",
-      sourcePayload: {
-        graphicsRequestId: record.graphicsRequestId,
-        queueSheetRow: record.queueSheetRow,
-        recordId: record.recordId,
-        author: record.author,
-        poemTitle: record.poemTitle,
-        bookTitle: record.bookTitle,
-        quoteText: record.quoteText
-      }
-    }));
+    const queueLedgerRequests = records
+      .map(buildGraphicsHandoffLedgerRequest)
+      .filter(request => cleanSheetWhitespace(request.graphicsRequestId));
     if (queueLedgerRequests.length) {
       await syncWeaverRuntimeDb("upsert_handoff_requests", { requests: queueLedgerRequests }).catch(() => null);
       const ledgerByRequestId = await getRuntimeGraphicsHandoffState(
@@ -3388,13 +4276,358 @@ async function getPigGraphicsRequests(filterMode = "all", { includeCompleted = f
       records = records.filter(record => allowed.has(normalizeBookKey(record.bookTitle)));
     }
 
-    return [...records, ...reworkRequests];
+    return [...dedupeGraphicsQueueRecords(records), ...reworkRequests];
   });
 }
 
 async function getPigGraphicsRequestBooks(filterMode = "all") {
   const records = await getPigGraphicsRequests(filterMode);
   return summarizeBooks(records);
+}
+
+function summarizeGraphicsHandoffBooks(records = []) {
+  const byKey = new Map();
+
+  records.forEach(record => {
+    const bookTitle = cleanSheetWhitespace(record.bookTitle);
+    const bookKey = normalizeBookKey(bookTitle);
+    if (!bookKey) return;
+    if (!byKey.has(bookKey)) {
+      byKey.set(bookKey, {
+        bookTitle,
+        bookKey,
+        count: 0,
+        actionableCount: 0,
+        reworkCount: 0
+      });
+    }
+
+    const summary = byKey.get(bookKey);
+    summary.bookTitle = choosePreferredBookTitle(summary.bookTitle, bookTitle);
+    summary.count += 1;
+    summary.actionableCount += 1;
+    if (
+      cleanSheetWhitespace(record.queueView).toLowerCase() === "rework"
+      || cleanSheetWhitespace(record.sourceSystem || record.source).toLowerCase() === "weaver_qc_rework"
+    ) {
+      summary.reworkCount += 1;
+    }
+  });
+
+  return Array.from(byKey.values())
+    .map(summary => {
+      const nextAction = summary.reworkCount > 0 && summary.reworkCount === summary.actionableCount
+        ? "rework"
+        : "generate";
+      const statusLabel = nextAction === "rework"
+        ? `${summary.actionableCount} rework`
+        : `${summary.actionableCount} open`;
+      return {
+        ...summary,
+        nextAction,
+        statusLabel
+      };
+    })
+    .sort((left, right) => left.bookTitle.localeCompare(right.bookTitle));
+}
+
+const COVERAGE_NEEDS_TARGET_COUNT = 25;
+const COVERAGE_NEEDS_EXCLUDED_BOOK_KEYS = new Set([
+  "short form contest may 2026",
+  "smoke test ledger 1778781334"
+]);
+
+function isExcludedCoverageNeedsBook(bookTitle = "") {
+  const key = normalizeBookKey(bookTitle);
+  return Boolean(key && (
+    COVERAGE_NEEDS_EXCLUDED_BOOK_KEYS.has(key)
+      || key.startsWith("smoke test ledger ")
+  ));
+}
+
+function parseOptionalRating(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const rating = Number(value);
+  return Number.isFinite(rating) ? rating : null;
+}
+
+function getCoveragePriority(record = {}, bookSummary = {}) {
+  const excerptRating = parseOptionalRating(record.excerptRating);
+  const poemRating = parseOptionalRating(record.poemRating);
+  if (cleanSheetWhitespace(record.source).toLowerCase() === "weaver_qc_rework") {
+    return {
+      priorityTier: 0,
+      priorityScore: 100000 + Number(bookSummary.remainingActionableNeeded || 0)
+    };
+  }
+  if (excerptRating !== null && poemRating !== null) {
+    return {
+      priorityTier: 1,
+      priorityScore: excerptRating + poemRating
+    };
+  }
+  if (excerptRating !== null) {
+    return {
+      priorityTier: 2,
+      priorityScore: excerptRating
+    };
+  }
+  return {
+    priorityTier: 3,
+    priorityScore: 0
+  };
+}
+
+function getCoverageRequestId(record = {}) {
+  return cleanSheetWhitespace(record.graphicsRequestId)
+    || buildWeaverGraphicsRequestId({
+      recordId: record.recordId,
+      sheetRow: record.queueSheetRow || record.sourceSheetRow,
+      author: record.author,
+      poemTitle: record.poemTitle,
+      bookTitle: record.bookTitle
+    });
+}
+
+function buildCoverageQueueRecord(record = {}, bookSummary = {}) {
+  const priority = getCoveragePriority(record, bookSummary);
+  const isRework = cleanSheetWhitespace(record.source).toLowerCase() === "weaver_qc_rework";
+  return {
+    queueView: "coverage_needs",
+    isActionable: true,
+    nextAction: isRework ? "rework" : "generate",
+    statusLabel: isRework ? "Needs rework" : "Needs coverage",
+    bookTitle: cleanSheetWhitespace(record.bookTitle),
+    graphicsRequestId: getCoverageRequestId(record),
+    excerptId: cleanSheetWhitespace(record.recordId || record.sourceRecordId),
+    poemId: cleanSheetWhitespace(record.poemId),
+    quoteText: String(record.quoteText || record.text || ""),
+    text: String(record.quoteText || record.text || ""),
+    author: String(record.author || ""),
+    poemTitle: String(record.poemTitle || ""),
+    approvedCount: bookSummary.approvedCount || 0,
+    poetryPleaseQiCount: bookSummary.poetryPleaseQiCount ?? null,
+    weaverCompletedQiCount: bookSummary.weaverCompletedQiCount || 0,
+    pendingQcCount: bookSummary.pendingQcCount || 0,
+    targetCount: COVERAGE_NEEDS_TARGET_COUNT,
+    remainingActionableNeeded: bookSummary.remainingActionableNeeded || 0,
+    priorityTier: priority.priorityTier,
+    priorityScore: priority.priorityScore,
+    excerptRating: parseOptionalRating(record.excerptRating),
+    poemRating: parseOptionalRating(record.poemRating),
+    coverageStatus: isRework ? "rework" : "candidate",
+    countsTowardCoverage: false,
+    reworkReason: cleanSheetWhitespace(record.reworkReason || record.rejectReason),
+    revisionOf: cleanSheetWhitespace(record.revisionOf),
+    previousAssetUrl: cleanSheetWhitespace(record.previousAssetUrl || record.assetUrl),
+    previousAssetPreviewUrl: cleanSheetWhitespace(record.previousAssetPreviewUrl || record.assetPreviewUrl),
+    queueSheetRow: record.queueSheetRow || record.sourceSheetRow || "",
+    sourceSheetRow: record.sourceSheetRow || record.queueSheetRow || "",
+    recordId: cleanSheetWhitespace(record.recordId),
+    source: cleanSheetWhitespace(record.source || "weaver_graphics_queue")
+  };
+}
+
+function isApprovedCoverageGraphic(record = {}) {
+  return normalizeGraphicsQcDecision(record.graphicsQcDecision) === "APPROVE";
+}
+
+function isPendingCoverageQcGraphic(record = {}) {
+  return !normalizeGraphicsQcDecision(record.graphicsQcDecision);
+}
+
+function isCoverageInProgressLedgerState(record = {}) {
+  const pigStatus = cleanSheetWhitespace(record.pigStatus || record.ledgerPigStatus).toLowerCase();
+  const handoffStatus = cleanSheetWhitespace(record.handoffStatus || record.ledgerHandoffStatus).toLowerCase();
+  return ["claimed", "generated", "exported", "uploaded"].includes(pigStatus)
+    || ["claimed"].includes(handoffStatus);
+}
+
+async function fetchPoetryPleaseQiCoverageCounts() {
+  if (!poetryPleaseApiKey) {
+    return { countsByBookKey: new Map(), ok: false, error: "missing_poetry_please_api_key" };
+  }
+  try {
+    const url = new URL(`${poetryPleaseApiUrl.replace(/\/$/, "")}/internal/coverageCounts`);
+    url.searchParams.set("type", "QI");
+    const response = await fetch(url, {
+      headers: {
+        Accept: "application/json",
+        "x-api-key": poetryPleaseApiKey
+      }
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || !result.ok) {
+      throw new Error(result.error || `coverageCounts failed with ${response.status}`);
+    }
+    const countsByBookKey = new Map();
+    (Array.isArray(result.counts) ? result.counts : []).forEach(entry => {
+      const count = Number(entry.count || 0);
+      const keys = [
+        normalizeBookKey(entry.bookKey),
+        normalizeBookKey(entry.bookTitle),
+        cleanSheetWhitespace(entry.bookTitle).includes(":")
+          ? normalizeBookKey(cleanSheetWhitespace(entry.bookTitle).split(/\s*:\s*/, 1)[0])
+          : ""
+      ].filter(Boolean);
+      keys.forEach(bookKey => {
+        countsByBookKey.set(bookKey, Math.max(Number(countsByBookKey.get(bookKey) || 0), count));
+      });
+    });
+    return {
+      countsByBookKey,
+      ok: true,
+      source: "poetry_please",
+      snapshotMeta: result.snapshotMeta || null
+    };
+  } catch (error) {
+    console.warn("[coverage_needs] Poetry Please QI count fallback:", error.message);
+    return { countsByBookKey: new Map(), ok: false, error: error.message };
+  }
+}
+
+function buildCoverageBookSummaries({ openRecords = [], pendingQcRecords = [], completedRecords = [], reworkRecords = [], ledgerByRequestId = {}, poetryPleaseQiCountsByBookKey = new Map() } = {}) {
+  const byKey = new Map();
+  const ensure = bookTitle => {
+    const title = cleanSheetWhitespace(bookTitle);
+    const key = normalizeBookKey(title);
+    if (!key) return null;
+    if (isExcludedCoverageNeedsBook(title)) return null;
+    if (!byKey.has(key)) {
+      byKey.set(key, {
+        bookTitle: title,
+        bookKey: key,
+        targetCount: COVERAGE_NEEDS_TARGET_COUNT,
+        approvedCount: 0,
+        weaverCompletedQiCount: 0,
+        pendingQcCount: 0,
+        inProgressCount: 0,
+        reworkCount: 0,
+        candidateCount: 0
+      });
+    }
+    const summary = byKey.get(key);
+    summary.bookTitle = choosePreferredBookTitle(summary.bookTitle, title);
+    return summary;
+  };
+
+  completedRecords.forEach(record => {
+    if (!isApprovedCoverageGraphic(record)) return;
+    const summary = ensure(record.bookTitle);
+    if (summary) summary.weaverCompletedQiCount += 1;
+  });
+  pendingQcRecords.forEach(record => {
+    if (!isPendingCoverageQcGraphic(record)) return;
+    const summary = ensure(record.bookTitle);
+    if (summary) summary.pendingQcCount += 1;
+  });
+  reworkRecords.forEach(record => {
+    const summary = ensure(record.bookTitle);
+    if (summary) summary.reworkCount += 1;
+  });
+  openRecords.forEach(record => {
+    const summary = ensure(record.bookTitle);
+    if (!summary) return;
+    const ledger = ledgerByRequestId[getCoverageRequestId(record)] || {};
+    if (isCoverageInProgressLedgerState(ledger)) {
+      summary.inProgressCount += 1;
+    } else {
+      summary.candidateCount += 1;
+    }
+  });
+
+  return Array.from(byKey.values()).map(summary => {
+    const poetryPleaseQiCount = poetryPleaseQiCountsByBookKey.get(summary.bookKey);
+    summary.approvedCount = Number.isFinite(poetryPleaseQiCount)
+      ? poetryPleaseQiCount
+      : summary.weaverCompletedQiCount;
+    const remainingApprovedNeeded = Math.max(0, COVERAGE_NEEDS_TARGET_COUNT - summary.approvedCount);
+    const remainingActionableNeeded = Math.max(
+      0,
+      COVERAGE_NEEDS_TARGET_COUNT - summary.approvedCount - summary.pendingQcCount - summary.inProgressCount
+    );
+    const nextAction = summary.reworkCount > 0
+      ? "rework"
+      : (remainingActionableNeeded > 0 ? "generate" : "hold");
+    return {
+      bookTitle: summary.bookTitle,
+      bookKey: summary.bookKey,
+      targetCount: COVERAGE_NEEDS_TARGET_COUNT,
+      approvedCount: summary.approvedCount,
+      poetryPleaseQiCount: Number.isFinite(poetryPleaseQiCount) ? poetryPleaseQiCount : null,
+      weaverCompletedQiCount: summary.weaverCompletedQiCount,
+      pendingQcCount: summary.pendingQcCount,
+      inProgressCount: summary.inProgressCount,
+      reworkCount: summary.reworkCount,
+      remainingApprovedNeeded,
+      remainingActionableNeeded,
+      statusLabel: `${summary.approvedCount} approved + ${summary.pendingQcCount} pending / ${COVERAGE_NEEDS_TARGET_COUNT}`,
+      nextAction
+    };
+  }).filter(summary => summary.remainingActionableNeeded > 0);
+}
+
+async function getCoverageNeedsView(filterMode = "coverage_needs") {
+  const [allOpenRecords, pendingQcRecords, completedRows, reworkRecords] = await Promise.all([
+    getPigGraphicsRequests("all"),
+    getPendingGraphicsQcRecords({ includeCleanup: false }),
+    readPigCompletedGraphicsRows(),
+    getPigReworkRequests(filterMode)
+  ]);
+  const completedRecords = completedRows
+    .map((row, index) => buildPigQcRecordFromSheetRow(row, index))
+    .filter(Boolean);
+  const openRecords = allOpenRecords.filter(record => cleanSheetWhitespace(record.source).toLowerCase() !== "weaver_qc_rework");
+  const requestIds = openRecords.map(getCoverageRequestId).filter(Boolean);
+  const [ledgerByRequestId, poetryPleaseCoverage] = await Promise.all([
+    getRuntimeGraphicsHandoffState(requestIds),
+    fetchPoetryPleaseQiCoverageCounts()
+  ]);
+  const poetryPleaseQiCountsByBookKey = poetryPleaseCoverage.countsByBookKey || new Map();
+  const books = buildCoverageBookSummaries({
+    openRecords,
+    pendingQcRecords,
+    completedRecords,
+    reworkRecords,
+    ledgerByRequestId,
+    poetryPleaseQiCountsByBookKey
+  }).sort((left, right) => {
+    if (left.nextAction === "rework" && right.nextAction !== "rework") return -1;
+    if (left.nextAction !== "rework" && right.nextAction === "rework") return 1;
+    return right.remainingActionableNeeded - left.remainingActionableNeeded
+      || left.bookTitle.localeCompare(right.bookTitle);
+  });
+  const bookByKey = Object.fromEntries(books.map(book => [book.bookKey, book]));
+  const freshRecords = openRecords
+    .filter(record => {
+      const summary = bookByKey[normalizeBookKey(record.bookTitle)];
+      if (!summary || summary.remainingActionableNeeded <= 0) return false;
+      const ledger = ledgerByRequestId[getCoverageRequestId(record)] || {};
+      return !isCoverageInProgressLedgerState(ledger);
+    })
+    .map(record => buildCoverageQueueRecord(record, bookByKey[normalizeBookKey(record.bookTitle)]));
+  const reworkQueueRecords = reworkRecords
+    .filter(record => bookByKey[normalizeBookKey(record.bookTitle)])
+    .map(record => buildCoverageQueueRecord(record, bookByKey[normalizeBookKey(record.bookTitle)]));
+  const records = [...reworkQueueRecords, ...freshRecords]
+    .sort((left, right) => left.priorityTier - right.priorityTier
+      || right.priorityScore - left.priorityScore
+      || right.remainingActionableNeeded - left.remainingActionableNeeded
+      || Number(left.queueSheetRow || left.sourceSheetRow || 0) - Number(right.queueSheetRow || right.sourceSheetRow || 0)
+      || cleanSheetWhitespace(left.graphicsRequestId).localeCompare(cleanSheetWhitespace(right.graphicsRequestId)));
+
+  return {
+    ok: true,
+    filter: "coverage_needs",
+    poetryPleaseCoverage: {
+      ok: Boolean(poetryPleaseCoverage.ok),
+      source: poetryPleaseCoverage.source || "weaver_fallback",
+      error: poetryPleaseCoverage.error || "",
+      snapshotMeta: poetryPleaseCoverage.snapshotMeta || null
+    },
+    books,
+    records
+  };
 }
 
 function summarizePigCompletionsByRequest(rows = []) {
@@ -3535,8 +4768,11 @@ async function getGraphicsBooksFromSheets(mode) {
   const resolvedMode = cleanSheetWhitespace(mode).toLowerCase() || "queue";
   let books = [];
 
-  if (resolvedMode === "cleanup") {
-    const pendingRecords = await getPendingGraphicsQcRecords();
+  if (resolvedMode === "qc") {
+    const pendingRecords = await getPendingGraphicsQcRecords({ includeCleanup: false });
+    books = summarizeBooks(pendingRecords.map(record => ({ bookTitle: record.bookTitle })));
+  } else if (resolvedMode === "cleanup") {
+    const pendingRecords = await getPendingGraphicsQcRecords({ includeCleanup: true });
     books = summarizeBooks(pendingRecords.map(record => ({ bookTitle: record.bookTitle })));
   } else if (resolvedMode === "mismatch") {
     const mismatchRecords = await getPigMismatchRecords("all");
@@ -3544,6 +4780,18 @@ async function getGraphicsBooksFromSheets(mode) {
   } else if (resolvedMode === "handoff") {
     const handoffRecords = await getPoetryPleaseHandoffRecords();
     books = summarizeBooks(handoffRecords.map(record => ({ bookTitle: record.bookTitle })));
+  } else if (resolvedMode === "handoff_retry") {
+    const failedHandoffRecords = await getFailedPoetryPleaseHandoffRecords();
+    books = summarizeBooks(failedHandoffRecords.map(record => ({ bookTitle: record.bookTitle })));
+  } else if (resolvedMode === "rework") {
+    const reworkRecords = await getManualGraphicsReworkCandidates();
+    books = summarizeBooks(reworkRecords.map(record => ({ bookTitle: record.bookTitle })));
+  } else if (resolvedMode === "coverage") {
+    const rows = await getSourceSheetValuesCached();
+    books = summarizeBooks(rows
+      .map(row => buildCoverageRecordFromSourceRow(row))
+      .filter(Boolean)
+      .map(record => ({ bookTitle: record.bookTitle })));
   } else {
     const openRequests = await getPigGraphicsRequests("all");
     books = summarizeBooks(openRequests.map(record => ({ bookTitle: record.bookTitle })));
@@ -3557,16 +4805,190 @@ async function getGraphicsBooksFromSheets(mode) {
   };
 }
 
+function buildCoverageRecordFromSourceRow(row) {
+  const config = SHEET_SOURCE_CONFIG.columnMap;
+  const bookTitle = cleanSheetWhitespace(
+    row[config.correctedBookTitle - 1]
+    || row[config.validationCanonicalBook - 1]
+    || row[config.bookTitle - 1]
+    || row[7]
+    || row[13]
+  );
+  const excerptText = String(
+    row[config.correctedExcerpt - 1]
+    || row[config.excerpt - 1]
+    || row[6]
+    || row[12]
+    || ""
+  ).trim();
+  if (!bookTitle || !excerptText || isSheetYes(row[config.exclude - 1])) {
+    return null;
+  }
+
+  return {
+    timestamp: cleanSheetWhitespace(row[0]),
+    email: cleanSheetWhitespace(row[1]).toLowerCase(),
+    author: resolveGraphicsAuthor(
+      row[config.correctedAuthor - 1]
+      || row[config.validationCanonicalAuthor - 1]
+      || row[config.author - 1]
+      || row[3]
+      || row[9]
+      || "",
+      bookTitle
+    ),
+    poemTitle: cleanSheetWhitespace(
+      row[config.correctedTitle - 1]
+      || row[config.validationMatchedPoemTitle - 1]
+      || row[config.title - 1]
+      || row[5]
+      || row[11]
+    ),
+    bookTitle,
+    excerptText
+  };
+}
+
+async function getBookCoverageFromSheets(bookTitle) {
+  const requestedKey = normalizeBookKey(bookTitle);
+  const rows = (await getSourceSheetValuesCached())
+    .map(row => buildCoverageRecordFromSourceRow(row))
+    .filter(record => record && normalizeBookKey(record.bookTitle) === requestedKey);
+
+  const preferredBookTitle = rows.reduce(
+    (current, record) => choosePreferredBookTitle(current, record.bookTitle),
+    cleanSheetWhitespace(bookTitle)
+  );
+
+  let catalogPoems = [];
+  try {
+    const catalogResult = await getExcerptGatheringPoemsForBook(preferredBookTitle);
+    catalogPoems = Array.isArray(catalogResult?.poems) ? catalogResult.poems : [];
+  } catch (_error) {
+    catalogPoems = [];
+  }
+
+  const poemStats = new Map();
+  const contributorStats = new Map();
+
+  rows.forEach(record => {
+    const poemKey = normalizeBookKey(record.poemTitle || "__untitled__");
+    if (!poemStats.has(poemKey)) {
+      poemStats.set(poemKey, {
+        poemTitle: record.poemTitle || "Untitled poem",
+        excerptCount: 0,
+        totalWords: 0,
+        contributors: new Set()
+      });
+    }
+    const poem = poemStats.get(poemKey);
+    poem.excerptCount += 1;
+    poem.totalWords += String(record.excerptText || "").trim().split(/\s+/).filter(Boolean).length;
+    if (record.email) poem.contributors.add(record.email);
+
+    const contributorKey = record.email || "__unknown__";
+    if (!contributorStats.has(contributorKey)) {
+      contributorStats.set(contributorKey, {
+        email: record.email || "Unknown",
+        excerptCount: 0,
+        poems: new Set(),
+        totalWords: 0,
+        firstTimestamp: "",
+        lastTimestamp: ""
+      });
+    }
+    const contributor = contributorStats.get(contributorKey);
+    contributor.excerptCount += 1;
+    contributor.totalWords += String(record.excerptText || "").trim().split(/\s+/).filter(Boolean).length;
+    contributor.poems.add(record.poemTitle || "Untitled poem");
+    if (record.timestamp && (!contributor.firstTimestamp || record.timestamp < contributor.firstTimestamp)) {
+      contributor.firstTimestamp = record.timestamp;
+    }
+    if (record.timestamp && (!contributor.lastTimestamp || record.timestamp > contributor.lastTimestamp)) {
+      contributor.lastTimestamp = record.timestamp;
+    }
+  });
+
+  const catalogTitles = catalogPoems
+    .map(poem => cleanSheetWhitespace(poem.title))
+    .filter(Boolean);
+  const coveredCatalogKeys = new Set(Array.from(poemStats.values()).map(poem => normalizeBookKey(poem.poemTitle)));
+  const missingPoems = catalogTitles.filter(title => !coveredCatalogKeys.has(normalizeBookKey(title)));
+
+  return {
+    ok: true,
+    version: `${appVersion}-service-account`,
+    bookTitle: preferredBookTitle,
+    summary: {
+      totalExcerpts: rows.length,
+      totalCatalogPoems: catalogTitles.length,
+      poemsWithExcerpts: poemStats.size,
+      poemsWithoutExcerpts: missingPoems.length,
+      contributors: contributorStats.size
+    },
+    topPoems: Array.from(poemStats.values())
+      .map(poem => ({
+        poemTitle: poem.poemTitle,
+        excerptCount: poem.excerptCount,
+        contributorCount: poem.contributors.size,
+        averageWords: poem.excerptCount ? Math.round(poem.totalWords / poem.excerptCount) : 0
+      }))
+      .sort((left, right) => right.excerptCount - left.excerptCount || left.poemTitle.localeCompare(right.poemTitle))
+      .slice(0, 12),
+    missingPoems: missingPoems.slice(0, 30),
+    contributors: Array.from(contributorStats.values())
+      .map(person => ({
+        email: person.email,
+        excerptCount: person.excerptCount,
+        uniquePoems: person.poems.size,
+        averageWords: person.excerptCount ? Math.round(person.totalWords / person.excerptCount) : 0,
+        firstTimestamp: person.firstTimestamp,
+        lastTimestamp: person.lastTimestamp
+      }))
+      .sort((left, right) => right.excerptCount - left.excerptCount || left.email.localeCompare(right.email))
+  };
+}
+
 async function getGraphicsRecordsForBookFromSheets(bookTitle, mode) {
   const qcSweepBatchSize = 5;
   const requestedKey = normalizeBookKey(bookTitle);
   const resolvedMode = cleanSheetWhitespace(mode).toLowerCase() || "queue";
-  const isQcSweep = resolvedMode === "cleanup" && cleanSheetWhitespace(bookTitle) === "__qc_sweep__";
+  const isQcSweep = ["qc", "cleanup"].includes(resolvedMode) && cleanSheetWhitespace(bookTitle) === "__qc_sweep__";
   let preferredBookTitle = cleanSheetWhitespace(bookTitle);
   let records = [];
 
-  if (resolvedMode === "cleanup") {
-    records = await getPendingGraphicsQcRecords();
+  if (resolvedMode === "coverage") {
+    const coverage = await getBookCoverageFromSheets(bookTitle);
+    return {
+      ok: true,
+      version: coverage.version,
+      mode: resolvedMode,
+      bookTitle: coverage.bookTitle,
+      records: [],
+      coverage
+    };
+  }
+
+  if (resolvedMode === "qc") {
+    records = await getPendingGraphicsQcRecords({ includeCleanup: false });
+    if (isQcSweep) {
+      records = records
+        .slice()
+        .sort((left, right) => {
+          const leftTime = Date.parse(left.completedAt || left.graphicsQcUpdatedAt || "") || 0;
+          const rightTime = Date.parse(right.completedAt || right.graphicsQcUpdatedAt || "") || 0;
+          if (leftTime !== rightTime) {
+            return leftTime - rightTime;
+          }
+          return Number(left.sheetRow || 0) - Number(right.sheetRow || 0);
+        })
+        .slice(0, qcSweepBatchSize);
+      preferredBookTitle = "QC Sweep";
+    } else {
+      records = records.filter(record => normalizeBookKey(record.bookTitle) === requestedKey);
+    }
+  } else if (resolvedMode === "cleanup") {
+    records = await getPendingGraphicsQcRecords({ includeCleanup: true });
     if (isQcSweep) {
       records = records
         .slice()
@@ -3588,6 +5010,10 @@ async function getGraphicsRecordsForBookFromSheets(bookTitle, mode) {
       .filter(record => normalizeBookKey(record.bookTitle) === requestedKey);
   } else if (resolvedMode === "handoff") {
     records = await getPoetryPleaseHandoffRecords(bookTitle);
+  } else if (resolvedMode === "handoff_retry") {
+    records = await getFailedPoetryPleaseHandoffRecords(bookTitle);
+  } else if (resolvedMode === "rework") {
+    records = await getManualGraphicsReworkCandidates(bookTitle);
   } else {
     records = (await getPigGraphicsRequests("all"))
       .filter(record => normalizeBookKey(record.bookTitle) === requestedKey);
@@ -3755,7 +5181,12 @@ async function enrichAcceptedExcerptUpdate(update) {
   if (!sourceRow || sourceRow < SHEET_SOURCE_CONFIG.startRow) {
     return normalized;
   }
-  if (cleanSheetWhitespace(normalized.excerptText) && cleanSheetWhitespace(normalized.bookTitle)) {
+  if (
+    cleanSheetWhitespace(normalized.excerptText) &&
+    cleanSheetWhitespace(normalized.bookTitle) &&
+    cleanSheetWhitespace(normalized.bookShortener) &&
+    cleanSheetWhitespace(normalized.releaseCatalog)
+  ) {
     return normalized;
   }
 
@@ -3786,12 +5217,16 @@ async function enrichAcceptedExcerptUpdate(update) {
   const bookMeta = resolvePublishingBookMeta(normalized.bookTitle, normalized.bookTitle);
   normalized.bookShortener = cleanSheetWhitespace(normalized.bookShortener) || noteMeta.bookShortener || cleanSheetWhitespace(record.bookShortener) || cleanSheetWhitespace(bookMeta?.bookShortener);
   normalized.releaseCatalog = cleanSheetWhitespace(normalized.releaseCatalog) || noteMeta.releaseCatalog || cleanSheetWhitespace(record.releaseCatalog) || cleanSheetWhitespace(bookMeta?.releaseCatalog);
+  normalized.socialMediaHandle = cleanSheetWhitespace(normalized.socialMediaHandle || normalized.instagramHandle || normalized.igHandle)
+    || noteMeta.socialMediaHandle
+    || cleanSheetWhitespace(record.socialMediaHandle)
+    || "";
   return normalized;
 }
 
 function buildAcceptedExcerptHandoff(update) {
   const reviewDecision = normalizeReviewDecisionValue(update?.reviewDecision || update?.approval);
-  if (reviewDecision !== "ACCEPT") {
+  if (reviewDecision !== "ACCEPT" && reviewDecision !== "ACCEPT_SKIP_GRAPHIC") {
     return null;
   }
 
@@ -3820,13 +5255,16 @@ function buildAcceptedExcerptHandoff(update) {
     bookShortener: cleanSheetWhitespace(update?.bookShortener),
     bookLink: cleanSheetWhitespace(update?.bookLink),
     releaseCatalog: cleanSheetWhitespace(update?.releaseCatalog),
+    socialMediaHandle: cleanSheetWhitespace(update?.socialMediaHandle || update?.instagramHandle || update?.igHandle),
+    instagramHandle: cleanSheetWhitespace(update?.socialMediaHandle || update?.instagramHandle || update?.igHandle),
+    igHandle: cleanSheetWhitespace(update?.socialMediaHandle || update?.instagramHandle || update?.igHandle),
     driveLink: cleanSheetWhitespace(update?.driveLink),
     sourceUrl: cleanSheetWhitespace(update?.sourceUrl),
     pageNumber: cleanSheetWhitespace(update?.pageNumber),
     payload: {
       sourceRow: sourceRow || 0,
       sourceRecordId,
-      reviewDecision: "accept"
+      reviewDecision: normalizeDecision(update?.reviewDecision || update?.approval) || "accept"
     }
   };
 }
@@ -3868,6 +5306,9 @@ function buildExcerptHandoffFromApprovedExportRecord(record) {
     bookShortener: cleanSheetWhitespace(record?.bookShortener),
     bookLink: cleanSheetWhitespace(record?.bookLink),
     releaseCatalog: cleanSheetWhitespace(record?.releaseCatalog),
+    socialMediaHandle: cleanSheetWhitespace(record?.socialMediaHandle || record?.instagramHandle || record?.igHandle),
+    instagramHandle: cleanSheetWhitespace(record?.socialMediaHandle || record?.instagramHandle || record?.igHandle),
+    igHandle: cleanSheetWhitespace(record?.socialMediaHandle || record?.instagramHandle || record?.igHandle),
     driveLink: cleanSheetWhitespace(record?.driveLink),
     sourceUrl: cleanSheetWhitespace(record?.sourceUrl),
     pageNumber: cleanSheetWhitespace(record?.pageNumber),
@@ -3927,12 +5368,69 @@ async function syncAcceptedExcerptHandoffs(updates) {
 function normalizeGraphicsQcDecision(value) {
   const normalized = String(value || "").trim().toLowerCase();
   if (normalized === "approve") return "APPROVE";
+  if (normalized === "replace" || normalized === "replace_here") return "APPROVE";
   if (normalized === "mismatch" || normalized === "mismatched_graphic") return "REJECT";
   if (normalized === "correct" || normalized === "recreate" || normalized === "correct_and_recreate") {
     return "REJECT";
   }
   if (normalized === "reject") return "REJECT";
   return "";
+}
+
+async function buildReplacementGraphicCompletion(update) {
+  const replacementAssetUrl = cleanSheetWhitespace(update?.replacementAssetUrl);
+  const folderId = extractGoogleDriveFolderId(replacementAssetUrl);
+  const fileId = extractGoogleDriveFileId(replacementAssetUrl);
+  if (!folderId && !fileId) {
+    throw new Error("Replacement graphic must be a Google Drive image file or folder link.");
+  }
+
+  let file = null;
+  if (folderId) {
+    const files = await listDriveFolderImageFiles(folderId);
+    file = chooseMatchingDriveFolderImageFile(files, update) || chooseBestDriveFolderImageFile(files);
+    if (!file) {
+      throw new Error("No image files were found in that Google Drive folder.");
+    }
+  } else {
+    try {
+      file = await getDriveFileMetadata(fileId);
+      if (!String(file?.mimeType || "").startsWith("image/")) {
+        throw new Error("Replacement graphic link must point to an image file in Google Drive.");
+      }
+    } catch (_error) {
+      file = {
+        id: fileId,
+        name: "",
+        mimeType: "image/*",
+        webViewLink: replacementAssetUrl,
+        thumbnailLink: ""
+      };
+    }
+  }
+
+  const resolvedFileId = cleanSheetWhitespace(file?.id);
+  const assetUrl = cleanSheetWhitespace(file?.webViewLink) || `https://drive.google.com/file/d/${encodeURIComponent(resolvedFileId)}/view`;
+  const assetPreviewUrl = cleanSheetWhitespace(file?.thumbnailLink) || `https://drive.google.com/thumbnail?id=${encodeURIComponent(resolvedFileId)}&sz=w1600`;
+  const fileName = cleanSheetWhitespace(file?.name);
+
+  return {
+    completionId: cleanSheetWhitespace(update?.pigCompletionId),
+    requestId: cleanSheetWhitespace(update?.graphicsRequestId),
+    author: String(update?.author || ""),
+    poemTitle: String(update?.poemTitle || ""),
+    bookTitle: String(update?.bookTitle || ""),
+    quoteText: String(update?.quoteText || ""),
+    sourceRecordId: cleanSheetWhitespace(update?.recordId).replace(/^pig:/i, ""),
+    sourceSheetRow: parseInt(update?.sheetRow, 10) || "",
+    assetUrl,
+    assetPreviewUrl,
+    productionNotes: fileName
+      ? `Replacement graphic approved in Weaver (${fileName}).`
+      : "Replacement graphic approved in Weaver.",
+    completedAt: new Date().toISOString(),
+    sourceTool: "Weaver replacement"
+  };
 }
 
 function normalizeGraphicsQcRejectReason(value) {
@@ -4005,14 +5503,26 @@ async function saveGraphicsQcToSheets(updates) {
   const cleanupRequests = [];
   const pigRequests = [];
   const approvedPigSheetRows = [];
+  const replacementCompletions = [];
   let savedCount = 0;
 
-  updates.forEach(update => {
+  for (const update of updates) {
     const decision = normalizeGraphicsQcDecision(update?.qcDecision);
     const note = String(update?.qcNote || "").trim();
     const updatedAt = decision ? new Date().toISOString() : "";
     const rowNumber = parseInt(update?.sheetRow, 10) || 0;
-    if (!rowNumber) return;
+    if (!rowNumber) continue;
+
+    const replacementDecision = String(update?.qcDecision || "").trim().toLowerCase();
+    if (replacementDecision === "replace") {
+      if (cleanSheetWhitespace(update?.storageTarget).toLowerCase() !== "pig_sheet") {
+        throw new Error("Replacement graphics currently only work for returned P.I.G. graphics.");
+      }
+      if (!cleanSheetWhitespace(update?.pigCompletionId)) {
+        throw new Error("Replacement graphics need an existing P.I.G. completion id.");
+      }
+      replacementCompletions.push(await buildReplacementGraphicCompletion(update));
+    }
 
     if (cleanSheetWhitespace(update?.storageTarget).toLowerCase() === "pig_sheet") {
       if (decision === "APPROVE") {
@@ -4049,10 +5559,14 @@ async function saveGraphicsQcToSheets(updates) {
       );
     }
     savedCount++;
-  });
+  }
 
   if (!cleanupRequests.length && !pigRequests.length) {
     return { ok: false, error: "No matching graphics QC rows found." };
+  }
+
+  if (replacementCompletions.length) {
+    await upsertPigCompletedGraphics(replacementCompletions);
   }
 
   let runtimeDb = { ok: false, skipped: true };
@@ -4092,7 +5606,13 @@ async function saveGraphicsQcToSheets(updates) {
     try {
       poetryPlease = await handoffApprovedGraphicsToPoetryPlease(approvedRecords);
     } catch (error) {
-      poetryPlease = { ok: false, error: error.message };
+      poetryPlease = {
+        ok: false,
+        error: error.message,
+        responseStatus: error.responseStatus || 0,
+        responseBody: error.responseBody || null,
+        requestBody: error.requestBody || null
+      };
     }
 
     const handoffUpdatedAt = new Date().toISOString();
@@ -4132,6 +5652,10 @@ async function saveGraphicsQcToSheets(updates) {
             createdCount: Number(poetryPlease.createdCount || 0),
             updatedCount: Number(poetryPlease.updatedCount || 0),
             errorCount: Number(poetryPlease.errorCount || 0),
+            results: poetryPlease.results || [],
+            responseStatus: poetryPlease.responseStatus || 0,
+            responseBody: poetryPlease.responseBody || null,
+            requestBody: poetryPlease.requestBody || null,
             note: handoffNote
           }
         }))
@@ -4421,6 +5945,18 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  if (url.pathname === "/api/intake/video-playlist" && req.method === "GET") {
+    try {
+      const result = await loadVideoPlaylistFromFormUrl(url.searchParams.get("formUrl") || "");
+      return sendJson(res, 200, result);
+    } catch (error) {
+      return sendJson(res, 500, {
+        ok: false,
+        error: error.message
+      });
+    }
+  }
+
   if (url.pathname === "/api/intake/submit" && req.method === "POST") {
     try {
       const body = await readRequestBody(req);
@@ -4679,12 +6215,281 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (url.pathname === "/graphics-handoff/queue" && req.method === "GET") {
-    try {
-      const result = await syncWeaverRuntimeDb("get_handoff_queue", {
-        limit: parseInt(url.searchParams.get("limit") || "100", 10) || 100
+    const requestId = getRequestCorrelationId(req);
+    const startedAt = performance.now();
+    const limit = parseInt(url.searchParams.get("limit") || "100", 10) || 100;
+    const cursor = Math.max(0, parseInt(url.searchParams.get("cursor") || "0", 10) || 0);
+      const filterMode = url.searchParams.get("filter") || "all";
+      const normalizedFilterMode = cleanSheetWhitespace(filterMode).toLowerCase() || "all";
+      try {
+      const refreshSource = ["1", "true", "yes"].includes(cleanSheetWhitespace(url.searchParams.get("refresh")).toLowerCase());
+      if (!refreshSource) {
+        const ledgerStartedAt = performance.now();
+        const ledgerResult = await syncWeaverRuntimeDb("get_handoff_queue", {
+          limit,
+          cursor,
+          filter: normalizedFilterMode
+        });
+        const dbElapsedMs = performance.now() - ledgerStartedAt;
+        const records = Array.isArray(ledgerResult?.records) ? ledgerResult.records : [];
+        const result = {
+          ok: Boolean(ledgerResult?.ok),
+          filter: normalizedFilterMode,
+          source: "firestore",
+          nextCursor: cleanSheetWhitespace(ledgerResult?.nextCursor),
+          records
+        };
+        const serializeStartedAt = performance.now();
+        const responseBody = JSON.stringify(result, null, 2);
+        const serializeElapsedMs = performance.now() - serializeStartedAt;
+        const totalElapsedMs = performance.now() - startedAt;
+        console.log("[graphics-handoff/queue]", {
+          requestId,
+          url: req.url,
+          filter: normalizedFilterMode,
+          limit,
+          cursor,
+          source: "firestore",
+          statusCode: result.ok ? 200 : 400,
+          recordCount: records.length,
+          handlerElapsedMs: Number(totalElapsedMs.toFixed(1)),
+          dbElapsedMs: Number(dbElapsedMs.toFixed(1)),
+          serializationElapsedMs: Number(serializeElapsedMs.toFixed(1))
+        });
+        res.writeHead(result.ok ? 200 : 400, {
+          "Content-Type": "application/json; charset=utf-8",
+          "X-Request-Id": requestId,
+          "Server-Timing": [
+            "queue_build;dur=0.0",
+            `db;dur=${dbElapsedMs.toFixed(1)}`,
+            `serialize;dur=${serializeElapsedMs.toFixed(1)}`,
+            `total;dur=${totalElapsedMs.toFixed(1)}`
+          ].join(", "),
+          "X-Weaver-Timings": `queue_build=0.0;db=${dbElapsedMs.toFixed(1)};serialize=${serializeElapsedMs.toFixed(1)};total=${totalElapsedMs.toFixed(1)}`
+        });
+        res.end(responseBody);
+        return;
+      }
+        const queueBuildStartedAt = performance.now();
+      const coverageNeeds = normalizedFilterMode === "coverage_needs"
+        ? await getCoverageNeedsView(filterMode)
+        : null;
+      const actionableRecords = coverageNeeds
+        ? coverageNeeds.records
+        : (normalizedFilterMode === "rework"
+          ? await getPigReworkRequests(filterMode)
+          : await getPigGraphicsRequests(filterMode));
+      const queueBuildElapsedMs = performance.now() - queueBuildStartedAt;
+      const selectedRecords = actionableRecords.slice(0, limit);
+      const queueLedgerRequests = selectedRecords
+        .map(buildGraphicsHandoffLedgerRequest)
+        .filter(request => cleanSheetWhitespace(request.graphicsRequestId));
+      const ledgerSyncStartedAt = performance.now();
+      let records = [];
+      if (coverageNeeds) {
+        records = selectedRecords.map(record => ({
+          ...record,
+          handoffLedger: true
+        }));
+      } else if (normalizedFilterMode === "rework") {
+        records = selectedRecords.map(record => ({
+          ...record,
+          handoffLedger: true
+        }));
+      } else if (queueLedgerRequests.length) {
+        await syncWeaverRuntimeDb("upsert_handoff_requests", { requests: queueLedgerRequests }).catch(() => null);
+        const ledgerResult = await syncWeaverRuntimeDb("get_handoff_requests", {
+          graphicsRequestIds: queueLedgerRequests.map(request => request.graphicsRequestId)
+        }).catch(() => ({ ok: false, records: [] }));
+        const ledgerByRequestId = Object.fromEntries(
+          (Array.isArray(ledgerResult?.records) ? ledgerResult.records : [])
+            .map(record => [cleanSheetWhitespace(record.graphicsRequestId), record])
+            .filter(([graphicsRequestId]) => graphicsRequestId)
+        );
+        records = queueLedgerRequests.map(request => {
+          const existing = ledgerByRequestId[request.graphicsRequestId];
+          if (existing) {
+            return {
+              ...existing,
+              handoffLedger: true
+            };
+          }
+          return {
+            graphicsRequestId: request.graphicsRequestId,
+            sourceSystem: request.sourceSystem,
+            sourceStatus: request.sourceStatus,
+            sourcePayload: request.sourcePayload,
+            handoffStatus: "requested",
+            pigStatus: "not_started",
+            qcStatus: "not_sent",
+            handoffLedger: true
+          };
+        });
+      }
+      const dbElapsedMs = performance.now() - ledgerSyncStartedAt;
+      const result = {
+        ok: true,
+        filter: normalizedFilterMode,
+        records
+      };
+      const serializeStartedAt = performance.now();
+      const responseBody = JSON.stringify(result, null, 2);
+      const serializeElapsedMs = performance.now() - serializeStartedAt;
+      const totalElapsedMs = performance.now() - startedAt;
+      const recordCount = Array.isArray(result?.records) ? result.records.length : 0;
+      console.log("[graphics-handoff/queue]", {
+        requestId,
+        url: req.url,
+        filter: normalizedFilterMode,
+        limit,
+        statusCode: result.ok ? 200 : 400,
+        recordCount,
+        handlerElapsedMs: Number(totalElapsedMs.toFixed(1)),
+        queueBuildElapsedMs: Number(queueBuildElapsedMs.toFixed(1)),
+        dbElapsedMs: Number(dbElapsedMs.toFixed(1)),
+        serializationElapsedMs: Number(serializeElapsedMs.toFixed(1))
       });
-      return sendJson(res, result.ok ? 200 : 400, result);
+      res.writeHead(result.ok ? 200 : 400, {
+        "Content-Type": "application/json; charset=utf-8",
+        "X-Request-Id": requestId,
+        "Server-Timing": [
+          `queue_build;dur=${queueBuildElapsedMs.toFixed(1)}`,
+          `db;dur=${dbElapsedMs.toFixed(1)}`,
+          `serialize;dur=${serializeElapsedMs.toFixed(1)}`,
+          `total;dur=${totalElapsedMs.toFixed(1)}`
+        ].join(", "),
+        "X-Weaver-Timings": `queue_build=${queueBuildElapsedMs.toFixed(1)};db=${dbElapsedMs.toFixed(1)};serialize=${serializeElapsedMs.toFixed(1)};total=${totalElapsedMs.toFixed(1)}`
+      });
+      res.end(responseBody);
+      return;
     } catch (error) {
+      const totalElapsedMs = performance.now() - startedAt;
+      console.error("[graphics-handoff/queue]", {
+        requestId,
+        url: req.url,
+        filter: normalizedFilterMode,
+        limit,
+        handlerElapsedMs: Number(totalElapsedMs.toFixed(1)),
+        error: error.message
+      });
+      return sendJson(res, 500, {
+        ok: false,
+        error: error.message
+      });
+    }
+  }
+
+  if (url.pathname === "/graphics-handoff/books" && req.method === "GET") {
+    const requestId = getRequestCorrelationId(req);
+    const startedAt = performance.now();
+      const filterMode = url.searchParams.get("filter") || "all";
+      const normalizedFilterMode = cleanSheetWhitespace(filterMode).toLowerCase() || "all";
+      try {
+      const refreshSource = ["1", "true", "yes"].includes(cleanSheetWhitespace(url.searchParams.get("refresh")).toLowerCase());
+      if (!refreshSource) {
+        const ledgerStartedAt = performance.now();
+        const ledgerResult = await syncWeaverRuntimeDb("get_handoff_queue", {
+          limit: 500,
+          cursor: 0,
+          filter: normalizedFilterMode
+        });
+        const dbElapsedMs = performance.now() - ledgerStartedAt;
+        const records = Array.isArray(ledgerResult?.records) ? ledgerResult.records : [];
+        const books = summarizeGraphicsHandoffBooks(records);
+        const result = {
+          ok: Boolean(ledgerResult?.ok),
+          filter: normalizedFilterMode,
+          source: "firestore",
+          poetryPleaseCoverage: null,
+          books
+        };
+        const serializeStartedAt = performance.now();
+        const responseBody = JSON.stringify(result, null, 2);
+        const serializeElapsedMs = performance.now() - serializeStartedAt;
+        const totalElapsedMs = performance.now() - startedAt;
+        console.log("[graphics-handoff/books]", {
+          requestId,
+          url: req.url,
+          filter: result.filter,
+          source: "firestore",
+          statusCode: result.ok ? 200 : 400,
+          bookCount: books.length,
+          handlerElapsedMs: Number(totalElapsedMs.toFixed(1)),
+          dbElapsedMs: Number(dbElapsedMs.toFixed(1)),
+          serializationElapsedMs: Number(serializeElapsedMs.toFixed(1))
+        });
+        res.writeHead(result.ok ? 200 : 400, {
+          "Content-Type": "application/json; charset=utf-8",
+          "X-Request-Id": requestId,
+          "Server-Timing": [
+            "queue_build;dur=0.0",
+            `db;dur=${dbElapsedMs.toFixed(1)}`,
+            `serialize;dur=${serializeElapsedMs.toFixed(1)}`,
+            `total;dur=${totalElapsedMs.toFixed(1)}`
+          ].join(", "),
+          "X-Weaver-Timings": `queue_build=0.0;db=${dbElapsedMs.toFixed(1)};serialize=${serializeElapsedMs.toFixed(1)};total=${totalElapsedMs.toFixed(1)}`
+        });
+        res.end(responseBody);
+        return;
+      }
+        const queueBuildStartedAt = performance.now();
+      const coverageNeeds = normalizedFilterMode === "coverage_needs"
+        ? await getCoverageNeedsView(filterMode)
+        : null;
+      const actionableRecords = coverageNeeds
+        ? coverageNeeds.records
+        : (normalizedFilterMode === "rework"
+          ? await getPigReworkRequests(filterMode)
+          : await getPigGraphicsRequests(filterMode));
+      const queueBuildElapsedMs = performance.now() - queueBuildStartedAt;
+      const dbStartedAt = performance.now();
+      const books = coverageNeeds
+        ? coverageNeeds.books
+        : summarizeGraphicsHandoffBooks(actionableRecords);
+      const dbElapsedMs = performance.now() - dbStartedAt;
+      const result = {
+        ok: true,
+        filter: normalizedFilterMode,
+        poetryPleaseCoverage: coverageNeeds?.poetryPleaseCoverage || null,
+        books
+      };
+      const serializeStartedAt = performance.now();
+      const responseBody = JSON.stringify(result, null, 2);
+      const serializeElapsedMs = performance.now() - serializeStartedAt;
+      const totalElapsedMs = performance.now() - startedAt;
+      console.log("[graphics-handoff/books]", {
+        requestId,
+        url: req.url,
+        filter: result.filter,
+        statusCode: 200,
+        bookCount: books.length,
+        handlerElapsedMs: Number(totalElapsedMs.toFixed(1)),
+        queueBuildElapsedMs: Number(queueBuildElapsedMs.toFixed(1)),
+        dbElapsedMs: Number(dbElapsedMs.toFixed(1)),
+        serializationElapsedMs: Number(serializeElapsedMs.toFixed(1))
+      });
+      res.writeHead(200, {
+        "Content-Type": "application/json; charset=utf-8",
+        "X-Request-Id": requestId,
+        "Server-Timing": [
+          `queue_build;dur=${queueBuildElapsedMs.toFixed(1)}`,
+          `db;dur=${dbElapsedMs.toFixed(1)}`,
+          `serialize;dur=${serializeElapsedMs.toFixed(1)}`,
+          `total;dur=${totalElapsedMs.toFixed(1)}`
+        ].join(", "),
+        "X-Weaver-Timings": `queue_build=${queueBuildElapsedMs.toFixed(1)};db=${dbElapsedMs.toFixed(1)};serialize=${serializeElapsedMs.toFixed(1)};total=${totalElapsedMs.toFixed(1)}`
+      });
+      res.end(responseBody);
+      return;
+    } catch (error) {
+      const totalElapsedMs = performance.now() - startedAt;
+      console.error("[graphics-handoff/books]", {
+        requestId,
+        url: req.url,
+        filter: cleanSheetWhitespace(filterMode).toLowerCase() || "all",
+        handlerElapsedMs: Number(totalElapsedMs.toFixed(1)),
+        error: error.message
+      });
       return sendJson(res, 500, {
         ok: false,
         error: error.message
@@ -4791,6 +6596,41 @@ const server = http.createServer(async (req, res) => {
         ok: true,
         version: `${appVersion}-service-account`,
         records
+      });
+    } catch (error) {
+      return sendJson(res, 500, {
+        ok: false,
+        error: error.message
+      });
+    }
+  }
+
+  if (url.pathname === "/api/graphics/rework-request" && req.method === "POST") {
+    try {
+      const body = await readRequestBody(req);
+      const parsed = JSON.parse(body || "{}");
+      const records = Array.isArray(parsed.records) ? parsed.records : [];
+      const note = String(parsed.note || "");
+      const result = await createManualGraphicsReworkRequests(records, note);
+      return sendJson(res, result.ok ? 200 : 400, result);
+    } catch (error) {
+      return sendJson(res, 500, {
+        ok: false,
+        error: error.message
+      });
+    }
+  }
+
+  if (url.pathname === "/api/graphics/handoffs/retry" && req.method === "POST") {
+    try {
+      const body = await readRequestBody(req);
+      const parsed = JSON.parse(body || "{}");
+      const records = Array.isArray(parsed?.records) ? parsed.records : [];
+      const result = await retryFailedGraphicsHandoffs(records);
+      return sendJson(res, 200, {
+        ok: true,
+        version: `${appVersion}-service-account`,
+        ...result
       });
     } catch (error) {
       return sendJson(res, 500, {

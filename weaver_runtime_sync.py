@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from typing import Any
 
 from weaver_runtime_db import (
+    connect_firestore_ledger,
     connect_runtime_db,
     ensure_runtime_schema,
     claim_graphics_handoff,
@@ -27,6 +29,20 @@ from weaver_runtime_db import (
 )
 
 
+FIRESTORE_HANDOFF_ACTIONS = {
+    "upsert_completions",
+    "insert_qc_reviews",
+    "insert_poetry_please_handoffs",
+    "get_graphics_state",
+    "upsert_handoff_requests",
+    "get_handoff_queue",
+    "claim_handoff_request",
+    "patch_handoff_request",
+    "get_handoff_request",
+    "get_handoff_requests",
+}
+
+
 def load_payload() -> dict[str, Any]:
     raw = sys.stdin.read().strip()
     if not raw:
@@ -38,6 +54,37 @@ def normalize_text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def normalize_content_type(value: Any, default: str = "QI") -> str:
+    normalized = normalize_text(value).upper()
+    if normalized in {"QI", "QUOTE IMAGE"}:
+        return "QI"
+    if normalized in {"FP", "FULL POEM"}:
+        return "FP"
+    if normalized in {"FPI", "FULL POEM IMAGE", "FULL POEM IMAGE-BACKED", "FULL POEM IMAGE BACKED"}:
+        return "FPI"
+    return default
+
+
+def resolve_content_type(record: dict[str, Any], default: str = "QI") -> str:
+    content_type = normalize_content_type(
+        record.get("contentType")
+        or record.get("imageType")
+        or record.get("content_type")
+        or record.get("image_type"),
+        "",
+    )
+    if content_type:
+        return content_type
+    notes = str(record.get("productionNotes") or record.get("notes") or "")
+    for line in notes.splitlines():
+        if ":" not in line:
+            continue
+        label, value = line.split(":", 1)
+        if normalize_text(label).lower() in {"content type", "image type", "type"}:
+            return normalize_content_type(value, default)
+    return default
+
+
 def sync_completions(connection, payload: dict[str, Any]) -> dict[str, Any]:
     completions = payload.get("completions") or []
     written = 0
@@ -47,11 +94,14 @@ def sync_completions(connection, payload: dict[str, Any]) -> dict[str, Any]:
         request_id = normalize_text(completion.get("requestId") or completion.get("graphicsRequestId"))
         if not request_id:
             continue
+        content_type = resolve_content_type(completion)
 
         request_record = {
             "id": request_id,
             "request_status": "COMPLETED_RETURNED",
             "source_type": "weaver_sheet_queue",
+            "content_type": content_type,
+            "image_type": content_type,
             "book_title": normalize_text(completion.get("bookTitle")),
             "poem_title": normalize_text(completion.get("poemTitle")),
             "author": normalize_text(completion.get("author")),
@@ -78,6 +128,8 @@ def sync_completions(connection, payload: dict[str, Any]) -> dict[str, Any]:
             "id": normalize_text(completion.get("completionId") or completion.get("id")),
             "graphics_request_id": request_id,
             "source_tool": normalize_text(completion.get("sourceTool")) or "P.I.G.",
+            "content_type": content_type,
+            "image_type": content_type,
             "asset_url": normalize_text(completion.get("assetUrl") or completion.get("assetLinkUrl") or completion.get("driveUrl")),
             "asset_preview_url": normalize_text(completion.get("assetPreviewUrl") or completion.get("previewUrl") or completion.get("thumbnailUrl")),
             "production_notes": str(completion.get("productionNotes") or completion.get("notes") or ""),
@@ -89,9 +141,15 @@ def sync_completions(connection, payload: dict[str, Any]) -> dict[str, Any]:
             "graphicsRequestId": request_id,
             "sourceSystem": "weaver",
             "sourceStatus": "needs_graphics",
+            "contentType": content_type,
+            "imageType": content_type,
+            "sourceCompletionId": normalize_text(completion.get("completionId") or completion.get("id")),
             "sourcePayload": request_record,
         })
         update_graphics_handoff(connection, request_id, {
+            "contentType": content_type,
+            "imageType": content_type,
+            "sourceCompletionId": normalize_text(completion.get("completionId") or completion.get("id")),
             "pigStatus": "uploaded",
             "handoffStatus": "sent_to_weaver_qc",
             "qcStatus": "pending",
@@ -123,6 +181,7 @@ def sync_qc_reviews(connection, payload: dict[str, Any]) -> dict[str, Any]:
     for review in reviews:
         storage_target = normalize_text(review.get("storageTarget")).lower()
         completion_id = normalize_text(review.get("pigCompletionId") or review.get("graphicsCompletionId"))
+        request_id = normalize_text(review.get("graphicsRequestId"))
         if storage_target != "pig_sheet" or not completion_id:
             skipped.append({
                 "reason": "not_pig_backed",
@@ -130,6 +189,47 @@ def sync_qc_reviews(connection, payload: dict[str, Any]) -> dict[str, Any]:
                 "sheetRow": review.get("sheetRow"),
             })
             continue
+
+        if not request_id:
+            skipped.append({
+                "reason": "missing_request_id",
+                "recordId": normalize_text(review.get("recordId")),
+                "sheetRow": review.get("sheetRow"),
+                "completionId": completion_id,
+            })
+            continue
+        content_type = resolve_content_type(review)
+
+        upsert_graphics_request(connection, {
+            "id": request_id,
+            "request_status": "COMPLETED_RETURNED",
+            "source_type": "weaver_sheet_queue",
+            "content_type": content_type,
+            "image_type": content_type,
+            "book_title": normalize_text(review.get("bookTitle")),
+            "poem_title": normalize_text(review.get("poemTitle")),
+            "author": normalize_text(review.get("author")),
+            "quote_text": str(review.get("quoteText") or ""),
+            "source_record_id": normalize_text(review.get("recordId")),
+            "source_sheet_name": str(review.get("storageTarget") or ""),
+            "source_sheet_row": review.get("sheetRow") or 0,
+            "source_payload": review,
+            "latest_completion_id": completion_id,
+        })
+
+        insert_graphics_completion(connection, {
+            "id": completion_id,
+            "graphics_request_id": request_id,
+            "source_tool": normalize_text(review.get("sourceTool") or "P.I.G."),
+            "content_type": content_type,
+            "image_type": content_type,
+            "asset_url": str(review.get("assetUrl") or ""),
+            "asset_preview_url": str(review.get("assetPreviewUrl") or review.get("assetUrl") or ""),
+            "production_notes": str(review.get("notes") or ""),
+            "completion_status": "RETURNED",
+            "completed_at": normalize_text(review.get("completedAt")) or utc_now_iso(),
+            "source_payload": review,
+        })
 
         insert_graphics_qc_review(connection, {
             "graphics_completion_id": completion_id,
@@ -141,11 +241,25 @@ def sync_qc_reviews(connection, payload: dict[str, Any]) -> dict[str, Any]:
             "reviewed_at": utc_now_iso(),
             "source_payload": review,
         })
-        request_id = normalize_text(review.get("graphicsRequestId"))
         decision = normalize_text(review.get("qcDecision")).lower()
         if request_id:
             revision_reject = decision == "reject" and is_revision_reject(review)
+            upsert_graphics_handoff_request(connection, {
+                "graphicsRequestId": request_id,
+                "sourceSystem": "weaver",
+                "sourceStatus": "qc_review",
+                "contentType": content_type,
+                "imageType": content_type,
+                "sourceCompletionId": completion_id,
+                "sourcePayload": review,
+                "handoffStatus": "sent_to_weaver_qc",
+                "pigStatus": "uploaded",
+                "qcStatus": "pending",
+            })
             update_graphics_handoff(connection, request_id, {
+                "contentType": content_type,
+                "imageType": content_type,
+                "sourceCompletionId": completion_id,
                 "handoffStatus": "approved" if decision == "approve" else "rejected",
                 "pigStatus": "not_started" if revision_reject else None,
                 "qcStatus": "approved" if decision == "approve" else ("needs_revision" if revision_reject else "rejected"),
@@ -233,9 +347,19 @@ def upsert_handoff_requests(connection, payload: dict[str, Any]) -> dict[str, An
 
 
 def fetch_handoff_queue(connection, payload: dict[str, Any]) -> dict[str, Any]:
+    limit = int(payload.get("limit") or 100)
+    cursor = int(payload.get("cursor") or 0)
+    records = get_graphics_handoff_queue(
+        connection,
+        limit + 1,
+        normalize_text(payload.get("filter") or "all"),
+        cursor,
+    )
+    has_more = len(records) > limit
     return {
         "ok": True,
-        "records": get_graphics_handoff_queue(connection, int(payload.get("limit") or 100)),
+        "records": records[:limit],
+        "nextCursor": str(cursor + limit) if has_more else "",
     }
 
 
@@ -281,9 +405,14 @@ def fetch_handoff_requests(connection, payload: dict[str, Any]) -> dict[str, Any
 def main() -> int:
     payload = load_payload()
     action = normalize_text(payload.get("action"))
-    connection = connect_runtime_db()
+    use_firestore = (
+        os.environ.get("WEAVER_LEDGER_BACKEND", "").strip().lower() == "firestore"
+        and action in FIRESTORE_HANDOFF_ACTIONS
+    )
+    connection = connect_firestore_ledger() if use_firestore else connect_runtime_db()
     try:
-        ensure_runtime_schema(connection)
+        if not use_firestore:
+            ensure_runtime_schema(connection)
         if action == "upsert_completions":
             result = sync_completions(connection, payload)
         elif action == "insert_qc_reviews":

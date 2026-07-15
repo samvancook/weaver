@@ -2,7 +2,14 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import os
+import ssl
 import sqlite3
+import subprocess
+import urllib.error
+import urllib.parse
+import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -10,6 +17,18 @@ from typing import Any
 ROOT = Path(__file__).resolve().parent
 DEFAULT_DB_PATH = ROOT / "data" / "weaver_runtime.db"
 SCHEMA_PATH = ROOT / "db" / "weaver_runtime_schema.sql"
+FIRESTORE_COLLECTION = "graphicsHandoffLedger"
+FIRESTORE_GRAPHICS_REQUESTS_COLLECTION = "graphicsRequests"
+FIRESTORE_GRAPHICS_COMPLETIONS_COLLECTION = "graphicsCompletions"
+FIRESTORE_GRAPHICS_QC_REVIEWS_COLLECTION = "graphicsQcReviews"
+FIRESTORE_POETRY_PLEASE_HANDOFFS_COLLECTION = "poetryPleaseHandoffs"
+FIRESTORE_DEFAULT_DATABASE_ID = "weaverledger"
+FIRESTORE_DEFAULT_PROJECT_ID = "button-weaver-internal"
+FIRESTORE_DEFAULT_SERVICE_ACCOUNT = (
+    "weaver-deployer@button-weaver-internal.iam.gserviceaccount.com"
+)
+HANDOFF_TRANSITION_LOG_LIMIT = 12
+HANDOFF_LIST_TRANSITION_LOG_LIMIT = 3
 
 
 def utc_now_iso() -> str:
@@ -24,6 +43,17 @@ def count_words(text: str) -> int:
     return len([part for part in (text or "").split() if part.strip()])
 
 
+def normalize_content_type(value: Any, default: str = "QI") -> str:
+    normalized = str(value or "").strip().upper()
+    if normalized in {"QI", "QUOTE IMAGE"}:
+        return "QI"
+    if normalized in {"FP", "FULL POEM"}:
+        return "FP"
+    if normalized in {"FPI", "FULL POEM IMAGE", "FULL POEM IMAGE-BACKED", "FULL POEM IMAGE BACKED"}:
+        return "FPI"
+    return default
+
+
 def connect_runtime_db(db_path: Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(db_path)
@@ -34,7 +64,42 @@ def connect_runtime_db(db_path: Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
 
 def ensure_runtime_schema(connection: sqlite3.Connection, schema_path: Path = SCHEMA_PATH) -> None:
     connection.executescript(schema_path.read_text())
+    ensure_runtime_migrations(connection)
     connection.commit()
+
+
+def ensure_columns(connection: sqlite3.Connection, table: str, columns: dict[str, str]) -> None:
+    existing = {
+        str(row["name"])
+        for row in connection.execute(f"PRAGMA table_info({table})").fetchall()
+    }
+    for name, definition in columns.items():
+        if name not in existing:
+            connection.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
+
+
+def ensure_runtime_migrations(connection: sqlite3.Connection) -> None:
+    ensure_columns(connection, "graphics_requests", {
+        "content_type": "TEXT NOT NULL DEFAULT 'QI'",
+        "image_type": "TEXT NOT NULL DEFAULT 'QI'",
+    })
+    ensure_columns(connection, "graphics_completions", {
+        "content_type": "TEXT NOT NULL DEFAULT 'QI'",
+        "image_type": "TEXT NOT NULL DEFAULT 'QI'",
+    })
+    ensure_columns(connection, "graphics_handoff_ledger", {
+        "content_type": "TEXT NOT NULL DEFAULT 'QI'",
+        "image_type": "TEXT NOT NULL DEFAULT 'QI'",
+        "source_completion_id": "TEXT NOT NULL DEFAULT ''",
+        "revision_of": "TEXT NOT NULL DEFAULT ''",
+        "original_graphics_request_id": "TEXT NOT NULL DEFAULT ''",
+        "review_status": "TEXT NOT NULL DEFAULT ''",
+        "ocr_text": "TEXT NOT NULL DEFAULT ''",
+    })
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_graphics_handoff_ledger_content "
+        "ON graphics_handoff_ledger(content_type, image_type, review_status)"
+    )
 
 
 def get_runtime_db_summary(connection: sqlite3.Connection) -> dict[str, Any]:
@@ -61,23 +126,29 @@ def get_runtime_db_summary(connection: sqlite3.Connection) -> dict[str, Any]:
 
 
 def upsert_graphics_request(connection: sqlite3.Connection, request: dict[str, Any]) -> str:
+    if is_firestore_ledger(connection):
+        return connection.upsert_graphics_request(request)
     request_id = str(request["id"]).strip()
     created_at = request.get("created_at") or utc_now_iso()
     updated_at = request.get("updated_at") or created_at
     quote_text = str(request.get("quote_text") or "")
     payload_json = json.dumps(request.get("source_payload") or {}, ensure_ascii=True, sort_keys=True)
+    content_type = normalize_content_type(request.get("content_type") or request.get("contentType") or request.get("imageType"))
+    image_type = normalize_content_type(request.get("image_type") or request.get("imageType") or request.get("contentType"), content_type)
 
     connection.execute(
         """
         INSERT INTO graphics_requests (
-            id, request_status, source_type, book_title, poem_title, author, quote_text,
+            id, request_status, source_type, content_type, image_type, book_title, poem_title, author, quote_text,
             normalized_book_key, normalized_poem_key, normalized_author_key, normalized_quote_key,
             word_count, source_record_id, source_sheet_name, source_sheet_row,
             source_payload_json, created_at, updated_at, latest_completion_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             request_status = excluded.request_status,
             source_type = excluded.source_type,
+            content_type = excluded.content_type,
+            image_type = excluded.image_type,
             book_title = excluded.book_title,
             poem_title = excluded.poem_title,
             author = excluded.author,
@@ -98,6 +169,8 @@ def upsert_graphics_request(connection: sqlite3.Connection, request: dict[str, A
             request_id,
             str(request.get("request_status") or "OPEN"),
             str(request.get("source_type") or "weaver_sheet_queue"),
+            content_type,
+            image_type,
             str(request.get("book_title") or ""),
             str(request.get("poem_title") or ""),
             str(request.get("author") or ""),
@@ -132,6 +205,16 @@ HANDOFF_STATUSES = {
     "blocked",
     "errored",
 }
+TERMINAL_HANDOFF_STATUSES = {
+    "generated",
+    "exported",
+    "uploaded",
+    "sent_to_weaver_qc",
+    "approved",
+    "blocked",
+    "errored",
+}
+SOURCE_QUEUE_REFRESH_STATUSES = {"requested", "claimed", "rejected"}
 PIG_STATUSES = {
     "not_started",
     "claimed",
@@ -163,16 +246,52 @@ def extract_handoff_text(payload: dict[str, Any]) -> str:
     return ""
 
 
+def extract_nested_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    nested = payload.get("source_payload") if isinstance(payload.get("source_payload"), dict) else {}
+    if not nested:
+        nested = payload.get("sourcePayload") if isinstance(payload.get("sourcePayload"), dict) else {}
+    return nested
+
+
+def extract_handoff_value(payload: dict[str, Any], *keys: str) -> str:
+    nested = extract_nested_payload(payload)
+    for key in keys:
+        value = str(payload.get(key) or nested.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def has_fpi_source_asset(payload: dict[str, Any]) -> bool:
+    return bool(extract_handoff_value(
+        payload,
+        "driveLink",
+        "imageUrl",
+        "assetUrl",
+        "assetLinkUrl",
+        "assetPreviewUrl",
+        "previousAssetUrl",
+        "previousAssetPreviewUrl",
+    ))
+
+
 def row_to_handoff(row: sqlite3.Row) -> dict[str, Any]:
     source_payload = json.loads(row["source_payload_json"] or "{}")
-    nested_source = source_payload.get("source_payload") if isinstance(source_payload.get("source_payload"), dict) else {}
+    nested_source = extract_nested_payload(source_payload)
     quote_text = extract_handoff_text(source_payload)
     if not quote_text and nested_source:
         quote_text = extract_handoff_text(nested_source)
-    return {
+    record = {
         "graphicsRequestId": str(row["graphics_request_id"] or ""),
         "sourceSystem": str(row["source_system"] or ""),
         "sourceStatus": str(row["source_status"] or ""),
+        "contentType": str(row["content_type"] or ""),
+        "imageType": str(row["image_type"] or ""),
+        "sourceCompletionId": str(row["source_completion_id"] or ""),
+        "revisionOf": str(row["revision_of"] or ""),
+        "originalGraphicsRequestId": str(row["original_graphics_request_id"] or ""),
+        "reviewStatus": str(row["review_status"] or ""),
+        "ocrText": str(row["ocr_text"] or ""),
         "pigStatus": str(row["pig_status"] or ""),
         "handoffStatus": str(row["handoff_status"] or ""),
         "qcStatus": str(row["qc_status"] or ""),
@@ -207,6 +326,177 @@ def row_to_handoff(row: sqlite3.Row) -> dict[str, Any]:
         "approvedAt": str(row["approved_at"] or ""),
         "rejectedAt": str(row["rejected_at"] or ""),
     }
+    apply_handoff_queue_contract(record)
+    return record
+
+
+def default_handoff_record(graphics_request_id: str) -> dict[str, Any]:
+    return {
+        "graphicsRequestId": graphics_request_id,
+        "sourceSystem": "",
+        "sourceStatus": "",
+        "queueView": "",
+        "isActionable": False,
+        "nextAction": "",
+        "statusLabel": "",
+        "contentType": "",
+        "imageType": "",
+        "targetCount": 0,
+        "approvedCount": 0,
+        "pendingQcCount": 0,
+        "inProgressCount": 0,
+        "reworkCount": 0,
+        "remainingApprovedNeeded": 0,
+        "remainingActionableNeeded": 0,
+        "priorityTier": "",
+        "priorityScore": 0,
+        "sourceCompletionId": "",
+        "revisionOf": "",
+        "originalGraphicsRequestId": "",
+        "reviewStatus": "",
+        "ocrText": "",
+        "pigStatus": "",
+        "handoffStatus": "",
+        "qcStatus": "",
+        "assetUrl": "",
+        "assetPreviewUrl": "",
+        "driveFileId": "",
+        "driveFileName": "",
+        "mimeType": "",
+        "exportType": "",
+        "variant": "",
+        "version": "",
+        "claimedBy": "",
+        "errorMessage": "",
+        "blockedReason": "",
+        "sourceSheetRow": "",
+        "queueSheetRow": "",
+        "author": "",
+        "poemTitle": "",
+        "bookTitle": "",
+        "quoteText": "",
+        "text": "",
+        "sourcePayload": {},
+        "pigPayload": {},
+        "qcPayload": {},
+        "transitionLog": [],
+        "createdAt": "",
+        "updatedAt": "",
+        "claimedAt": "",
+        "generatedAt": "",
+        "uploadedAt": "",
+        "sentToQcAt": "",
+        "approvedAt": "",
+        "rejectedAt": "",
+    }
+
+
+def normalize_handoff_record(record: dict[str, Any]) -> dict[str, Any]:
+    graphics_request_id = str(record.get("graphicsRequestId") or record.get("id") or "").strip()
+    normalized = default_handoff_record(graphics_request_id)
+    normalized.update(record)
+    normalized["graphicsRequestId"] = graphics_request_id
+    for key in ("sourcePayload", "pigPayload", "qcPayload"):
+        if not isinstance(normalized.get(key), dict):
+            normalized[key] = {}
+    if not isinstance(normalized.get("transitionLog"), list):
+        normalized["transitionLog"] = []
+
+    source_payload = normalized["sourcePayload"]
+    nested_source = extract_nested_payload(source_payload)
+    quote_text = str(normalized.get("quoteText") or extract_handoff_text(source_payload) or "").strip()
+    if not quote_text and nested_source:
+        quote_text = extract_handoff_text(nested_source)
+    normalized["quoteText"] = quote_text
+    normalized["text"] = str(normalized.get("text") or quote_text)
+    normalized["sourceSheetRow"] = (
+        normalized.get("sourceSheetRow")
+        or source_payload.get("sourceSheetRow")
+        or source_payload.get("source_sheet_row")
+        or source_payload.get("sheetRow")
+        or nested_source.get("sourceSheetRow")
+        or nested_source.get("source_sheet_row")
+        or nested_source.get("sheetRow")
+        or ""
+    )
+    normalized["queueSheetRow"] = (
+        normalized.get("queueSheetRow")
+        or source_payload.get("queueSheetRow")
+        or source_payload.get("sourceSheetRow")
+        or source_payload.get("sheetRow")
+        or nested_source.get("queueSheetRow")
+        or nested_source.get("sourceSheetRow")
+        or nested_source.get("sheetRow")
+        or ""
+    )
+    normalized["author"] = str(normalized.get("author") or source_payload.get("author") or source_payload.get("author_name") or nested_source.get("author") or nested_source.get("author_name") or "")
+    normalized["poemTitle"] = str(normalized.get("poemTitle") or source_payload.get("poemTitle") or source_payload.get("title") or source_payload.get("poem_title") or nested_source.get("poemTitle") or nested_source.get("title") or nested_source.get("poem_title") or "")
+    normalized["bookTitle"] = str(normalized.get("bookTitle") or source_payload.get("bookTitle") or source_payload.get("book_title") or nested_source.get("bookTitle") or nested_source.get("book_title") or "")
+    apply_handoff_queue_contract(normalized)
+    return normalized
+
+
+def handoff_is_actionable(record: dict[str, Any]) -> bool:
+    return bool(
+        record.get("handoffStatus") in {"requested", "claimed", "rejected"}
+        and record.get("pigStatus") not in {"generated", "exported", "uploaded", "failed"}
+        and record.get("qcStatus") in {"not_sent", "needs_revision"}
+        and (
+            str(record.get("quoteText") or "").strip()
+            or (
+                record.get("contentType") == "FPI"
+                and (str(record.get("assetUrl") or "").strip() or has_fpi_source_asset(record.get("sourcePayload") or {}))
+            )
+        )
+    )
+
+
+def apply_handoff_queue_contract(record: dict[str, Any]) -> None:
+    source_payload = record.get("sourcePayload") if isinstance(record.get("sourcePayload"), dict) else {}
+    nested_source = extract_nested_payload(source_payload)
+    queue_view = str(
+        record.get("queueView")
+        or source_payload.get("queueView")
+        or nested_source.get("queueView")
+        or ""
+    ).strip().lower()
+    source_system = str(record.get("sourceSystem") or "").strip().lower()
+    source_status = str(record.get("sourceStatus") or "").strip().lower()
+    if not queue_view:
+        if source_system == "weaver_qc_rework" or source_status.startswith("rework"):
+            queue_view = "rework"
+        elif source_system == "coverage_needs" or source_status == "coverage_needs":
+            queue_view = "coverage_needs"
+        else:
+            queue_view = "current_titles"
+
+    record["queueView"] = queue_view
+    record["isActionable"] = handoff_is_actionable(record)
+    record["nextAction"] = "rework" if queue_view == "rework" or record.get("qcStatus") == "needs_revision" else "generate"
+    if record["isActionable"]:
+        record["statusLabel"] = "Ready for rework" if record["nextAction"] == "rework" else "Ready for P.I.G."
+    elif record.get("handoffStatus") == "approved" or record.get("qcStatus") == "approved":
+        record["statusLabel"] = "Approved"
+    elif record.get("handoffStatus") == "blocked":
+        record["statusLabel"] = "Blocked"
+    else:
+        record["statusLabel"] = str(record.get("handoffStatus") or "")
+
+    for key in (
+        "targetCount",
+        "approvedCount",
+        "pendingQcCount",
+        "inProgressCount",
+        "reworkCount",
+        "remainingApprovedNeeded",
+        "remainingActionableNeeded",
+        "priorityScore",
+    ):
+        try:
+            record[key] = int(record.get(key) or source_payload.get(key) or nested_source.get(key) or 0)
+        except (TypeError, ValueError):
+            record[key] = 0
+    record["priorityTier"] = str(record.get("priorityTier") or source_payload.get("priorityTier") or nested_source.get("priorityTier") or "")
 
 
 def append_transition_log(existing_json: str, event: dict[str, Any]) -> str:
@@ -216,11 +506,669 @@ def append_transition_log(existing_json: str, event: dict[str, Any]) -> str:
             entries = []
     except json.JSONDecodeError:
         entries = []
+    return json.dumps(append_transition_entries(entries, event), ensure_ascii=True, sort_keys=True)
+
+
+def transition_event_key(event: dict[str, Any]) -> tuple[str, str, str, str, str, str]:
+    return (
+        str(event.get("event") or ""),
+        str(event.get("handoffStatus") or ""),
+        str(event.get("pigStatus") or ""),
+        str(event.get("qcStatus") or ""),
+        str(event.get("blockedReason") or ""),
+        str(event.get("claimedBy") or ""),
+    )
+
+
+def append_transition_entries(existing: Any, event: dict[str, Any]) -> list[dict[str, Any]]:
+    entries = existing if isinstance(existing, list) else []
+    entries = [entry for entry in entries if isinstance(entry, dict)]
+    if entries and transition_event_key(entries[-1]) == transition_event_key(event):
+        entries[-1] = event
+        return entries[-HANDOFF_TRANSITION_LOG_LIMIT:]
     entries.append(event)
-    return json.dumps(entries[-50:], ensure_ascii=True, sort_keys=True)
+    return entries[-HANDOFF_TRANSITION_LOG_LIMIT:]
 
 
-def get_graphics_handoff(connection: sqlite3.Connection, graphics_request_id: str) -> dict[str, Any] | None:
+def compact_handoff_record(record: dict[str, Any]) -> dict[str, Any]:
+    compact = dict(record)
+    transition_log = compact.get("transitionLog")
+    if isinstance(transition_log, list):
+        compact["transitionLog"] = [
+            entry for entry in transition_log[-HANDOFF_LIST_TRANSITION_LOG_LIMIT:]
+            if isinstance(entry, dict)
+        ]
+    compact.pop("pigPayload", None)
+    return compact
+
+
+def queue_card_record(record: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "graphicsRequestId": record.get("graphicsRequestId") or "",
+        "queueView": record.get("queueView") or "",
+        "isActionable": bool(record.get("isActionable")),
+        "nextAction": record.get("nextAction") or "",
+        "statusLabel": record.get("statusLabel") or "",
+        "handoffStatus": record.get("handoffStatus") or "",
+        "pigStatus": record.get("pigStatus") or "",
+        "qcStatus": record.get("qcStatus") or "",
+        "imageType": record.get("imageType") or "",
+        "contentType": record.get("contentType") or "",
+        "sourceSystem": record.get("sourceSystem") or "",
+        "sourceStatus": record.get("sourceStatus") or "",
+        "sourceCompletionId": record.get("sourceCompletionId") or "",
+        "revisionOf": record.get("revisionOf") or "",
+        "originalGraphicsRequestId": record.get("originalGraphicsRequestId") or "",
+        "queueSheetRow": record.get("queueSheetRow") or "",
+        "author": record.get("author") or "",
+        "poemTitle": record.get("poemTitle") or "",
+        "bookTitle": record.get("bookTitle") or "",
+        "quoteText": record.get("quoteText") or "",
+        "targetCount": int(record.get("targetCount") or 0),
+        "approvedCount": int(record.get("approvedCount") or 0),
+        "pendingQcCount": int(record.get("pendingQcCount") or 0),
+        "inProgressCount": int(record.get("inProgressCount") or 0),
+        "reworkCount": int(record.get("reworkCount") or 0),
+        "remainingApprovedNeeded": int(record.get("remainingApprovedNeeded") or 0),
+        "remainingActionableNeeded": int(record.get("remainingActionableNeeded") or 0),
+        "priorityTier": record.get("priorityTier") or "",
+        "priorityScore": int(record.get("priorityScore") or 0),
+        "createdAt": record.get("createdAt") or "",
+        "updatedAt": record.get("updatedAt") or "",
+    }
+
+
+def firestore_encode_value(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {"nullValue": None}
+    if isinstance(value, bool):
+        return {"booleanValue": value}
+    if isinstance(value, int) and not isinstance(value, bool):
+        return {"integerValue": str(value)}
+    if isinstance(value, float):
+        return {"doubleValue": value}
+    if isinstance(value, dict):
+        return {"mapValue": {"fields": {str(key): firestore_encode_value(item) for key, item in value.items()}}}
+    if isinstance(value, list):
+        return {"arrayValue": {"values": [firestore_encode_value(item) for item in value]}}
+    return {"stringValue": str(value)}
+
+
+def firestore_decode_value(value: dict[str, Any]) -> Any:
+    if "nullValue" in value:
+        return None
+    if "booleanValue" in value:
+        return value["booleanValue"]
+    if "integerValue" in value:
+        try:
+            return int(value["integerValue"])
+        except (TypeError, ValueError):
+            return value["integerValue"]
+    if "doubleValue" in value:
+        return value["doubleValue"]
+    if "stringValue" in value:
+        return value["stringValue"]
+    if "timestampValue" in value:
+        return value["timestampValue"]
+    if "mapValue" in value:
+        return {
+            key: firestore_decode_value(item)
+            for key, item in (value.get("mapValue", {}).get("fields") or {}).items()
+        }
+    if "arrayValue" in value:
+        return [firestore_decode_value(item) for item in value.get("arrayValue", {}).get("values", [])]
+    return None
+
+
+def firestore_stable_document_id(prefix: str, payload: dict[str, Any]) -> str:
+    raw = json.dumps(payload, ensure_ascii=True, sort_keys=True, default=str)
+    digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:20]
+    return f"{prefix}-{digest}"
+
+
+def firestore_access_token(project_id: str) -> str:
+    env_token = os.environ.get("GOOGLE_OAUTH_ACCESS_TOKEN", "").strip()
+    if env_token:
+        return env_token
+
+    metadata_request = urllib.request.Request(
+        "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token",
+        headers={"Metadata-Flavor": "Google"},
+    )
+    try:
+        with urllib.request.urlopen(metadata_request, timeout=2) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+            token = str(payload.get("access_token") or "").strip()
+            if token:
+                return token
+    except Exception:
+        pass
+
+    service_account = (
+        os.environ.get("WEAVER_FIRESTORE_SERVICE_ACCOUNT")
+        or FIRESTORE_DEFAULT_SERVICE_ACCOUNT
+    ).strip()
+    try:
+        result = subprocess.run(
+            [
+                "gcloud",
+                "auth",
+                "print-access-token",
+                service_account,
+                f"--project={project_id}",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        token = result.stdout.strip()
+        if token:
+            return token
+    except Exception:
+        pass
+
+    raise RuntimeError(
+        "Unable to obtain a Firestore access token from Cloud Run metadata or "
+        f"the configured Weaver service account ({service_account})"
+    )
+
+
+def firestore_ssl_context() -> ssl.SSLContext:
+    cafile = os.environ.get("SSL_CERT_FILE", "").strip()
+    if cafile:
+        return ssl.create_default_context(cafile=cafile)
+    for candidate in (
+        "/etc/ssl/cert.pem",
+        "/opt/homebrew/etc/ca-certificates/cert.pem",
+        "/usr/local/etc/openssl@3/cert.pem",
+    ):
+        if Path(candidate).exists():
+            return ssl.create_default_context(cafile=candidate)
+    return ssl.create_default_context()
+
+
+class FirestoreLedgerClient:
+    def __init__(self, project_id: str, database_id: str = FIRESTORE_DEFAULT_DATABASE_ID) -> None:
+        self.project_id = project_id
+        self.database_id = database_id or FIRESTORE_DEFAULT_DATABASE_ID
+
+    def close(self) -> None:
+        return None
+
+    @property
+    def documents_url(self) -> str:
+        project = urllib.parse.quote(self.project_id, safe="")
+        database = urllib.parse.quote(self.database_id, safe="()")
+        return f"https://firestore.googleapis.com/v1/projects/{project}/databases/{database}/documents"
+
+    @property
+    def collection_url(self) -> str:
+        return f"{self.documents_url}/{FIRESTORE_COLLECTION}"
+
+    def collection_url_for(self, collection: str) -> str:
+        return f"{self.documents_url}/{urllib.parse.quote(collection, safe='')}"
+
+    def document_url(self, graphics_request_id: str) -> str:
+        return f"{self.collection_url}/{urllib.parse.quote(graphics_request_id, safe='')}"
+
+    def document_url_for(self, collection: str, document_id: str) -> str:
+        return f"{self.collection_url_for(collection)}/{urllib.parse.quote(document_id, safe='')}"
+
+    def request(self, method: str, url: str, body: dict[str, Any] | None = None) -> dict[str, Any] | None:
+        data = json.dumps(body).encode("utf-8") if body is not None else None
+        request = urllib.request.Request(
+            url,
+            data=data,
+            method=method,
+            headers={
+                "Authorization": f"Bearer {firestore_access_token(self.project_id)}",
+                "Content-Type": "application/json",
+            },
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=20, context=firestore_ssl_context()) as response:
+                raw = response.read().decode("utf-8")
+                return json.loads(raw) if raw else {}
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                return None
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"Firestore {method} failed with HTTP {exc.code}: {detail}") from exc
+
+    def decode_document(self, document: dict[str, Any] | None) -> dict[str, Any] | None:
+        if not document:
+            return None
+        record = {
+            key: firestore_decode_value(value)
+            for key, value in (document.get("fields") or {}).items()
+        }
+        return normalize_handoff_record(record)
+
+    def decode_raw_document(self, document: dict[str, Any] | None) -> dict[str, Any] | None:
+        if not document:
+            return None
+        return {
+            key: firestore_decode_value(value)
+            for key, value in (document.get("fields") or {}).items()
+        }
+
+    def write_raw_document(self, collection: str, document_id: str, record: dict[str, Any]) -> dict[str, Any]:
+        body = {
+            "fields": {
+                key: firestore_encode_value(value)
+                for key, value in record.items()
+            }
+        }
+        document = self.request("PATCH", self.document_url_for(collection, document_id), body)
+        return self.decode_raw_document(document) or record
+
+    def list_raw_documents(self, collection: str, page_size: int = 500) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        page_token = ""
+        while True:
+            query = urllib.parse.urlencode({
+                "pageSize": str(max(1, min(int(page_size or 500), 500))),
+                **({"pageToken": page_token} if page_token else {}),
+            })
+            response = self.request("GET", f"{self.collection_url_for(collection)}?{query}") or {}
+            for document in response.get("documents", []):
+                record = self.decode_raw_document(document)
+                if record:
+                    records.append(record)
+            page_token = str(response.get("nextPageToken") or "")
+            if not page_token:
+                break
+        return records
+
+    def write_record(self, record: dict[str, Any]) -> dict[str, Any]:
+        normalized = normalize_handoff_record(record)
+        transition_log = normalized.get("transitionLog")
+        if isinstance(transition_log, list):
+            normalized["transitionLog"] = [
+                entry for entry in transition_log[-HANDOFF_TRANSITION_LOG_LIMIT:]
+                if isinstance(entry, dict)
+            ]
+        body = {
+            "fields": {
+                key: firestore_encode_value(value)
+                for key, value in normalized.items()
+            }
+        }
+        document = self.request("PATCH", self.document_url(normalized["graphicsRequestId"]), body)
+        return self.decode_document(document) or normalized
+
+    def get_handoff(self, graphics_request_id: str) -> dict[str, Any] | None:
+        graphics_request_id = str(graphics_request_id or "").strip()
+        if not graphics_request_id:
+            return None
+        return self.decode_document(self.request("GET", self.document_url(graphics_request_id)))
+
+    def get_handoffs(self, graphics_request_ids: list[str]) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        for request_id in graphics_request_ids:
+            record = self.get_handoff(request_id)
+            if record:
+                records.append(compact_handoff_record(record))
+        return records
+
+    def list_handoffs(self, page_size: int = 500) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        page_token = ""
+        while True:
+            query = urllib.parse.urlencode({
+                "pageSize": str(max(1, min(int(page_size or 500), 500))),
+                **({"pageToken": page_token} if page_token else {}),
+            })
+            response = self.request("GET", f"{self.collection_url}?{query}") or {}
+            for document in response.get("documents", []):
+                record = self.decode_document(document)
+                if record:
+                    records.append(compact_handoff_record(record))
+            page_token = str(response.get("nextPageToken") or "")
+            if not page_token:
+                break
+        return records
+
+    def upsert_handoff_request(self, request: dict[str, Any]) -> dict[str, Any]:
+        graphics_request_id = str(request.get("graphicsRequestId") or request.get("id") or "").strip()
+        if not graphics_request_id:
+            raise ValueError("graphicsRequestId is required")
+
+        now = utc_now_iso()
+        existing = self.get_handoff(graphics_request_id) or default_handoff_record(graphics_request_id)
+        source_payload = request.get("sourcePayload") or request.get("payload") or request
+        content_type = normalize_content_type(
+            request.get("contentType")
+            or request.get("imageType")
+            or extract_handoff_value(source_payload, "contentType", "imageType")
+        )
+        image_type = normalize_content_type(
+            request.get("imageType")
+            or request.get("contentType")
+            or extract_handoff_value(source_payload, "imageType", "contentType"),
+            content_type,
+        )
+        has_text = bool(extract_handoff_text(source_payload))
+        has_required_source = has_text or (content_type == "FPI" and has_fpi_source_asset(source_payload))
+        if not has_required_source and existing.get("sourcePayload"):
+            source_payload = existing["sourcePayload"]
+            has_text = bool(extract_handoff_text(source_payload))
+            has_required_source = has_text or (content_type == "FPI" and has_fpi_source_asset(source_payload))
+        handoff_status = normalize_enum(request.get("handoffStatus"), HANDOFF_STATUSES, "requested")
+        pig_status = normalize_enum(request.get("pigStatus"), PIG_STATUSES, "not_started")
+        qc_status = normalize_enum(request.get("qcStatus"), QC_STATUSES, "not_sent")
+        source_status = str(request.get("sourceStatus") or "needs_graphics")
+        blocked_reason = str(request.get("blockedReason") or "")
+        existing_handoff_status = str(existing.get("handoffStatus") or "")
+        terminal_source_refresh = False
+        if existing_handoff_status in TERMINAL_HANDOFF_STATUSES and handoff_status in SOURCE_QUEUE_REFRESH_STATUSES:
+            terminal_source_refresh = True
+            source_status = str(existing.get("sourceStatus") or source_status)
+            handoff_status = existing_handoff_status
+            pig_status = normalize_enum(existing.get("pigStatus"), PIG_STATUSES, pig_status)
+            qc_status = normalize_enum(existing.get("qcStatus"), QC_STATUSES, qc_status)
+            blocked_reason = str(existing.get("blockedReason") or blocked_reason)
+        elif not has_required_source and handoff_status in {"requested", "claimed"}:
+            handoff_status = "blocked"
+            pig_status = "failed"
+            blocked_reason = blocked_reason or ("blank_fpi_source_asset" if content_type == "FPI" else "blank_request_text")
+
+        record = {
+            **existing,
+            "graphicsRequestId": graphics_request_id,
+            "sourceSystem": str(request.get("sourceSystem") or "weaver"),
+            "sourceStatus": source_status,
+            "contentType": content_type,
+            "imageType": image_type,
+            "sourceCompletionId": str(request.get("sourceCompletionId") or extract_handoff_value(source_payload, "sourceCompletionId") or ""),
+            "revisionOf": str(request.get("revisionOf") or extract_handoff_value(source_payload, "revisionOf") or ""),
+            "originalGraphicsRequestId": str(request.get("originalGraphicsRequestId") or extract_handoff_value(source_payload, "originalGraphicsRequestId") or ""),
+            "reviewStatus": str(request.get("reviewStatus") or extract_handoff_value(source_payload, "reviewStatus") or ""),
+            "ocrText": str(request.get("ocrText") or extract_handoff_value(source_payload, "ocrText") or ""),
+            "pigStatus": pig_status,
+            "handoffStatus": handoff_status,
+            "qcStatus": qc_status,
+            "sourcePayload": source_payload,
+            "blockedReason": blocked_reason,
+            "createdAt": existing.get("createdAt") or now,
+            "updatedAt": now,
+            "transitionLog": existing.get("transitionLog") if terminal_source_refresh else append_transition_entries(existing.get("transitionLog"), {
+                "at": now,
+                "event": "request_upserted",
+                "handoffStatus": handoff_status,
+                "pigStatus": pig_status,
+                "qcStatus": qc_status,
+                "blockedReason": blocked_reason,
+            }),
+        }
+        return self.write_record(record)
+
+    def claim_handoff(self, graphics_request_id: str, claimed_by: str = "") -> dict[str, Any]:
+        existing = self.get_handoff(graphics_request_id)
+        if not existing:
+            raise KeyError(f"Unknown graphicsRequestId: {graphics_request_id}")
+        if existing["handoffStatus"] in {"generated", "exported", "uploaded", "sent_to_weaver_qc", "approved", "blocked", "errored"}:
+            return existing
+
+        now = utc_now_iso()
+        existing.update({
+            "pigStatus": "claimed",
+            "handoffStatus": "claimed",
+            "claimedBy": claimed_by,
+            "claimedAt": existing.get("claimedAt") or now,
+            "updatedAt": now,
+            "transitionLog": append_transition_entries(existing.get("transitionLog"), {"at": now, "event": "claimed", "claimedBy": claimed_by}),
+        })
+        return self.write_record(existing)
+
+    def update_handoff(self, graphics_request_id: str, update: dict[str, Any]) -> dict[str, Any]:
+        existing = self.get_handoff(graphics_request_id)
+        if not existing:
+            raise KeyError(f"Unknown graphicsRequestId: {graphics_request_id}")
+
+        now = utc_now_iso()
+        handoff_status = normalize_enum(update.get("handoffStatus"), HANDOFF_STATUSES, existing["handoffStatus"])
+        pig_status = normalize_enum(update.get("pigStatus"), PIG_STATUSES, existing["pigStatus"])
+        qc_status = normalize_enum(update.get("qcStatus"), QC_STATUSES, existing["qcStatus"])
+        content_type = normalize_content_type(update.get("contentType") or update.get("imageType") or existing.get("contentType"), existing.get("contentType") or "QI")
+        image_type = normalize_content_type(update.get("imageType") or update.get("contentType") or existing.get("imageType"), content_type)
+        asset_url = str(update.get("assetUrl") or update.get("assetLinkUrl") or update.get("driveUrl") or existing["assetUrl"] or "")
+        uploaded = handoff_status in {"uploaded", "sent_to_weaver_qc", "approved"} or pig_status == "uploaded"
+        generated = uploaded or handoff_status in {"generated", "exported", "sent_to_weaver_qc", "approved"} or pig_status in {"generated", "exported", "uploaded"}
+        sent_to_qc = handoff_status in {"sent_to_weaver_qc", "approved", "rejected"} or qc_status in {"pending", "approved", "rejected", "needs_revision"}
+        approved = handoff_status == "approved" or qc_status == "approved"
+        rejected = handoff_status == "rejected" or qc_status in {"rejected", "needs_revision"}
+
+        existing.update({
+            "sourceStatus": str(update.get("sourceStatus") or existing["sourceStatus"]),
+            "contentType": content_type,
+            "imageType": image_type,
+            "sourceCompletionId": str(update.get("sourceCompletionId") or existing.get("sourceCompletionId") or ""),
+            "revisionOf": str(update.get("revisionOf") or existing.get("revisionOf") or ""),
+            "originalGraphicsRequestId": str(update.get("originalGraphicsRequestId") or existing.get("originalGraphicsRequestId") or ""),
+            "reviewStatus": str(update.get("reviewStatus") or existing.get("reviewStatus") or ""),
+            "ocrText": str(update.get("ocrText") or existing.get("ocrText") or ""),
+            "pigStatus": pig_status,
+            "handoffStatus": handoff_status,
+            "qcStatus": qc_status,
+            "assetUrl": asset_url,
+            "assetPreviewUrl": str(update.get("assetPreviewUrl") or update.get("previewUrl") or update.get("thumbnailUrl") or existing["assetPreviewUrl"] or ""),
+            "driveFileId": str(update.get("driveFileId") or update.get("fileId") or existing["driveFileId"] or ""),
+            "driveFileName": str(update.get("driveFileName") or update.get("fileName") or existing["driveFileName"] or ""),
+            "mimeType": str(update.get("mimeType") or existing["mimeType"] or ""),
+            "exportType": str(update.get("exportType") or existing["exportType"] or ""),
+            "variant": str(update.get("variant") or existing["variant"] or ""),
+            "version": str(update.get("version") or existing["version"] or ""),
+            "errorMessage": str(update.get("errorMessage") or existing["errorMessage"] or ""),
+            "blockedReason": str(update.get("blockedReason") or existing["blockedReason"] or ""),
+            "pigPayload": update.get("pigPayload") or update,
+            "qcPayload": update.get("qcPayload") or update,
+            "updatedAt": now,
+            "generatedAt": existing.get("generatedAt") or (now if generated else ""),
+            "uploadedAt": existing.get("uploadedAt") or (now if uploaded else ""),
+            "sentToQcAt": existing.get("sentToQcAt") or (now if sent_to_qc else ""),
+            "approvedAt": existing.get("approvedAt") or (now if approved else ""),
+            "rejectedAt": existing.get("rejectedAt") or (now if rejected else ""),
+            "transitionLog": append_transition_entries(existing.get("transitionLog"), {
+                "at": now,
+                "event": "updated",
+                "handoffStatus": handoff_status,
+                "pigStatus": pig_status,
+                "qcStatus": qc_status,
+            }),
+        })
+        return self.write_record(existing)
+
+    def get_handoff_queue(self, limit: int = 100, filter_mode: str = "all", cursor: int = 0) -> list[dict[str, Any]]:
+        normalized_filter = str(filter_mode or "all").strip().lower()
+        offset = max(0, int(cursor or 0))
+        records = [
+            record for record in self.list_handoffs()
+            if record.get("isActionable")
+            and (
+                normalized_filter in {"all", ""}
+                or record.get("queueView") == normalized_filter
+                or (normalized_filter == "rework" and record.get("nextAction") == "rework")
+            )
+        ]
+        records.sort(key=lambda item: str(item.get("createdAt") or ""))
+        page_limit = max(1, min(int(limit or 100), 500))
+        return [queue_card_record(record) for record in records[offset:offset + page_limit]]
+
+    def upsert_graphics_request(self, request: dict[str, Any]) -> str:
+        request_id = str(request["id"]).strip()
+        if not request_id:
+            raise ValueError("graphics request id is required")
+        created_at = str(request.get("created_at") or request.get("createdAt") or utc_now_iso())
+        updated_at = str(request.get("updated_at") or request.get("updatedAt") or created_at)
+        quote_text = str(request.get("quote_text") or request.get("quoteText") or "")
+        content_type = normalize_content_type(request.get("content_type") or request.get("contentType") or request.get("imageType"))
+        image_type = normalize_content_type(request.get("image_type") or request.get("imageType") or request.get("contentType"), content_type)
+        self.write_raw_document(FIRESTORE_GRAPHICS_REQUESTS_COLLECTION, request_id, {
+            "id": request_id,
+            "requestStatus": str(request.get("request_status") or request.get("requestStatus") or "OPEN"),
+            "sourceType": str(request.get("source_type") or request.get("sourceType") or "weaver_sheet_queue"),
+            "contentType": content_type,
+            "imageType": image_type,
+            "bookTitle": str(request.get("book_title") or request.get("bookTitle") or ""),
+            "poemTitle": str(request.get("poem_title") or request.get("poemTitle") or ""),
+            "author": str(request.get("author") or ""),
+            "quoteText": quote_text,
+            "wordCount": int(request.get("word_count") or request.get("wordCount") or count_words(quote_text)),
+            "sourceRecordId": str(request.get("source_record_id") or request.get("sourceRecordId") or ""),
+            "sourceSheetName": str(request.get("source_sheet_name") or request.get("sourceSheetName") or ""),
+            "sourceSheetRow": request.get("source_sheet_row") or request.get("sourceSheetRow") or 0,
+            "sourcePayload": request.get("source_payload") or request.get("sourcePayload") or {},
+            "latestCompletionId": str(request.get("latest_completion_id") or request.get("latestCompletionId") or ""),
+            "createdAt": created_at,
+            "updatedAt": updated_at,
+        })
+        return request_id
+
+    def replace_graphics_request_items(self, graphics_request_id: str, items: list[dict[str, Any]]) -> None:
+        request_id = str(graphics_request_id or "").strip()
+        if not request_id:
+            return
+        normalized_items = []
+        for position, item in enumerate(items, start=1):
+            quote_text = str(item.get("quote_text") or item.get("quoteText") or "")
+            normalized_items.append({
+                "itemPosition": position,
+                "sourceRecordId": str(item.get("source_record_id") or item.get("sourceRecordId") or ""),
+                "sourceSheetName": str(item.get("source_sheet_name") or item.get("sourceSheetName") or ""),
+                "sourceSheetRow": item.get("source_sheet_row") or item.get("sourceSheetRow") or 0,
+                "bookTitle": str(item.get("book_title") or item.get("bookTitle") or ""),
+                "poemTitle": str(item.get("poem_title") or item.get("poemTitle") or ""),
+                "author": str(item.get("author") or ""),
+                "quoteText": quote_text,
+                "createdAt": str(item.get("created_at") or item.get("createdAt") or utc_now_iso()),
+            })
+        self.write_raw_document(FIRESTORE_GRAPHICS_REQUESTS_COLLECTION, request_id, {
+            "id": request_id,
+            "requestItems": normalized_items,
+            "updatedAt": utc_now_iso(),
+        })
+
+    def insert_graphics_completion(self, completion: dict[str, Any]) -> str:
+        completion_id = str(completion["id"]).strip()
+        graphics_request_id = str(completion["graphics_request_id"]).strip()
+        if not completion_id or not graphics_request_id:
+            raise ValueError("completion id and graphics_request_id are required")
+        content_type = normalize_content_type(completion.get("content_type") or completion.get("contentType") or completion.get("imageType"))
+        image_type = normalize_content_type(completion.get("image_type") or completion.get("imageType") or completion.get("contentType"), content_type)
+        ingested_at = str(completion.get("ingested_at") or completion.get("ingestedAt") or utc_now_iso())
+        self.write_raw_document(FIRESTORE_GRAPHICS_COMPLETIONS_COLLECTION, completion_id, {
+            "id": completion_id,
+            "graphicsRequestId": graphics_request_id,
+            "sourceTool": str(completion.get("source_tool") or completion.get("sourceTool") or "P.I.G."),
+            "contentType": content_type,
+            "imageType": image_type,
+            "assetUrl": str(completion.get("asset_url") or completion.get("assetUrl") or ""),
+            "assetPreviewUrl": str(completion.get("asset_preview_url") or completion.get("assetPreviewUrl") or ""),
+            "productionNotes": str(completion.get("production_notes") or completion.get("productionNotes") or ""),
+            "completionStatus": str(completion.get("completion_status") or completion.get("completionStatus") or "RETURNED"),
+            "completedAt": str(completion.get("completed_at") or completion.get("completedAt") or utc_now_iso()),
+            "ingestedAt": ingested_at,
+            "sourcePayload": completion.get("source_payload") or completion.get("sourcePayload") or {},
+        })
+        return completion_id
+
+    def insert_graphics_qc_review(self, review: dict[str, Any]) -> int:
+        reviewed_at = str(review.get("reviewed_at") or review.get("reviewedAt") or utc_now_iso())
+        completion_id = str(review["graphics_completion_id"]).strip()
+        record = {
+            "graphicsCompletionId": completion_id,
+            "decision": str(review["decision"]).strip(),
+            "metadataIssue": str(review.get("metadata_issue") or review.get("metadataIssue") or ""),
+            "aestheticIssue": str(review.get("aesthetic_issue") or review.get("aestheticIssue") or ""),
+            "note": str(review.get("note") or ""),
+            "reviewedBy": str(review.get("reviewed_by") or review.get("reviewedBy") or ""),
+            "reviewedAt": reviewed_at,
+            "sourcePayload": review.get("source_payload") or review.get("sourcePayload") or {},
+        }
+        document_id = firestore_stable_document_id("qc", record)
+        self.write_raw_document(FIRESTORE_GRAPHICS_QC_REVIEWS_COLLECTION, document_id, {**record, "id": document_id})
+        return 1
+
+    def insert_poetry_please_handoff(self, handoff: dict[str, Any]) -> int:
+        handed_off_at = str(handoff.get("handed_off_at") or handoff.get("handedOffAt") or utc_now_iso())
+        completion_id = str(handoff["graphics_completion_id"]).strip()
+        record = {
+            "graphicsCompletionId": completion_id,
+            "handoffStatus": str(handoff.get("handoff_status") or handoff.get("handoffStatus") or "QUEUED"),
+            "handoffMode": str(handoff.get("handoff_mode") or handoff.get("handoffMode") or "preview"),
+            "handedOffAt": handed_off_at,
+            "poetryPleaseItemId": str(handoff.get("poetry_please_item_id") or handoff.get("poetryPleaseItemId") or ""),
+            "payload": handoff.get("payload") or {},
+        }
+        document_id = firestore_stable_document_id("pph", record)
+        self.write_raw_document(FIRESTORE_POETRY_PLEASE_HANDOFFS_COLLECTION, document_id, {**record, "id": document_id})
+        return 1
+
+    def get_latest_graphics_qc_reviews(self, completion_ids: list[str] | None = None) -> dict[str, dict[str, Any]]:
+        allowed = {str(value or "").strip() for value in (completion_ids or []) if str(value or "").strip()}
+        latest: dict[str, dict[str, Any]] = {}
+        for record in self.list_raw_documents(FIRESTORE_GRAPHICS_QC_REVIEWS_COLLECTION):
+            completion_id = str(record.get("graphicsCompletionId") or "")
+            if allowed and completion_id not in allowed:
+                continue
+            existing = latest.get(completion_id)
+            if existing and str(existing.get("reviewed_at") or "") >= str(record.get("reviewedAt") or ""):
+                continue
+            latest[completion_id] = {
+                "decision": str(record.get("decision") or ""),
+                "metadata_issue": str(record.get("metadataIssue") or ""),
+                "aesthetic_issue": str(record.get("aestheticIssue") or ""),
+                "note": str(record.get("note") or ""),
+                "reviewed_by": str(record.get("reviewedBy") or ""),
+                "reviewed_at": str(record.get("reviewedAt") or ""),
+            }
+        return latest
+
+    def get_latest_poetry_please_handoffs(self, completion_ids: list[str] | None = None) -> dict[str, dict[str, Any]]:
+        allowed = {str(value or "").strip() for value in (completion_ids or []) if str(value or "").strip()}
+        latest: dict[str, dict[str, Any]] = {}
+        for record in self.list_raw_documents(FIRESTORE_POETRY_PLEASE_HANDOFFS_COLLECTION):
+            completion_id = str(record.get("graphicsCompletionId") or "")
+            if allowed and completion_id not in allowed:
+                continue
+            existing = latest.get(completion_id)
+            if existing and str(existing.get("handed_off_at") or "") >= str(record.get("handedOffAt") or ""):
+                continue
+            latest[completion_id] = {
+                "handoff_status": str(record.get("handoffStatus") or ""),
+                "handoff_mode": str(record.get("handoffMode") or ""),
+                "handed_off_at": str(record.get("handedOffAt") or ""),
+                "poetry_please_item_id": str(record.get("poetryPleaseItemId") or ""),
+                "payload_json": json.dumps(record.get("payload") or {}, ensure_ascii=True, sort_keys=True),
+            }
+        return latest
+
+
+def connect_firestore_ledger(
+    project_id: str | None = None,
+    database_id: str | None = None,
+) -> FirestoreLedgerClient:
+    resolved_project_id = (
+        project_id
+        or os.environ.get("WEAVER_FIRESTORE_PROJECT_ID")
+        or FIRESTORE_DEFAULT_PROJECT_ID
+    ).strip()
+    if not resolved_project_id:
+        raise RuntimeError("WEAVER_FIRESTORE_PROJECT_ID is required for Firestore ledger backend")
+    resolved_database_id = (database_id or os.environ.get("WEAVER_FIRESTORE_DATABASE_ID") or FIRESTORE_DEFAULT_DATABASE_ID).strip()
+    return FirestoreLedgerClient(resolved_project_id, resolved_database_id)
+
+
+def is_firestore_ledger(connection: Any) -> bool:
+    return isinstance(connection, FirestoreLedgerClient)
+
+
+
+def get_graphics_handoff(connection: Any, graphics_request_id: str) -> dict[str, Any] | None:
+    if is_firestore_ledger(connection):
+        return connection.get_handoff(graphics_request_id)
     row = connection.execute(
         "SELECT * FROM graphics_handoff_ledger WHERE graphics_request_id = ?",
         (graphics_request_id,),
@@ -228,10 +1176,12 @@ def get_graphics_handoff(connection: sqlite3.Connection, graphics_request_id: st
     return row_to_handoff(row) if row else None
 
 
-def get_graphics_handoffs(connection: sqlite3.Connection, graphics_request_ids: list[str]) -> list[dict[str, Any]]:
+def get_graphics_handoffs(connection: Any, graphics_request_ids: list[str]) -> list[dict[str, Any]]:
     ids = [str(value or "").strip() for value in graphics_request_ids if str(value or "").strip()]
     if not ids:
         return []
+    if is_firestore_ledger(connection):
+        return connection.get_handoffs(ids)
     placeholders = ",".join("?" for _ in ids)
     rows = connection.execute(
         f"SELECT * FROM graphics_handoff_ledger WHERE graphics_request_id IN ({placeholders})",
@@ -240,7 +1190,9 @@ def get_graphics_handoffs(connection: sqlite3.Connection, graphics_request_ids: 
     return [row_to_handoff(row) for row in rows]
 
 
-def upsert_graphics_handoff_request(connection: sqlite3.Connection, request: dict[str, Any]) -> dict[str, Any]:
+def upsert_graphics_handoff_request(connection: Any, request: dict[str, Any]) -> dict[str, Any]:
+    if is_firestore_ledger(connection):
+        return connection.upsert_handoff_request(request)
     graphics_request_id = str(request.get("graphicsRequestId") or request.get("id") or "").strip()
     if not graphics_request_id:
         raise ValueError("graphicsRequestId is required")
@@ -251,16 +1203,44 @@ def upsert_graphics_handoff_request(connection: sqlite3.Connection, request: dic
         (graphics_request_id,),
     ).fetchone()
     source_payload = request.get("sourcePayload") or request.get("payload") or request
+    content_type = normalize_content_type(
+        request.get("contentType")
+        or request.get("imageType")
+        or extract_handoff_value(source_payload, "contentType", "imageType")
+    )
+    image_type = normalize_content_type(
+        request.get("imageType")
+        or request.get("contentType")
+        or extract_handoff_value(source_payload, "imageType", "contentType"),
+        content_type,
+    )
     has_text = bool(extract_handoff_text(source_payload))
+    has_required_source = has_text or (content_type == "FPI" and has_fpi_source_asset(source_payload))
+    if not has_required_source and existing:
+        existing_payload = json.loads(existing["source_payload_json"] or "{}")
+        if existing_payload:
+            source_payload = existing_payload
+            has_text = bool(extract_handoff_text(source_payload))
+            has_required_source = has_text or (content_type == "FPI" and has_fpi_source_asset(source_payload))
     handoff_status = normalize_enum(request.get("handoffStatus"), HANDOFF_STATUSES, "requested")
     pig_status = normalize_enum(request.get("pigStatus"), PIG_STATUSES, "not_started")
     qc_status = normalize_enum(request.get("qcStatus"), QC_STATUSES, "not_sent")
+    source_status = str(request.get("sourceStatus") or "needs_graphics")
     blocked_reason = str(request.get("blockedReason") or "")
-    if not has_text and handoff_status in {"requested", "claimed"}:
+    existing_handoff_status = str(existing["handoff_status"] if existing else "")
+    terminal_source_refresh = False
+    if existing_handoff_status in TERMINAL_HANDOFF_STATUSES and handoff_status in SOURCE_QUEUE_REFRESH_STATUSES:
+        terminal_source_refresh = True
+        source_status = str(existing["source_status"] or source_status)
+        handoff_status = existing_handoff_status
+        pig_status = normalize_enum(existing["pig_status"], PIG_STATUSES, pig_status)
+        qc_status = normalize_enum(existing["qc_status"], QC_STATUSES, qc_status)
+        blocked_reason = str(existing["blocked_reason"] or blocked_reason)
+    elif not has_required_source and handoff_status in {"requested", "claimed"}:
         handoff_status = "blocked"
         pig_status = "failed"
-        blocked_reason = blocked_reason or "blank_request_text"
-    log_json = append_transition_log(
+        blocked_reason = blocked_reason or ("blank_fpi_source_asset" if content_type == "FPI" else "blank_request_text")
+    log_json = existing["transition_log_json"] if terminal_source_refresh and existing else append_transition_log(
         existing["transition_log_json"] if existing else "[]",
         {
             "at": now,
@@ -275,12 +1255,21 @@ def upsert_graphics_handoff_request(connection: sqlite3.Connection, request: dic
     connection.execute(
         """
         INSERT INTO graphics_handoff_ledger (
-            graphics_request_id, source_system, source_status, pig_status, handoff_status, qc_status,
+            graphics_request_id, source_system, source_status, content_type, image_type,
+            source_completion_id, revision_of, original_graphics_request_id, review_status, ocr_text,
+            pig_status, handoff_status, qc_status,
             source_payload_json, blocked_reason, transition_log_json, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(graphics_request_id) DO UPDATE SET
             source_system = excluded.source_system,
             source_status = excluded.source_status,
+            content_type = excluded.content_type,
+            image_type = excluded.image_type,
+            source_completion_id = excluded.source_completion_id,
+            revision_of = excluded.revision_of,
+            original_graphics_request_id = excluded.original_graphics_request_id,
+            review_status = excluded.review_status,
+            ocr_text = excluded.ocr_text,
             pig_status = excluded.pig_status,
             handoff_status = excluded.handoff_status,
             qc_status = excluded.qc_status,
@@ -292,7 +1281,14 @@ def upsert_graphics_handoff_request(connection: sqlite3.Connection, request: dic
         (
             graphics_request_id,
             str(request.get("sourceSystem") or "weaver"),
-            str(request.get("sourceStatus") or "needs_graphics"),
+            source_status,
+            content_type,
+            image_type,
+            str(request.get("sourceCompletionId") or extract_handoff_value(source_payload, "sourceCompletionId") or ""),
+            str(request.get("revisionOf") or extract_handoff_value(source_payload, "revisionOf") or ""),
+            str(request.get("originalGraphicsRequestId") or extract_handoff_value(source_payload, "originalGraphicsRequestId") or ""),
+            str(request.get("reviewStatus") or extract_handoff_value(source_payload, "reviewStatus") or ""),
+            str(request.get("ocrText") or extract_handoff_value(source_payload, "ocrText") or ""),
             pig_status,
             handoff_status,
             qc_status,
@@ -307,7 +1303,9 @@ def upsert_graphics_handoff_request(connection: sqlite3.Connection, request: dic
     return get_graphics_handoff(connection, graphics_request_id) or {}
 
 
-def claim_graphics_handoff(connection: sqlite3.Connection, graphics_request_id: str, claimed_by: str = "") -> dict[str, Any]:
+def claim_graphics_handoff(connection: Any, graphics_request_id: str, claimed_by: str = "") -> dict[str, Any]:
+    if is_firestore_ledger(connection):
+        return connection.claim_handoff(graphics_request_id, claimed_by)
     existing = get_graphics_handoff(connection, graphics_request_id)
     if not existing:
         raise KeyError(f"Unknown graphicsRequestId: {graphics_request_id}")
@@ -342,7 +1340,9 @@ def claim_graphics_handoff(connection: sqlite3.Connection, graphics_request_id: 
     return get_graphics_handoff(connection, graphics_request_id) or {}
 
 
-def update_graphics_handoff(connection: sqlite3.Connection, graphics_request_id: str, update: dict[str, Any]) -> dict[str, Any]:
+def update_graphics_handoff(connection: Any, graphics_request_id: str, update: dict[str, Any]) -> dict[str, Any]:
+    if is_firestore_ledger(connection):
+        return connection.update_handoff(graphics_request_id, update)
     existing = get_graphics_handoff(connection, graphics_request_id)
     if not existing:
         raise KeyError(f"Unknown graphicsRequestId: {graphics_request_id}")
@@ -351,6 +1351,8 @@ def update_graphics_handoff(connection: sqlite3.Connection, graphics_request_id:
     handoff_status = normalize_enum(update.get("handoffStatus"), HANDOFF_STATUSES, existing["handoffStatus"])
     pig_status = normalize_enum(update.get("pigStatus"), PIG_STATUSES, existing["pigStatus"])
     qc_status = normalize_enum(update.get("qcStatus"), QC_STATUSES, existing["qcStatus"])
+    content_type = normalize_content_type(update.get("contentType") or update.get("imageType") or existing.get("contentType"), existing.get("contentType") or "QI")
+    image_type = normalize_content_type(update.get("imageType") or update.get("contentType") or existing.get("imageType"), content_type)
     asset_url = str(update.get("assetUrl") or update.get("assetLinkUrl") or update.get("driveUrl") or existing["assetUrl"] or "")
     uploaded = handoff_status in {"uploaded", "sent_to_weaver_qc", "approved"} or pig_status == "uploaded"
     generated = uploaded or handoff_status in {"generated", "exported", "sent_to_weaver_qc", "approved"} or pig_status in {"generated", "exported", "uploaded"}
@@ -373,6 +1375,13 @@ def update_graphics_handoff(connection: sqlite3.Connection, graphics_request_id:
         """
         UPDATE graphics_handoff_ledger
         SET source_status = ?,
+            content_type = ?,
+            image_type = ?,
+            source_completion_id = ?,
+            revision_of = ?,
+            original_graphics_request_id = ?,
+            review_status = ?,
+            ocr_text = ?,
             pig_status = ?,
             handoff_status = ?,
             qc_status = ?,
@@ -399,6 +1408,13 @@ def update_graphics_handoff(connection: sqlite3.Connection, graphics_request_id:
         """,
         (
             str(update.get("sourceStatus") or existing["sourceStatus"]),
+            content_type,
+            image_type,
+            str(update.get("sourceCompletionId") or existing.get("sourceCompletionId") or ""),
+            str(update.get("revisionOf") or existing.get("revisionOf") or ""),
+            str(update.get("originalGraphicsRequestId") or existing.get("originalGraphicsRequestId") or ""),
+            str(update.get("reviewStatus") or existing.get("reviewStatus") or ""),
+            str(update.get("ocrText") or existing.get("ocrText") or ""),
             pig_status,
             handoff_status,
             qc_status,
@@ -433,7 +1449,11 @@ def update_graphics_handoff(connection: sqlite3.Connection, graphics_request_id:
     return get_graphics_handoff(connection, graphics_request_id) or {}
 
 
-def get_graphics_handoff_queue(connection: sqlite3.Connection, limit: int = 100) -> list[dict[str, Any]]:
+def get_graphics_handoff_queue(connection: Any, limit: int = 100, filter_mode: str = "all", cursor: int = 0) -> list[dict[str, Any]]:
+    if is_firestore_ledger(connection):
+        return connection.get_handoff_queue(limit, filter_mode, cursor)
+    normalized_filter = str(filter_mode or "all").strip().lower()
+    offset = max(0, int(cursor or 0))
     rows = connection.execute(
         """
         SELECT *
@@ -442,18 +1462,29 @@ def get_graphics_handoff_queue(connection: sqlite3.Connection, limit: int = 100)
           AND pig_status NOT IN ('generated', 'exported', 'uploaded', 'failed')
           AND qc_status IN ('not_sent', 'needs_revision')
         ORDER BY created_at ASC
-        LIMIT ?
+        LIMIT ? OFFSET ?
         """,
-        (max(1, min(int(limit or 100), 500)),),
+        (max(1, min(int(limit or 100), 500)), offset),
     ).fetchall()
     return [
-        record
-        for record in (row_to_handoff(row) for row in rows)
-        if record["quoteText"].strip()
+        queue_card_record(record)
+        for record in (
+            record
+            for record in (row_to_handoff(row) for row in rows)
+            if record.get("isActionable")
+            and (
+                normalized_filter in {"all", ""}
+                or record.get("queueView") == normalized_filter
+                or (normalized_filter == "rework" and record.get("nextAction") == "rework")
+            )
+        )
     ]
 
 
 def replace_graphics_request_items(connection: sqlite3.Connection, graphics_request_id: str, items: list[dict[str, Any]]) -> None:
+    if is_firestore_ledger(connection):
+        connection.replace_graphics_request_items(graphics_request_id, items)
+        return
     connection.execute("DELETE FROM graphics_request_items WHERE graphics_request_id = ?", (graphics_request_id,))
     for position, item in enumerate(items, start=1):
         quote_text = str(item.get("quote_text") or "")
@@ -482,20 +1513,26 @@ def replace_graphics_request_items(connection: sqlite3.Connection, graphics_requ
 
 
 def insert_graphics_completion(connection: sqlite3.Connection, completion: dict[str, Any]) -> str:
+    if is_firestore_ledger(connection):
+        return connection.insert_graphics_completion(completion)
     completion_id = str(completion["id"]).strip()
     graphics_request_id = str(completion["graphics_request_id"]).strip()
     ingested_at = completion.get("ingested_at") or utc_now_iso()
     payload_json = json.dumps(completion.get("source_payload") or {}, ensure_ascii=True, sort_keys=True)
+    content_type = normalize_content_type(completion.get("content_type") or completion.get("contentType") or completion.get("imageType"))
+    image_type = normalize_content_type(completion.get("image_type") or completion.get("imageType") or completion.get("contentType"), content_type)
 
     connection.execute(
         """
         INSERT INTO graphics_completions (
-            id, graphics_request_id, source_tool, asset_url, asset_preview_url,
+            id, graphics_request_id, source_tool, content_type, image_type, asset_url, asset_preview_url,
             production_notes, completion_status, completed_at, ingested_at, source_payload_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             graphics_request_id = excluded.graphics_request_id,
             source_tool = excluded.source_tool,
+            content_type = excluded.content_type,
+            image_type = excluded.image_type,
             asset_url = excluded.asset_url,
             asset_preview_url = excluded.asset_preview_url,
             production_notes = excluded.production_notes,
@@ -508,6 +1545,8 @@ def insert_graphics_completion(connection: sqlite3.Connection, completion: dict[
             completion_id,
             graphics_request_id,
             str(completion.get("source_tool") or "P.I.G."),
+            content_type,
+            image_type,
             str(completion.get("asset_url") or ""),
             str(completion.get("asset_preview_url") or ""),
             str(completion.get("production_notes") or ""),
@@ -530,6 +1569,8 @@ def insert_graphics_completion(connection: sqlite3.Connection, completion: dict[
 
 
 def insert_graphics_qc_review(connection: sqlite3.Connection, review: dict[str, Any]) -> int:
+    if is_firestore_ledger(connection):
+        return connection.insert_graphics_qc_review(review)
     reviewed_at = review.get("reviewed_at") or utc_now_iso()
     payload_json = json.dumps(review.get("source_payload") or {}, ensure_ascii=True, sort_keys=True)
     cursor = connection.execute(
@@ -555,6 +1596,8 @@ def insert_graphics_qc_review(connection: sqlite3.Connection, review: dict[str, 
 
 
 def insert_poetry_please_handoff(connection: sqlite3.Connection, handoff: dict[str, Any]) -> int:
+    if is_firestore_ledger(connection):
+        return connection.insert_poetry_please_handoff(handoff)
     cursor = connection.execute(
         """
         INSERT INTO poetry_please_handoffs (
@@ -703,6 +1746,8 @@ def get_latest_graphics_qc_reviews(
     connection: sqlite3.Connection,
     completion_ids: list[str] | None = None,
 ) -> dict[str, dict[str, Any]]:
+    if is_firestore_ledger(connection):
+        return connection.get_latest_graphics_qc_reviews(completion_ids)
     params: list[Any] = []
     sql = """
         SELECT graphics_completion_id, decision, metadata_issue, aesthetic_issue,
@@ -732,6 +1777,8 @@ def get_latest_poetry_please_handoffs(
     connection: sqlite3.Connection,
     completion_ids: list[str] | None = None,
 ) -> dict[str, dict[str, Any]]:
+    if is_firestore_ledger(connection):
+        return connection.get_latest_poetry_please_handoffs(completion_ids)
     params: list[Any] = []
     sql = """
         SELECT handoff.graphics_completion_id, handoff.handoff_status, handoff.handoff_mode,
