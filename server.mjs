@@ -6905,6 +6905,20 @@ const server = http.createServer(async (req, res) => {
   return serveFile(res, filePath);
 });
 
+if (process.env.K_SERVICE) {
+  const requiredFirestoreConfig = {
+    WEAVER_LEDGER_BACKEND: "firestore",
+    WEAVER_FIRESTORE_PROJECT_ID: "button-weaver-internal",
+    WEAVER_FIRESTORE_DATABASE_ID: "weaverledger"
+  };
+  const invalidFirestoreConfig = Object.entries(requiredFirestoreConfig)
+    .filter(([name, expected]) => String(process.env[name] || "").trim() !== expected)
+    .map(([name]) => name);
+  if (invalidFirestoreConfig.length) {
+    throw new Error(`Invalid production Firestore configuration: ${invalidFirestoreConfig.join(", ")}`);
+  }
+}
+
 server.listen(port, () => {
   console.log(`Weaver server running on port ${port}`);
 });

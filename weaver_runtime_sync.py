@@ -42,6 +42,28 @@ FIRESTORE_HANDOFF_ACTIONS = {
     "get_handoff_requests",
 }
 
+EXPECTED_FIRESTORE_PROJECT_ID = "button-weaver-internal"
+EXPECTED_FIRESTORE_DATABASE_ID = "weaverledger"
+
+
+def validate_production_handoff_backend(action: str) -> None:
+    if not os.environ.get("K_SERVICE") or action not in FIRESTORE_HANDOFF_ACTIONS:
+        return
+    expected = {
+        "WEAVER_LEDGER_BACKEND": "firestore",
+        "WEAVER_FIRESTORE_PROJECT_ID": EXPECTED_FIRESTORE_PROJECT_ID,
+        "WEAVER_FIRESTORE_DATABASE_ID": EXPECTED_FIRESTORE_DATABASE_ID,
+    }
+    invalid = [
+        f"{name}={os.environ.get(name, '')!r}"
+        for name, value in expected.items()
+        if os.environ.get(name, "").strip() != value
+    ]
+    if invalid:
+        raise RuntimeError(
+            "Production graphics handoff storage is misconfigured: " + ", ".join(invalid)
+        )
+
 
 def load_payload() -> dict[str, Any]:
     raw = sys.stdin.read().strip()
@@ -405,6 +427,7 @@ def fetch_handoff_requests(connection, payload: dict[str, Any]) -> dict[str, Any
 def main() -> int:
     payload = load_payload()
     action = normalize_text(payload.get("action"))
+    validate_production_handoff_backend(action)
     use_firestore = (
         os.environ.get("WEAVER_LEDGER_BACKEND", "").strip().lower() == "firestore"
         and action in FIRESTORE_HANDOFF_ACTIONS
