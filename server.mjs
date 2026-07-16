@@ -2492,7 +2492,7 @@ function buildApprovedExcerptExportRecordFromSheetRow(row, index, canonicalBookA
     canonicalBookAuthorMap
   );
   const poemTitle = (isVideoIntake ? rawVideoTitle : row[config.title - 1] || "").toString();
-  const sourceEvent = cleanSheetWhitespace(row[17]) || noteMeta.sourceEvent;
+  const sourceEvent = cleanSheetWhitespace(row[17]) || noteMeta.sourceEvent || null;
   const validationStatus = cleanSheetWhitespace(row[config.validationStatus - 1]);
   const canonicalAuthor = cleanSheetWhitespace(row[config.validationCanonicalAuthor - 1]) || author;
   const canonicalPoemTitle = cleanSheetWhitespace(row[config.validationMatchedPoemTitle - 1]) || poemTitle;
@@ -2521,6 +2521,7 @@ function buildApprovedExcerptExportRecordFromSheetRow(row, index, canonicalBookA
     sourceApprovedAt: normalizedTimestamp,
     sourceUpdatedAt: normalizedTimestamp,
     sourceEvent,
+    sourceEventLabel: sourceEvent,
     author,
     poemTitle,
     bookTitle,
@@ -2549,7 +2550,8 @@ function buildApprovedExcerptExportRecordFromSheetRow(row, index, canonicalBookA
       wordCount: cleanedExcerptText ? cleanedExcerptText.split(/\s+/).length : 0,
       lineCount,
       updatedAt: normalizedTimestamp,
-      sourceEvent
+      sourceEvent,
+      sourceEventLabel: sourceEvent
     },
     contentType: noteMeta.contentType || "EXC",
     socialMediaHandle: noteMeta.socialMediaHandle || "",
