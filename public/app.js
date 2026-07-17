@@ -146,6 +146,8 @@ let currentGraphicsBookSummaries = [];
 let currentGraphicsAssetMatches = new Map();
 let currentGraphicsCoverage = null;
 let currentGraphicsFolderImportPreview = null;
+let graphicsBooksLoadSequence = 0;
+let graphicsRecordsLoadSequence = 0;
 let currentExcerptHandoffRecords = [];
 let isSaving = false;
 let currentValidationByRecordId = new Map();
@@ -3289,6 +3291,7 @@ async function applyGraphicsFolderImport() {
 async function loadGraphicsBooks(options = {}) {
   const preserveSelection = options.preserveSelection !== false;
   const mode = getSelectedGraphicsMode();
+  const loadSequence = ++graphicsBooksLoadSequence;
 
   try {
     setStatus(`Loading ${getGraphicsModeLabel(mode)} books...`);
@@ -3305,6 +3308,10 @@ async function loadGraphicsBooks(options = {}) {
         error: primaryError.message
       });
       data = await loadGraphicsBooksFromSheetsFallback(mode);
+    }
+
+    if (loadSequence !== graphicsBooksLoadSequence || mode !== getSelectedGraphicsMode()) {
+      return;
     }
 
     currentGraphicsBookSummaries = Array.isArray(data.books)
@@ -3324,7 +3331,9 @@ async function loadGraphicsBooks(options = {}) {
       `Loaded ${getVisibleGraphicsBookSummaries().length} ${getGraphicsModeLabel(mode)} books. Backend ${data.version || "unknown"}.`
     );
   } catch (error) {
-    setStatus(`Graphics book load failed: ${error.message}`);
+    if (loadSequence === graphicsBooksLoadSequence) {
+      setStatus(`Graphics book load failed: ${error.message}`);
+    }
   }
 }
 
@@ -3418,6 +3427,7 @@ async function loadGraphicsRecords() {
   const summary = graphicsBookSummaryByKey.get(bookKey);
   const bookTitle = isGraphicsQcSweepSelection(bookKey) ? "__qc_sweep__" : (summary?.title || bookKey);
   const statusLabel = isGraphicsQcSweepSelection(bookKey) ? "QC Sweep" : bookTitle;
+  const loadSequence = ++graphicsRecordsLoadSequence;
 
   try {
     setStatus(`Loading ${getGraphicsModeLabel(mode)} rows for "${statusLabel}"...`);
@@ -3442,18 +3452,35 @@ async function loadGraphicsRecords() {
       data = await loadGraphicsRecordsFromSheetsFallback(bookTitle, mode);
     }
 
+    if (
+      loadSequence !== graphicsRecordsLoadSequence
+      || mode !== getSelectedGraphicsMode()
+      || bookKey !== (elements.graphicsBookSelect?.value || "")
+    ) {
+      return;
+    }
+
     currentGraphicsRecords = Array.isArray(data.records) ? data.records : [];
     currentGraphicsCoverage = data.coverage || null;
     currentGraphicsAssetMatches = mode === "coverage_needs"
       ? new Map()
       : await loadGraphicsAssetMatches(currentGraphicsRecords);
+    if (
+      loadSequence !== graphicsRecordsLoadSequence
+      || mode !== getSelectedGraphicsMode()
+      || bookKey !== (elements.graphicsBookSelect?.value || "")
+    ) {
+      return;
+    }
     renderGraphicsRecords(currentGraphicsRecords, currentGraphicsCoverage);
     setStatus(
       `Loaded ${currentGraphicsRecords.length} ${getGraphicsModeLabel(mode)} rows for "${statusLabel}".`,
       currentGraphicsRecords.slice(0, 5)
     );
   } catch (error) {
-    setStatus(`Graphics record load failed: ${error.message}`);
+    if (loadSequence === graphicsRecordsLoadSequence) {
+      setStatus(`Graphics record load failed: ${error.message}`);
+    }
   }
 }
 

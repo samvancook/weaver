@@ -140,13 +140,35 @@ async function getCachedQueueSnapshot(key, loader, ttlMs = QUEUE_CACHE_TTL_MS) {
   if (current && current.expiresAt > now) {
     return current.value;
   }
+  if (current?.promise) {
+    return current.promise;
+  }
 
-  const value = await loader();
   queueSnapshotCache.set(key, {
-    value,
-    expiresAt: now + ttlMs
+    value: current?.value,
+    expiresAt: current?.expiresAt || 0,
+    promise: null
   });
-  return value;
+  const entry = queueSnapshotCache.get(key);
+  entry.promise = Promise.resolve()
+    .then(loader)
+    .then(value => {
+      if (queueSnapshotCache.get(key) === entry) {
+        queueSnapshotCache.set(key, {
+          value,
+          expiresAt: Date.now() + ttlMs,
+          promise: null
+        });
+      }
+      return value;
+    })
+    .catch(error => {
+      if (queueSnapshotCache.get(key) === entry) {
+        queueSnapshotCache.delete(key);
+      }
+      throw error;
+    });
+  return entry.promise;
 }
 
 function invalidateQueueSnapshots() {
@@ -4031,7 +4053,7 @@ async function getPendingGraphicsQcRecords({ includeCleanup = true } = {}) {
     return collapsePendingGraphicsQcRecords(
       mergeRecordCollections([cleanupRecords, pigRecords])
     ).filter(record => !hasResolvedGraphicsQcDecision(record));
-  });
+  }, 30000);
 }
 
 function buildGraphicsReworkRequestId(completion) {
