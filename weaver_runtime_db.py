@@ -404,6 +404,9 @@ def default_handoff_record(graphics_request_id: str) -> dict[str, Any]:
         "exportType": "",
         "variant": "",
         "version": "",
+        "pigProjectId": "",
+        "editableProjectFileId": "",
+        "editableProjectUrl": "",
         "claimedBy": "",
         "errorMessage": "",
         "blockedReason": "",
@@ -1051,6 +1054,14 @@ class FirestoreLedgerClient:
             "exportType": str(update.get("exportType") or existing["exportType"] or ""),
             "variant": str(update.get("variant") or existing["variant"] or ""),
             "version": str(update.get("version") or existing["version"] or ""),
+            "pigProjectId": str(update.get("pigProjectId") or existing.get("pigProjectId") or ""),
+            "editableProjectFileId": str(
+                update.get("editableProjectFileId")
+                or update.get("projectFileId")
+                or existing.get("editableProjectFileId")
+                or ""
+            ),
+            "editableProjectUrl": str(update.get("editableProjectUrl") or existing.get("editableProjectUrl") or ""),
             "errorMessage": str(update.get("errorMessage") or existing["errorMessage"] or ""),
             "blockedReason": str(update.get("blockedReason") or existing["blockedReason"] or ""),
             "pigPayload": update.get("pigPayload") or update,

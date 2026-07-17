@@ -189,6 +189,9 @@ def sync_completions(connection, payload: dict[str, Any]) -> dict[str, Any]:
             "exportType": completion.get("exportType"),
             "variant": completion.get("variant"),
             "version": completion.get("version"),
+            "pigProjectId": completion.get("pigProjectId"),
+            "editableProjectFileId": completion.get("editableProjectFileId") or completion.get("projectFileId"),
+            "editableProjectUrl": completion.get("editableProjectUrl"),
             "pigPayload": completion,
         })
         written += 1

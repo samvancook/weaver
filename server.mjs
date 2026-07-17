@@ -1824,6 +1824,7 @@ function overlayRuntimeHandoffState(record, handoffStateByRequestId = null) {
 
   const qcStatus = cleanSheetWhitespace(handoff.qcStatus).toLowerCase();
   const qcPayload = handoff.qcPayload && typeof handoff.qcPayload === "object" ? handoff.qcPayload : {};
+  const pigPayload = handoff.pigPayload && typeof handoff.pigPayload === "object" ? handoff.pigPayload : {};
 
   return {
     ...record,
@@ -1840,6 +1841,19 @@ function overlayRuntimeHandoffState(record, handoffStateByRequestId = null) {
     aestheticIssue: cleanSheetWhitespace(qcPayload.aestheticIssue || record.aestheticIssue),
     assetLinkUrl: cleanSheetWhitespace(handoff.assetUrl) || record.assetLinkUrl,
     assetPreviewUrl: cleanSheetWhitespace(handoff.assetPreviewUrl) || record.assetPreviewUrl,
+    pigProjectId: cleanSheetWhitespace(
+      handoff.pigProjectId || pigPayload.pigProjectId || record.pigProjectId,
+    ),
+    editableProjectFileId: cleanSheetWhitespace(
+      handoff.editableProjectFileId
+        || handoff.projectFileId
+        || pigPayload.editableProjectFileId
+        || pigPayload.projectFileId
+        || record.editableProjectFileId,
+    ),
+    editableProjectUrl: cleanSheetWhitespace(
+      handoff.editableProjectUrl || pigPayload.editableProjectUrl || record.editableProjectUrl,
+    ),
     ledgerHandoffStatus: cleanSheetWhitespace(handoff.handoffStatus),
     ledgerPigStatus: cleanSheetWhitespace(handoff.pigStatus),
     ledgerQcStatus: cleanSheetWhitespace(handoff.qcStatus)
@@ -4127,6 +4141,8 @@ function buildGraphicsReworkRequestRecord(completion) {
     revisionOf,
     version: 2,
     pigProjectId: cleanSheetWhitespace(completion.pigProjectId),
+    editableProjectFileId: cleanSheetWhitespace(completion.editableProjectFileId || completion.projectFileId),
+    editableProjectUrl: cleanSheetWhitespace(completion.editableProjectUrl),
     sourceRecordId,
     contentId,
     imageId: contentId,
