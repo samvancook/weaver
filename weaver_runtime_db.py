@@ -1742,6 +1742,70 @@ def get_excerpt_handoffs(connection: sqlite3.Connection, record_ids: list[str] |
     return [row_to_excerpt_handoff(row) for row in rows]
 
 
+def get_pending_graphics_qc_records(connection: Any) -> list[dict[str, Any]]:
+    if not is_firestore_ledger(connection):
+        raise RuntimeError("Pending Graphics QC read model requires Firestore")
+
+    completions = connection.list_raw_documents(FIRESTORE_GRAPHICS_COMPLETIONS_COLLECTION)
+    completion_ids = [str(record.get("id") or "").strip() for record in completions]
+    qc_reviews = connection.get_latest_graphics_qc_reviews(completion_ids)
+    handoffs = connection.get_latest_poetry_please_handoffs(completion_ids)
+    pending: list[dict[str, Any]] = []
+
+    for completion in completions:
+        payload = completion.get("sourcePayload") if isinstance(completion.get("sourcePayload"), dict) else {}
+        completion_id = str(
+            completion.get("id") or payload.get("pigCompletionId") or ""
+        ).strip()
+        if not completion_id:
+            continue
+        qc = qc_reviews.get(completion_id) or {}
+        if str(qc.get("decision") or payload.get("qcDecision") or "").strip():
+            continue
+        handoff = handoffs.get(completion_id) or {}
+        graphics_request_id = str(
+            completion.get("graphicsRequestId") or payload.get("graphicsRequestId") or ""
+        ).strip()
+        asset_url = str(completion.get("assetUrl") or payload.get("assetUrl") or "").strip()
+        asset_preview_url = str(
+            completion.get("assetPreviewUrl") or payload.get("assetPreviewUrl") or asset_url
+        ).strip()
+        pending.append({
+            "pigCompletionId": completion_id,
+            "graphicsRequestId": graphics_request_id,
+            "recordId": str(payload.get("recordId") or graphics_request_id or completion_id),
+            "sheetRow": payload.get("sheetRow") or 0,
+            "storageTarget": str(payload.get("storageTarget") or "firestore"),
+            "contentType": normalize_content_type(
+                completion.get("contentType") or payload.get("contentType")
+            ),
+            "author": str(payload.get("author") or ""),
+            "poemTitle": str(payload.get("poemTitle") or ""),
+            "bookTitle": str(payload.get("bookTitle") or ""),
+            "quoteText": str(payload.get("quoteText") or ""),
+            "assetLinkUrl": asset_url,
+            "assetPreviewUrl": asset_preview_url,
+            "completedAt": str(completion.get("completedAt") or payload.get("completedAt") or ""),
+            "graphicsQcDecision": "",
+            "graphicsQcNote": "",
+            "graphicsQcUpdatedAt": "",
+            "poetryPleaseStatus": str(handoff.get("handoff_status") or ""),
+            "poetryPleaseUpdatedAt": str(handoff.get("handed_off_at") or ""),
+            "poetryPleaseNote": (
+                f"item={handoff.get('poetry_please_item_id')}"
+                if handoff.get("poetry_please_item_id") else ""
+            ),
+        })
+
+    return sorted(
+        pending,
+        key=lambda record: (
+            str(record.get("completedAt") or ""),
+            str(record.get("pigCompletionId") or ""),
+        ),
+    )
+
+
 def get_latest_graphics_qc_reviews(
     connection: sqlite3.Connection,
     completion_ids: list[str] | None = None,

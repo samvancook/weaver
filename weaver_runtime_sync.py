@@ -17,6 +17,7 @@ from weaver_runtime_db import (
     get_graphics_handoff_queue,
     get_latest_graphics_qc_reviews,
     get_latest_poetry_please_handoffs,
+    get_pending_graphics_qc_records,
     insert_graphics_completion,
     insert_graphics_qc_review,
     insert_poetry_please_handoff,
@@ -34,6 +35,7 @@ FIRESTORE_HANDOFF_ACTIONS = {
     "insert_qc_reviews",
     "insert_poetry_please_handoffs",
     "get_graphics_state",
+    "get_pending_graphics_qc",
     "upsert_handoff_requests",
     "get_handoff_queue",
     "claim_handoff_request",
@@ -448,6 +450,9 @@ def main() -> int:
             result = fetch_excerpt_handoffs(connection, payload)
         elif action == "get_graphics_state":
             result = fetch_graphics_state(connection, payload)
+        elif action == "get_pending_graphics_qc":
+            records = get_pending_graphics_qc_records(connection)
+            result = {"ok": True, "records": records, "count": len(records)}
         elif action == "upsert_handoff_requests":
             result = upsert_handoff_requests(connection, payload)
         elif action == "get_handoff_queue":
