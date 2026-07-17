@@ -5922,6 +5922,37 @@ const server = http.createServer(async (req, res) => {
     return sendJson(res, 200, { ok: true, service: "weaver-web" });
   }
 
+  if (url.pathname === "/health/config") {
+    return sendJson(res, 200, {
+      ok: true,
+      service: "weaver-web",
+      revision: process.env.K_REVISION || "local",
+      authorities: {
+        excerptContent: "excerpt_database",
+        graphicsLifecycle: "firestore",
+        sourceIntake: "weaver_and_google_sheets",
+        downstreamContent: "poetry_please"
+      },
+      firestore: {
+        backend: process.env.WEAVER_LEDGER_BACKEND || "sqlite_local",
+        projectId: process.env.WEAVER_FIRESTORE_PROJECT_ID || "",
+        databaseId: process.env.WEAVER_FIRESTORE_DATABASE_ID || ""
+      },
+      graphicsQc: {
+        activeReadBackend: "sheets_firestore_composite",
+        firestoreReadModel: "comparison_only"
+      },
+      routes: {
+        approvedExcerptExport: "POST /api/excerpts/approved/export",
+        graphicsRequestUpsert: "POST /graphics-handoff/requests",
+        graphicsQueue: "GET /graphics-handoff/queue",
+        graphicsCompletion: "POST /api/pig/completed-graphics",
+        graphicsQcDecision: "POST /api/save-graphics-qc",
+        graphicsHandoffRetry: "POST /api/graphics/handoffs/retry"
+      }
+    });
+  }
+
   if (url.pathname === "/api/bootstrap") {
     const reviewQueueIncludeTitles = await getReviewQueueIncludeTitles();
     const { releaseCatalogOptions, releaseCatalogByTitle } = await getReleaseCatalogMetadata();
