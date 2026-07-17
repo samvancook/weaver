@@ -7,6 +7,7 @@ import sys
 from typing import Any
 
 from weaver_runtime_db import (
+    FIRESTORE_GRAPHICS_QC_QUEUE_COLLECTION,
     connect_firestore_ledger,
     connect_runtime_db,
     ensure_runtime_schema,
@@ -38,6 +39,7 @@ FIRESTORE_HANDOFF_ACTIONS = {
     "get_graphics_state",
     "get_pending_graphics_qc",
     "rebuild_graphics_qc_queue",
+    "upsert_graphics_qc_queue_cards",
     "upsert_handoff_requests",
     "get_handoff_queue",
     "claim_handoff_request",
@@ -208,9 +210,11 @@ def sync_qc_reviews(connection, payload: dict[str, Any]) -> dict[str, Any]:
         storage_target = normalize_text(review.get("storageTarget")).lower()
         completion_id = normalize_text(review.get("pigCompletionId") or review.get("graphicsCompletionId"))
         request_id = normalize_text(review.get("graphicsRequestId"))
-        if storage_target != "pig_sheet" or not completion_id:
+        if storage_target == "cleanup_sheet" and not completion_id and request_id:
+            completion_id = f"cleanup:{request_id}"
+        if storage_target not in {"pig_sheet", "cleanup_sheet"} or not completion_id:
             skipped.append({
-                "reason": "not_pig_backed",
+                "reason": "not_qc_queue_backed",
                 "recordId": normalize_text(review.get("recordId")),
                 "sheetRow": review.get("sheetRow"),
             })
@@ -298,6 +302,26 @@ def sync_qc_reviews(connection, payload: dict[str, Any]) -> dict[str, Any]:
         "written": written,
         "skipped": skipped,
     }
+
+
+def upsert_graphics_qc_queue_cards(connection, payload: dict[str, Any]) -> dict[str, Any]:
+    cards = payload.get("cards") or []
+    written = 0
+    for card in cards:
+        request_id = normalize_text(card.get("graphicsRequestId"))
+        completion_id = normalize_text(card.get("pigCompletionId"))
+        if not completion_id and normalize_text(card.get("storageTarget")).lower() == "cleanup_sheet":
+            completion_id = f"cleanup:{request_id}"
+        if not completion_id:
+            continue
+        connection.write_raw_document(FIRESTORE_GRAPHICS_QC_QUEUE_COLLECTION, completion_id, {
+            **card,
+            "pigCompletionId": completion_id,
+            "isPendingQc": True,
+            "updatedAt": utc_now_iso(),
+        })
+        written += 1
+    return {"ok": True, "written": written}
 
 
 def is_revision_reject(review: dict[str, Any]) -> bool:
@@ -453,10 +477,15 @@ def main() -> int:
         elif action == "get_graphics_state":
             result = fetch_graphics_state(connection, payload)
         elif action == "get_pending_graphics_qc":
-            records = get_pending_graphics_qc_records(connection)
+            records = get_pending_graphics_qc_records(
+                connection,
+                include_cleanup=bool(payload.get("includeCleanup")),
+            )
             result = {"ok": True, "records": records, "count": len(records)}
         elif action == "rebuild_graphics_qc_queue":
             result = rebuild_graphics_qc_queue_cards(connection)
+        elif action == "upsert_graphics_qc_queue_cards":
+            result = upsert_graphics_qc_queue_cards(connection, payload)
         elif action == "upsert_handoff_requests":
             result = upsert_handoff_requests(connection, payload)
         elif action == "get_handoff_queue":

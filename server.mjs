@@ -4029,8 +4029,9 @@ function buildCleanupSheetGraphicsRecords(values = [], qcState = new Map(), cano
 async function getPendingGraphicsQcRecords({ includeCleanup = true } = {}) {
   return getCachedQueueSnapshot(`graphics-qc-pending:${includeCleanup ? "all" : "pig-only"}`, async () => {
     const qcReadBackend = cleanSheetWhitespace(process.env.WEAVER_GRAPHICS_QC_READ_BACKEND).toLowerCase();
-    if (!includeCleanup && qcReadBackend === "firestore") {
-      const result = await syncWeaverRuntimeDb("get_pending_graphics_qc", {});
+    const cleanupReadBackend = cleanSheetWhitespace(process.env.WEAVER_GRAPHICS_CLEANUP_READ_BACKEND).toLowerCase();
+    if (qcReadBackend === "firestore" && (!includeCleanup || cleanupReadBackend === "firestore")) {
+      const result = await syncWeaverRuntimeDb("get_pending_graphics_qc", { includeCleanup });
       if (!result?.ok || !Array.isArray(result.records)) {
         throw new Error(result?.error || "Firestore Graphics QC queue read failed");
       }
@@ -4055,6 +4056,18 @@ async function getPendingGraphicsQcRecords({ includeCleanup = true } = {}) {
     const cleanupRecords = includeCleanup
       ? buildCleanupSheetGraphicsRecords(values, qcState, canonicalBookAuthorMap)
       : [];
+    const pendingCleanupRecords = cleanupRecords.filter(record => !hasResolvedGraphicsQcDecision(record));
+    if (
+      pendingCleanupRecords.length
+      && cleanSheetWhitespace(process.env.WEAVER_GRAPHICS_CLEANUP_MIGRATE_ON_READ).toLowerCase() === "true"
+    ) {
+      const migration = await syncWeaverRuntimeDb("upsert_graphics_qc_queue_cards", {
+        cards: pendingCleanupRecords
+      });
+      if (!migration?.ok || Number(migration.written || 0) !== pendingCleanupRecords.length) {
+        throw new Error(migration?.error || "Cleanup Graphics QC Firestore migration was incomplete");
+      }
+    }
     const pigRecords = await hydrateGraphicsFolderAssets(pigRows
       .map((row, index) => overlayRuntimeHandoffState(
         overlayRuntimeGraphicsState(buildPigQcRecordFromSheetRow(row, index, canonicalBookAuthorMap), runtimeState),
@@ -5623,7 +5636,7 @@ async function saveGraphicsQcToSheets(updates) {
   }
 
   let runtimeDb = { ok: false, skipped: true };
-  if (pigRequests.length) {
+  if (updates.length) {
     try {
       runtimeDb = await syncWeaverRuntimeDb("insert_qc_reviews", { reviews: updates });
     } catch (error) {
@@ -5950,7 +5963,10 @@ const server = http.createServer(async (req, res) => {
         activeReadBackend: cleanSheetWhitespace(process.env.WEAVER_GRAPHICS_QC_READ_BACKEND).toLowerCase() === "firestore"
           ? "firestore_queue_cards"
           : "sheets_firestore_composite",
-        firestoreReadModel: "available"
+        firestoreReadModel: "structured_query_paginated",
+        cleanupReadBackend: cleanSheetWhitespace(process.env.WEAVER_GRAPHICS_CLEANUP_READ_BACKEND).toLowerCase() === "firestore"
+          ? "firestore_queue_cards"
+          : "sheets_drive_composite"
       },
       routes: {
         approvedExcerptExport: "POST /api/excerpts/approved/export",

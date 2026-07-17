@@ -761,7 +761,7 @@ class FirestoreLedgerClient:
     def document_url_for(self, collection: str, document_id: str) -> str:
         return f"{self.collection_url_for(collection)}/{urllib.parse.quote(document_id, safe='')}"
 
-    def request(self, method: str, url: str, body: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    def request(self, method: str, url: str, body: dict[str, Any] | None = None) -> Any:
         data = json.dumps(body).encode("utf-8") if body is not None else None
         request = urllib.request.Request(
             url,
@@ -828,6 +828,47 @@ class FirestoreLedgerClient:
                     records.append(record)
             page_token = str(response.get("nextPageToken") or "")
             if not page_token:
+                break
+        return records
+
+    def query_raw_documents(
+        self,
+        collection: str,
+        field: str,
+        value: Any,
+        page_size: int = 100,
+    ) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        cursor_name = ""
+        limit = max(1, min(int(page_size or 100), 500))
+        while True:
+            query: dict[str, Any] = {
+                "from": [{"collectionId": collection}],
+                "where": {
+                    "fieldFilter": {
+                        "field": {"fieldPath": field},
+                        "op": "EQUAL",
+                        "value": firestore_encode_value(value),
+                    }
+                },
+                "orderBy": [{"field": {"fieldPath": "__name__"}, "direction": "ASCENDING"}],
+                "limit": limit,
+            }
+            if cursor_name:
+                query["startAt"] = {
+                    "values": [{"referenceValue": cursor_name}],
+                    "before": False,
+                }
+            response = self.request("POST", f"{self.documents_url}:runQuery", {"structuredQuery": query}) or []
+            documents = [entry.get("document") for entry in response if entry.get("document")]
+            for document in documents:
+                record = self.decode_raw_document(document)
+                if record:
+                    records.append(record)
+            if len(documents) < limit:
+                break
+            cursor_name = str(documents[-1].get("name") or "")
+            if not cursor_name:
                 break
         return records
 
@@ -1886,14 +1927,18 @@ def rebuild_graphics_qc_queue_cards(connection: Any) -> dict[str, Any]:
     return {"ok": True, "written": len(records)}
 
 
-def get_pending_graphics_qc_records(connection: Any) -> list[dict[str, Any]]:
+def get_pending_graphics_qc_records(connection: Any, include_cleanup: bool = False) -> list[dict[str, Any]]:
     if not is_firestore_ledger(connection):
         raise RuntimeError("Pending Graphics QC read model requires Firestore")
     return sorted(
         [
             {key: value for key, value in record.items() if key not in {"isPendingQc", "updatedAt"}}
-            for record in connection.list_raw_documents(FIRESTORE_GRAPHICS_QC_QUEUE_COLLECTION)
-            if record.get("isPendingQc") is True
+            for record in connection.query_raw_documents(
+                FIRESTORE_GRAPHICS_QC_QUEUE_COLLECTION,
+                "isPendingQc",
+                True,
+            )
+            if include_cleanup or str(record.get("storageTarget") or "").lower() != "cleanup_sheet"
         ],
         key=lambda record: (
             str(record.get("completedAt") or ""),
