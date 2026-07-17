@@ -4029,16 +4029,20 @@ function buildCleanupSheetGraphicsRecords(values = [], qcState = new Map(), cano
 async function getPendingGraphicsQcRecords({ includeCleanup = true } = {}) {
   return getCachedQueueSnapshot(`graphics-qc-pending:${includeCleanup ? "all" : "pig-only"}`, async () => {
     const range = `'${graphicsCleanupSheetName.replace(/'/g, "''")}'!A2:I`;
-    const [values, qcState, pigRows, canonicalBookAuthorMap] = await Promise.all([
-      fetchSheetValuesServer(range),
-      getGraphicsQcStateMapFromSheets(),
+    const [pigRows, canonicalBookAuthorMap, cleanupState] = await Promise.all([
       readPigCompletedGraphicsRows(),
-      getCanonicalGraphicsBookAuthorMap()
+      getCanonicalGraphicsBookAuthorMap(),
+      includeCleanup
+        ? Promise.all([fetchSheetValuesServer(range), getGraphicsQcStateMapFromSheets()])
+        : Promise.resolve([[], new Map()])
     ]);
-    const runtimeState = await getRuntimeGraphicsState(pigRows.map(row => row[PIG_COMPLETION_COLUMNS.completionId - 1]));
-    const handoffState = await getRuntimeGraphicsHandoffState(
-      pigRows.map(row => cleanSheetWhitespace(row[PIG_COMPLETION_COLUMNS.requestId - 1]))
-    );
+    const completionIds = pigRows.map(row => row[PIG_COMPLETION_COLUMNS.completionId - 1]);
+    const requestIds = pigRows.map(row => cleanSheetWhitespace(row[PIG_COMPLETION_COLUMNS.requestId - 1]));
+    const [runtimeState, handoffState] = await Promise.all([
+      getRuntimeGraphicsState(completionIds),
+      getRuntimeGraphicsHandoffState(requestIds)
+    ]);
+    const [values, qcState] = cleanupState;
 
     const cleanupRecords = includeCleanup
       ? buildCleanupSheetGraphicsRecords(values, qcState, canonicalBookAuthorMap)
