@@ -21,6 +21,7 @@ FIRESTORE_COLLECTION = "graphicsHandoffLedger"
 FIRESTORE_GRAPHICS_REQUESTS_COLLECTION = "graphicsRequests"
 FIRESTORE_GRAPHICS_COMPLETIONS_COLLECTION = "graphicsCompletions"
 FIRESTORE_GRAPHICS_QC_REVIEWS_COLLECTION = "graphicsQcReviews"
+FIRESTORE_GRAPHICS_QC_QUEUE_COLLECTION = "graphicsQcQueueCards"
 FIRESTORE_POETRY_PLEASE_HANDOFFS_COLLECTION = "poetryPleaseHandoffs"
 FIRESTORE_DEFAULT_DATABASE_ID = "weaverledger"
 FIRESTORE_DEFAULT_PROJECT_ID = "button-weaver-internal"
@@ -29,6 +30,7 @@ FIRESTORE_DEFAULT_SERVICE_ACCOUNT = (
 )
 HANDOFF_TRANSITION_LOG_LIMIT = 12
 HANDOFF_LIST_TRANSITION_LOG_LIMIT = 3
+_FIRESTORE_ACCESS_TOKEN_CACHE: tuple[str, float] | None = None
 
 
 def utc_now_iso() -> str:
@@ -52,6 +54,42 @@ def normalize_content_type(value: Any, default: str = "QI") -> str:
     if normalized in {"FPI", "FULL POEM IMAGE", "FULL POEM IMAGE-BACKED", "FULL POEM IMAGE BACKED"}:
         return "FPI"
     return default
+
+
+def build_graphics_qc_queue_card(completion: dict[str, Any]) -> dict[str, Any]:
+    payload = completion.get("sourcePayload") if isinstance(completion.get("sourcePayload"), dict) else {}
+    completion_id = str(completion.get("id") or payload.get("pigCompletionId") or "").strip()
+    graphics_request_id = str(
+        completion.get("graphicsRequestId") or payload.get("graphicsRequestId") or ""
+    ).strip()
+    asset_url = str(completion.get("assetUrl") or payload.get("assetUrl") or "").strip()
+    return {
+        "pigCompletionId": completion_id,
+        "graphicsRequestId": graphics_request_id,
+        "recordId": str(payload.get("recordId") or graphics_request_id or completion_id),
+        "sheetRow": payload.get("sheetRow") or 0,
+        "storageTarget": str(payload.get("storageTarget") or "firestore"),
+        "contentType": normalize_content_type(
+            completion.get("contentType") or payload.get("contentType")
+        ),
+        "author": str(payload.get("author") or ""),
+        "poemTitle": str(payload.get("poemTitle") or ""),
+        "bookTitle": str(payload.get("bookTitle") or ""),
+        "quoteText": str(payload.get("quoteText") or ""),
+        "assetLinkUrl": asset_url,
+        "assetPreviewUrl": str(
+            completion.get("assetPreviewUrl") or payload.get("assetPreviewUrl") or asset_url
+        ).strip(),
+        "completedAt": str(completion.get("completedAt") or payload.get("completedAt") or ""),
+        "graphicsQcDecision": "",
+        "graphicsQcNote": "",
+        "graphicsQcUpdatedAt": "",
+        "poetryPleaseStatus": "",
+        "poetryPleaseUpdatedAt": "",
+        "poetryPleaseNote": "",
+        "isPendingQc": True,
+        "updatedAt": utc_now_iso(),
+    }
 
 
 def connect_runtime_db(db_path: Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
@@ -627,9 +665,14 @@ def firestore_stable_document_id(prefix: str, payload: dict[str, Any]) -> str:
 
 
 def firestore_access_token(project_id: str) -> str:
+    global _FIRESTORE_ACCESS_TOKEN_CACHE
     env_token = os.environ.get("GOOGLE_OAUTH_ACCESS_TOKEN", "").strip()
     if env_token:
         return env_token
+
+    now = datetime.now(UTC).timestamp()
+    if _FIRESTORE_ACCESS_TOKEN_CACHE and _FIRESTORE_ACCESS_TOKEN_CACHE[1] > now:
+        return _FIRESTORE_ACCESS_TOKEN_CACHE[0]
 
     metadata_request = urllib.request.Request(
         "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token",
@@ -640,6 +683,8 @@ def firestore_access_token(project_id: str) -> str:
             payload = json.loads(response.read().decode("utf-8"))
             token = str(payload.get("access_token") or "").strip()
             if token:
+                ttl = max(60, int(payload.get("expires_in") or 300) - 60)
+                _FIRESTORE_ACCESS_TOKEN_CACHE = (token, now + ttl)
                 return token
     except Exception:
         pass
@@ -664,6 +709,7 @@ def firestore_access_token(project_id: str) -> str:
         )
         token = result.stdout.strip()
         if token:
+            _FIRESTORE_ACCESS_TOKEN_CACHE = (token, now + 240)
             return token
     except Exception:
         pass
@@ -762,6 +808,10 @@ class FirestoreLedgerClient:
         }
         document = self.request("PATCH", self.document_url_for(collection, document_id), body)
         return self.decode_raw_document(document) or record
+
+    def get_raw_document(self, collection: str, document_id: str) -> dict[str, Any] | None:
+        document = self.request("GET", self.document_url_for(collection, document_id))
+        return self.decode_raw_document(document)
 
     def list_raw_documents(self, collection: str, page_size: int = 500) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
@@ -1058,7 +1108,7 @@ class FirestoreLedgerClient:
         content_type = normalize_content_type(completion.get("content_type") or completion.get("contentType") or completion.get("imageType"))
         image_type = normalize_content_type(completion.get("image_type") or completion.get("imageType") or completion.get("contentType"), content_type)
         ingested_at = str(completion.get("ingested_at") or completion.get("ingestedAt") or utc_now_iso())
-        self.write_raw_document(FIRESTORE_GRAPHICS_COMPLETIONS_COLLECTION, completion_id, {
+        completion_record = {
             "id": completion_id,
             "graphicsRequestId": graphics_request_id,
             "sourceTool": str(completion.get("source_tool") or completion.get("sourceTool") or "P.I.G."),
@@ -1071,7 +1121,13 @@ class FirestoreLedgerClient:
             "completedAt": str(completion.get("completed_at") or completion.get("completedAt") or utc_now_iso()),
             "ingestedAt": ingested_at,
             "sourcePayload": completion.get("source_payload") or completion.get("sourcePayload") or {},
-        })
+        }
+        self.write_raw_document(FIRESTORE_GRAPHICS_COMPLETIONS_COLLECTION, completion_id, completion_record)
+        self.write_raw_document(
+            FIRESTORE_GRAPHICS_QC_QUEUE_COLLECTION,
+            completion_id,
+            build_graphics_qc_queue_card(completion_record),
+        )
         return completion_id
 
     def insert_graphics_qc_review(self, review: dict[str, Any]) -> int:
@@ -1089,6 +1145,17 @@ class FirestoreLedgerClient:
         }
         document_id = firestore_stable_document_id("qc", record)
         self.write_raw_document(FIRESTORE_GRAPHICS_QC_REVIEWS_COLLECTION, document_id, {**record, "id": document_id})
+        queue_card = self.get_raw_document(FIRESTORE_GRAPHICS_QC_QUEUE_COLLECTION, completion_id) or {
+            "pigCompletionId": completion_id,
+        }
+        self.write_raw_document(FIRESTORE_GRAPHICS_QC_QUEUE_COLLECTION, completion_id, {
+            **queue_card,
+            "isPendingQc": False,
+            "graphicsQcDecision": record["decision"],
+            "graphicsQcNote": record["note"],
+            "graphicsQcUpdatedAt": reviewed_at,
+            "updatedAt": reviewed_at,
+        })
         return 1
 
     def insert_poetry_please_handoff(self, handoff: dict[str, Any]) -> int:
@@ -1742,7 +1809,7 @@ def get_excerpt_handoffs(connection: sqlite3.Connection, record_ids: list[str] |
     return [row_to_excerpt_handoff(row) for row in rows]
 
 
-def get_pending_graphics_qc_records(connection: Any) -> list[dict[str, Any]]:
+def build_pending_graphics_qc_records_from_ledger(connection: Any) -> list[dict[str, Any]]:
     if not is_firestore_ledger(connection):
         raise RuntimeError("Pending Graphics QC read model requires Firestore")
 
@@ -1799,6 +1866,35 @@ def get_pending_graphics_qc_records(connection: Any) -> list[dict[str, Any]]:
 
     return sorted(
         pending,
+        key=lambda record: (
+            str(record.get("completedAt") or ""),
+            str(record.get("pigCompletionId") or ""),
+        ),
+    )
+
+
+def rebuild_graphics_qc_queue_cards(connection: Any) -> dict[str, Any]:
+    records = build_pending_graphics_qc_records_from_ledger(connection)
+    for record in records:
+        completion_id = str(record.get("pigCompletionId") or "").strip()
+        if completion_id:
+            connection.write_raw_document(FIRESTORE_GRAPHICS_QC_QUEUE_COLLECTION, completion_id, {
+                **record,
+                "isPendingQc": True,
+                "updatedAt": utc_now_iso(),
+            })
+    return {"ok": True, "written": len(records)}
+
+
+def get_pending_graphics_qc_records(connection: Any) -> list[dict[str, Any]]:
+    if not is_firestore_ledger(connection):
+        raise RuntimeError("Pending Graphics QC read model requires Firestore")
+    return sorted(
+        [
+            {key: value for key, value in record.items() if key not in {"isPendingQc", "updatedAt"}}
+            for record in connection.list_raw_documents(FIRESTORE_GRAPHICS_QC_QUEUE_COLLECTION)
+            if record.get("isPendingQc") is True
+        ],
         key=lambda record: (
             str(record.get("completedAt") or ""),
             str(record.get("pigCompletionId") or ""),

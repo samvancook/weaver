@@ -4028,6 +4028,14 @@ function buildCleanupSheetGraphicsRecords(values = [], qcState = new Map(), cano
 
 async function getPendingGraphicsQcRecords({ includeCleanup = true } = {}) {
   return getCachedQueueSnapshot(`graphics-qc-pending:${includeCleanup ? "all" : "pig-only"}`, async () => {
+    const qcReadBackend = cleanSheetWhitespace(process.env.WEAVER_GRAPHICS_QC_READ_BACKEND).toLowerCase();
+    if (!includeCleanup && qcReadBackend === "firestore") {
+      const result = await syncWeaverRuntimeDb("get_pending_graphics_qc", {});
+      if (!result?.ok || !Array.isArray(result.records)) {
+        throw new Error(result?.error || "Firestore Graphics QC queue read failed");
+      }
+      return result.records;
+    }
     const range = `'${graphicsCleanupSheetName.replace(/'/g, "''")}'!A2:I`;
     const [pigRows, canonicalBookAuthorMap, cleanupState] = await Promise.all([
       readPigCompletedGraphicsRows(),
@@ -5939,8 +5947,10 @@ const server = http.createServer(async (req, res) => {
         databaseId: process.env.WEAVER_FIRESTORE_DATABASE_ID || ""
       },
       graphicsQc: {
-        activeReadBackend: "sheets_firestore_composite",
-        firestoreReadModel: "comparison_only"
+        activeReadBackend: cleanSheetWhitespace(process.env.WEAVER_GRAPHICS_QC_READ_BACKEND).toLowerCase() === "firestore"
+          ? "firestore_queue_cards"
+          : "sheets_firestore_composite",
+        firestoreReadModel: "available"
       },
       routes: {
         approvedExcerptExport: "POST /api/excerpts/approved/export",
