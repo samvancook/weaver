@@ -3282,7 +3282,10 @@ function buildPoetryPleaseGraphicRecord(record) {
   const handoffPreviewUrl = sourceTool === "Weaver replacement" && proxyAssetUrl
     ? proxyAssetUrl
     : cleanSheetWhitespace(record.assetPreviewUrl);
-  const contentType = inferPoetryPleaseContentType(record, "QI");
+  const contentType = inferPoetryPleaseContentType(record, "");
+  if (!contentType) {
+    throw new Error(`Approved graphic ${cleanSheetWhitespace(record.graphicsRequestId) || "without an ID"} is missing contentType`);
+  }
 
   if (contentType === "FPI") {
     const fpiSourceRecordId = bookShortener && cleanSheetWhitespace(record.poemTitle || record.title)
@@ -3407,7 +3410,10 @@ async function createManualGraphicsReworkRequests(records = [], note = "") {
   const requests = selected.map((record, index) => {
     const originalCompletionId = cleanSheetWhitespace(record.pigCompletionId || record.sourceCompletionId);
     const requestId = `manual-rework:${originalCompletionId}:${Date.now()}-${index + 1}`;
-    const contentType = inferPoetryPleaseContentType(record, "QI");
+    const contentType = inferPoetryPleaseContentType(record, "");
+    if (!contentType) {
+      throw new Error(`Approved graphic ${cleanSheetWhitespace(record.graphicsRequestId) || "without an ID"} is missing contentType`);
+    }
     return {
       graphicsRequestId: requestId,
       sourceSystem: "weaver_manual_rework",
@@ -3495,7 +3501,10 @@ async function handoffApprovedGraphicsToPoetryPlease(records = []) {
 
   const byContentType = new Map();
   approvedRecords.forEach(record => {
-    const contentType = normalizePoetryPleaseContentType(record.contentType || record.imageType, "QI");
+    const contentType = inferPoetryPleaseContentType(record, "");
+    if (!contentType) {
+      throw new Error(`Approved graphic ${cleanSheetWhitespace(record.graphicsRequestId) || "without an ID"} is missing contentType`);
+    }
     if (!byContentType.has(contentType)) byContentType.set(contentType, []);
     byContentType.get(contentType).push(record);
   });

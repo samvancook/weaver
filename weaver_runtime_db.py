@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import hashlib
 import os
+import re
 import ssl
 import sqlite3
 import subprocess
@@ -18,6 +19,7 @@ ROOT = Path(__file__).resolve().parent
 DEFAULT_DB_PATH = ROOT / "data" / "weaver_runtime.db"
 SCHEMA_PATH = ROOT / "db" / "weaver_runtime_schema.sql"
 FIRESTORE_COLLECTION = "graphicsHandoffLedger"
+FIRESTORE_HANDOFF_ALIASES_COLLECTION = "graphicsHandoffAliases"
 FIRESTORE_GRAPHICS_REQUESTS_COLLECTION = "graphicsRequests"
 FIRESTORE_GRAPHICS_COMPLETIONS_COLLECTION = "graphicsCompletions"
 FIRESTORE_GRAPHICS_QC_REVIEWS_COLLECTION = "graphicsQcReviews"
@@ -311,6 +313,111 @@ def has_fpi_source_asset(payload: dict[str, Any]) -> bool:
         "previousAssetUrl",
         "previousAssetPreviewUrl",
     ))
+
+
+def infer_graphics_content_type(
+    request: dict[str, Any],
+    source_payload: dict[str, Any],
+    existing: dict[str, Any] | None = None,
+) -> str:
+    raw_type = (
+        request.get("contentType")
+        or request.get("imageType")
+        or extract_handoff_value(source_payload, "contentType", "imageType")
+    )
+    explicit_type = normalize_content_type(raw_type, "")
+    if explicit_type == "FP":
+        explicit_type = "FPI"
+
+    identity_values = [
+        request.get("graphicsRequestId"),
+        request.get("id"),
+        request.get("sourceRecordId"),
+        request.get("canonicalPoemId"),
+        request.get("poemId"),
+        extract_handoff_value(
+            source_payload,
+            "graphicsRequestId",
+            "sourceRecordId",
+            "canonicalPoemId",
+            "poemId",
+            "fullPoemId",
+        ),
+    ]
+    has_fpi_identity = any(
+        re.search(r"(^|[-:])FPI?($|[-:])", str(value or ""), re.IGNORECASE)
+        for value in identity_values
+    )
+    has_qi_identity = any(
+        re.search(r"(^|[-:])QI($|[-:])", str(value or ""), re.IGNORECASE)
+        for value in identity_values
+    )
+
+    if explicit_type == "QI" and has_fpi_identity:
+        raise ValueError("contentType QI conflicts with an FP/FPI request identity")
+    if explicit_type:
+        return explicit_type
+    if existing and existing.get("contentType"):
+        existing_type = normalize_content_type(existing.get("contentType"), "")
+        return "FPI" if existing_type == "FP" else existing_type
+    if has_fpi_identity:
+        return "FPI"
+    if has_qi_identity:
+        return "QI"
+    raise ValueError("contentType is required for a new graphics handoff request")
+
+
+def slug_identity_token(value: Any) -> str:
+    return re.sub(r"[^A-Z0-9]+", "-", str(value or "").strip().upper()).strip("-")
+
+
+def canonical_fpi_content_id(request: dict[str, Any], source_payload: dict[str, Any]) -> str:
+    canonical_poem_id = str(
+        request.get("canonicalPoemId")
+        or request.get("poemId")
+        or request.get("fullPoemId")
+        or extract_handoff_value(source_payload, "canonicalPoemId", "poemId", "fullPoemId")
+        or ""
+    ).strip()
+    if canonical_poem_id:
+        return f"FPI:{slug_identity_token(canonical_poem_id)}"
+
+    source_record_id = str(
+        request.get("sourceRecordId")
+        or extract_handoff_value(source_payload, "sourceRecordId", "source_record_id")
+        or ""
+    ).strip()
+    if source_record_id and re.search(r"(^|[-:])FPI?($|[-:])", source_record_id, re.IGNORECASE):
+        return f"FPI:{slug_identity_token(source_record_id)}"
+
+    book_shortener = str(
+        request.get("bookShortener")
+        or extract_handoff_value(source_payload, "bookShortener", "book_shortener")
+        or ""
+    ).strip()
+    poem_title = str(
+        request.get("poemTitle")
+        or request.get("title")
+        or extract_handoff_value(source_payload, "poemTitle", "poem_title", "title")
+        or ""
+    ).strip()
+    if book_shortener and poem_title:
+        return f"FPI:{slug_identity_token(book_shortener)}-FPI-{slug_identity_token(poem_title)}"
+    if source_record_id:
+        return f"FPI:SOURCE-{slug_identity_token(source_record_id)}"
+
+    book_title = str(
+        request.get("bookTitle")
+        or request.get("book")
+        or extract_handoff_value(source_payload, "bookTitle", "book_title", "book")
+        or ""
+    ).strip()
+    if book_title and poem_title:
+        digest = hashlib.sha256(
+            f"{normalize_key(book_title)}\n{normalize_key(poem_title)}".encode("utf-8")
+        ).hexdigest()[:24]
+        return f"FPI:BOOK-POEM-{digest}"
+    raise ValueError("FPI requests require canonicalPoemId, sourceRecordId, or book and poem identity")
 
 
 def row_to_handoff(row: sqlite3.Row) -> dict[str, Any]:
@@ -915,7 +1022,17 @@ class FirestoreLedgerClient:
         graphics_request_id = str(graphics_request_id or "").strip()
         if not graphics_request_id:
             return None
-        return self.decode_document(self.request("GET", self.document_url(graphics_request_id)))
+        record = self.decode_document(self.request("GET", self.document_url(graphics_request_id)))
+        if record:
+            return record
+        alias = self.get_raw_document(
+            FIRESTORE_HANDOFF_ALIASES_COLLECTION,
+            hashlib.sha256(graphics_request_id.encode("utf-8")).hexdigest(),
+        )
+        canonical_request_id = str((alias or {}).get("canonicalGraphicsRequestId") or "").strip()
+        if not canonical_request_id or canonical_request_id == graphics_request_id:
+            return None
+        return self.decode_document(self.request("GET", self.document_url(canonical_request_id)))
 
     def get_handoffs(self, graphics_request_ids: list[str]) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
@@ -947,21 +1064,36 @@ class FirestoreLedgerClient:
         graphics_request_id = str(request.get("graphicsRequestId") or request.get("id") or "").strip()
         if not graphics_request_id:
             raise ValueError("graphicsRequestId is required")
+        supplied_request_id = graphics_request_id
 
         now = utc_now_iso()
-        existing = self.get_handoff(graphics_request_id) or default_handoff_record(graphics_request_id)
+        existing = self.get_handoff(graphics_request_id)
         source_payload = request.get("sourcePayload") or request.get("payload") or request
-        content_type = normalize_content_type(
-            request.get("contentType")
-            or request.get("imageType")
-            or extract_handoff_value(source_payload, "contentType", "imageType")
-        )
+        content_type = infer_graphics_content_type(request, source_payload, existing)
+        canonical_content_id = ""
+        if content_type == "FPI":
+            canonical_content_id = canonical_fpi_content_id(request, source_payload)
+            canonical_matches = self.query_raw_documents(
+                FIRESTORE_COLLECTION,
+                "canonicalContentId",
+                canonical_content_id,
+                page_size=2,
+            )
+            if len(canonical_matches) > 1:
+                raise ValueError(f"Duplicate FPI canonical identity: {canonical_content_id}")
+            if canonical_matches:
+                canonical_record = normalize_handoff_record(canonical_matches[0])
+                graphics_request_id = str(canonical_record.get("graphicsRequestId") or graphics_request_id)
+                existing = canonical_record
+        existing = existing or default_handoff_record(graphics_request_id)
         image_type = normalize_content_type(
             request.get("imageType")
             or request.get("contentType")
             or extract_handoff_value(source_payload, "imageType", "contentType"),
             content_type,
         )
+        if image_type == "FP":
+            image_type = "FPI"
         has_text = bool(extract_handoff_text(source_payload))
         has_required_source = has_text or (content_type == "FPI" and has_fpi_source_asset(source_payload))
         if not has_required_source and existing.get("sourcePayload"):
@@ -974,8 +1106,18 @@ class FirestoreLedgerClient:
         source_status = str(request.get("sourceStatus") or "needs_graphics")
         blocked_reason = str(request.get("blockedReason") or "")
         existing_handoff_status = str(existing.get("handoffStatus") or "")
+        is_rework_request = bool(
+            request.get("revisionOf")
+            or request.get("originalGraphicsRequestId")
+            or extract_handoff_value(source_payload, "revisionOf", "originalGraphicsRequestId")
+            or source_status.lower().startswith(("rework", "manual_rework"))
+        )
         terminal_source_refresh = False
-        if existing_handoff_status in TERMINAL_HANDOFF_STATUSES and handoff_status in SOURCE_QUEUE_REFRESH_STATUSES:
+        if (
+            not is_rework_request
+            and existing_handoff_status in TERMINAL_HANDOFF_STATUSES
+            and handoff_status in SOURCE_QUEUE_REFRESH_STATUSES
+        ):
             terminal_source_refresh = True
             source_status = str(existing.get("sourceStatus") or source_status)
             handoff_status = existing_handoff_status
@@ -994,6 +1136,7 @@ class FirestoreLedgerClient:
             "sourceStatus": source_status,
             "contentType": content_type,
             "imageType": image_type,
+            "canonicalContentId": canonical_content_id or existing.get("canonicalContentId") or "",
             "sourceCompletionId": str(request.get("sourceCompletionId") or extract_handoff_value(source_payload, "sourceCompletionId") or ""),
             "revisionOf": str(request.get("revisionOf") or extract_handoff_value(source_payload, "revisionOf") or ""),
             "originalGraphicsRequestId": str(request.get("originalGraphicsRequestId") or extract_handoff_value(source_payload, "originalGraphicsRequestId") or ""),
@@ -1015,7 +1158,19 @@ class FirestoreLedgerClient:
                 "blockedReason": blocked_reason,
             }),
         }
-        return self.write_record(record)
+        written = self.write_record(record)
+        if supplied_request_id != graphics_request_id:
+            self.write_raw_document(
+                FIRESTORE_HANDOFF_ALIASES_COLLECTION,
+                hashlib.sha256(supplied_request_id.encode("utf-8")).hexdigest(),
+                {
+                    "graphicsRequestId": supplied_request_id,
+                    "canonicalGraphicsRequestId": graphics_request_id,
+                    "canonicalContentId": canonical_content_id,
+                    "updatedAt": now,
+                },
+            )
+        return written
 
     def claim_handoff(self, graphics_request_id: str, claimed_by: str = "") -> dict[str, Any]:
         existing = self.get_handoff(graphics_request_id)
@@ -1046,6 +1201,10 @@ class FirestoreLedgerClient:
         qc_status = normalize_enum(update.get("qcStatus"), QC_STATUSES, existing["qcStatus"])
         content_type = normalize_content_type(update.get("contentType") or update.get("imageType") or existing.get("contentType"), existing.get("contentType") or "QI")
         image_type = normalize_content_type(update.get("imageType") or update.get("contentType") or existing.get("imageType"), content_type)
+        if content_type == "FP":
+            content_type = "FPI"
+        if image_type == "FP":
+            image_type = "FPI"
         asset_url = str(update.get("assetUrl") or update.get("assetLinkUrl") or update.get("driveUrl") or existing["assetUrl"] or "")
         uploaded = handoff_status in {"uploaded", "sent_to_weaver_qc", "approved"} or pig_status == "uploaded"
         generated = uploaded or handoff_status in {"generated", "exported", "sent_to_weaver_qc", "approved"} or pig_status in {"generated", "exported", "uploaded"}
@@ -1341,17 +1500,35 @@ def upsert_graphics_handoff_request(connection: Any, request: dict[str, Any]) ->
         (graphics_request_id,),
     ).fetchone()
     source_payload = request.get("sourcePayload") or request.get("payload") or request
-    content_type = normalize_content_type(
-        request.get("contentType")
-        or request.get("imageType")
-        or extract_handoff_value(source_payload, "contentType", "imageType")
-    )
+    existing_record = row_to_handoff(existing) if existing else None
+    content_type = infer_graphics_content_type(request, source_payload, existing_record)
+    if content_type == "FPI":
+        canonical_content_id = canonical_fpi_content_id(request, source_payload)
+        canonical_matches = []
+        for candidate in connection.execute(
+            "SELECT * FROM graphics_handoff_ledger WHERE content_type IN ('FP', 'FPI')"
+        ).fetchall():
+            candidate_record = row_to_handoff(candidate)
+            candidate_payload = candidate_record.get("sourcePayload") or {}
+            try:
+                candidate_identity = canonical_fpi_content_id(candidate_record, candidate_payload)
+            except ValueError:
+                continue
+            if candidate_identity == canonical_content_id:
+                canonical_matches.append((candidate, candidate_record))
+        if len(canonical_matches) > 1:
+            raise ValueError(f"Duplicate FPI canonical identity: {canonical_content_id}")
+        if canonical_matches:
+            existing, candidate_record = canonical_matches[0]
+            graphics_request_id = str(candidate_record.get("graphicsRequestId") or graphics_request_id)
     image_type = normalize_content_type(
         request.get("imageType")
         or request.get("contentType")
         or extract_handoff_value(source_payload, "imageType", "contentType"),
         content_type,
     )
+    if image_type == "FP":
+        image_type = "FPI"
     has_text = bool(extract_handoff_text(source_payload))
     has_required_source = has_text or (content_type == "FPI" and has_fpi_source_asset(source_payload))
     if not has_required_source and existing:
@@ -1366,8 +1543,18 @@ def upsert_graphics_handoff_request(connection: Any, request: dict[str, Any]) ->
     source_status = str(request.get("sourceStatus") or "needs_graphics")
     blocked_reason = str(request.get("blockedReason") or "")
     existing_handoff_status = str(existing["handoff_status"] if existing else "")
+    is_rework_request = bool(
+        request.get("revisionOf")
+        or request.get("originalGraphicsRequestId")
+        or extract_handoff_value(source_payload, "revisionOf", "originalGraphicsRequestId")
+        or source_status.lower().startswith(("rework", "manual_rework"))
+    )
     terminal_source_refresh = False
-    if existing_handoff_status in TERMINAL_HANDOFF_STATUSES and handoff_status in SOURCE_QUEUE_REFRESH_STATUSES:
+    if (
+        not is_rework_request
+        and existing_handoff_status in TERMINAL_HANDOFF_STATUSES
+        and handoff_status in SOURCE_QUEUE_REFRESH_STATUSES
+    ):
         terminal_source_refresh = True
         source_status = str(existing["source_status"] or source_status)
         handoff_status = existing_handoff_status
@@ -1491,6 +1678,10 @@ def update_graphics_handoff(connection: Any, graphics_request_id: str, update: d
     qc_status = normalize_enum(update.get("qcStatus"), QC_STATUSES, existing["qcStatus"])
     content_type = normalize_content_type(update.get("contentType") or update.get("imageType") or existing.get("contentType"), existing.get("contentType") or "QI")
     image_type = normalize_content_type(update.get("imageType") or update.get("contentType") or existing.get("imageType"), content_type)
+    if content_type == "FP":
+        content_type = "FPI"
+    if image_type == "FP":
+        image_type = "FPI"
     asset_url = str(update.get("assetUrl") or update.get("assetLinkUrl") or update.get("driveUrl") or existing["assetUrl"] or "")
     uploaded = handoff_status in {"uploaded", "sent_to_weaver_qc", "approved"} or pig_status == "uploaded"
     generated = uploaded or handoff_status in {"generated", "exported", "sent_to_weaver_qc", "approved"} or pig_status in {"generated", "exported", "uploaded"}

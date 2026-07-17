@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import os
 import sys
 from typing import Any
@@ -93,7 +94,7 @@ def normalize_content_type(value: Any, default: str = "QI") -> str:
     return default
 
 
-def resolve_content_type(record: dict[str, Any], default: str = "QI") -> str:
+def resolve_content_type(record: dict[str, Any], default: str = "") -> str:
     content_type = normalize_content_type(
         record.get("contentType")
         or record.get("imageType")
@@ -102,14 +103,27 @@ def resolve_content_type(record: dict[str, Any], default: str = "QI") -> str:
         "",
     )
     if content_type:
-        return content_type
+        return "FPI" if content_type == "FP" else content_type
     notes = str(record.get("productionNotes") or record.get("notes") or "")
     for line in notes.splitlines():
         if ":" not in line:
             continue
         label, value = line.split(":", 1)
         if normalize_text(label).lower() in {"content type", "image type", "type"}:
-            return normalize_content_type(value, default)
+            resolved = normalize_content_type(value, default)
+            return "FPI" if resolved == "FP" else resolved
+    identity_values = [
+        record.get("requestId"),
+        record.get("graphicsRequestId"),
+        record.get("sourceRecordId"),
+        record.get("recordId"),
+        record.get("canonicalPoemId"),
+        record.get("poemId"),
+    ]
+    if any(re.search(r"(^|[-:])FPI?($|[-:])", normalize_text(value), re.IGNORECASE) for value in identity_values):
+        return "FPI"
+    if any(re.search(r"(^|[-:])QI($|[-:])", normalize_text(value), re.IGNORECASE) for value in identity_values):
+        return "QI"
     return default
 
 
@@ -123,6 +137,8 @@ def sync_completions(connection, payload: dict[str, Any]) -> dict[str, Any]:
         if not request_id:
             continue
         content_type = resolve_content_type(completion)
+        if not content_type:
+            raise ValueError(f"contentType is required for completion {request_id}")
 
         request_record = {
             "id": request_id,
@@ -165,7 +181,7 @@ def sync_completions(connection, payload: dict[str, Any]) -> dict[str, Any]:
             "completed_at": normalize_text(completion.get("completedAt")) or utc_now_iso(),
             "source_payload": completion,
         })
-        upsert_graphics_handoff_request(connection, {
+        handoff = upsert_graphics_handoff_request(connection, {
             "graphicsRequestId": request_id,
             "sourceSystem": "weaver",
             "sourceStatus": "needs_graphics",
@@ -174,7 +190,8 @@ def sync_completions(connection, payload: dict[str, Any]) -> dict[str, Any]:
             "sourceCompletionId": normalize_text(completion.get("completionId") or completion.get("id")),
             "sourcePayload": request_record,
         })
-        update_graphics_handoff(connection, request_id, {
+        ledger_request_id = normalize_text(handoff.get("graphicsRequestId")) or request_id
+        update_graphics_handoff(connection, ledger_request_id, {
             "contentType": content_type,
             "imageType": content_type,
             "sourceCompletionId": normalize_text(completion.get("completionId") or completion.get("id")),
@@ -232,6 +249,8 @@ def sync_qc_reviews(connection, payload: dict[str, Any]) -> dict[str, Any]:
             })
             continue
         content_type = resolve_content_type(review)
+        if not content_type:
+            raise ValueError(f"contentType is required for QC review {request_id}")
 
         upsert_graphics_request(connection, {
             "id": request_id,
@@ -277,7 +296,7 @@ def sync_qc_reviews(connection, payload: dict[str, Any]) -> dict[str, Any]:
         decision = normalize_text(review.get("qcDecision")).lower()
         if request_id:
             revision_reject = decision == "reject" and is_revision_reject(review)
-            upsert_graphics_handoff_request(connection, {
+            handoff = upsert_graphics_handoff_request(connection, {
                 "graphicsRequestId": request_id,
                 "sourceSystem": "weaver",
                 "sourceStatus": "qc_review",
@@ -289,7 +308,8 @@ def sync_qc_reviews(connection, payload: dict[str, Any]) -> dict[str, Any]:
                 "pigStatus": "uploaded",
                 "qcStatus": "pending",
             })
-            update_graphics_handoff(connection, request_id, {
+            ledger_request_id = normalize_text(handoff.get("graphicsRequestId")) or request_id
+            update_graphics_handoff(connection, ledger_request_id, {
                 "contentType": content_type,
                 "imageType": content_type,
                 "sourceCompletionId": completion_id,
