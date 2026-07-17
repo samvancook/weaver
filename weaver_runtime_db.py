@@ -503,7 +503,9 @@ def apply_handoff_queue_contract(record: dict[str, Any]) -> None:
     ).strip().lower()
     source_system = str(record.get("sourceSystem") or "").strip().lower()
     source_status = str(record.get("sourceStatus") or "").strip().lower()
-    if not queue_view:
+    if str(record.get("qcStatus") or "").strip().lower() == "needs_revision":
+        queue_view = "rework"
+    elif not queue_view:
         if source_system == "weaver_qc_rework" or source_status.startswith("rework"):
             queue_view = "rework"
         elif source_system == "coverage_needs" or source_status == "coverage_needs":
