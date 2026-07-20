@@ -371,25 +371,12 @@ def slug_identity_token(value: Any) -> str:
     return re.sub(r"[^A-Z0-9]+", "-", str(value or "").strip().upper()).strip("-")
 
 
+def canonical_fpi_graphics_request_id(canonical_content_id: str) -> str:
+    digest = hashlib.sha256(canonical_content_id.encode("utf-8")).hexdigest()[:32]
+    return f"weaver:fpi:{digest}"
+
+
 def canonical_fpi_content_id(request: dict[str, Any], source_payload: dict[str, Any]) -> str:
-    canonical_poem_id = str(
-        request.get("canonicalPoemId")
-        or request.get("poemId")
-        or request.get("fullPoemId")
-        or extract_handoff_value(source_payload, "canonicalPoemId", "poemId", "fullPoemId")
-        or ""
-    ).strip()
-    if canonical_poem_id:
-        return f"FPI:{slug_identity_token(canonical_poem_id)}"
-
-    source_record_id = str(
-        request.get("sourceRecordId")
-        or extract_handoff_value(source_payload, "sourceRecordId", "source_record_id")
-        or ""
-    ).strip()
-    if source_record_id and re.search(r"(^|[-:])FPI?($|[-:])", source_record_id, re.IGNORECASE):
-        return f"FPI:{slug_identity_token(source_record_id)}"
-
     book_shortener = str(
         request.get("bookShortener")
         or extract_handoff_value(source_payload, "bookShortener", "book_shortener")
@@ -403,8 +390,6 @@ def canonical_fpi_content_id(request: dict[str, Any], source_payload: dict[str, 
     ).strip()
     if book_shortener and poem_title:
         return f"FPI:{slug_identity_token(book_shortener)}-FPI-{slug_identity_token(poem_title)}"
-    if source_record_id:
-        return f"FPI:SOURCE-{slug_identity_token(source_record_id)}"
 
     book_title = str(
         request.get("bookTitle")
@@ -417,7 +402,43 @@ def canonical_fpi_content_id(request: dict[str, Any], source_payload: dict[str, 
             f"{normalize_key(book_title)}\n{normalize_key(poem_title)}".encode("utf-8")
         ).hexdigest()[:24]
         return f"FPI:BOOK-POEM-{digest}"
-    raise ValueError("FPI requests require canonicalPoemId, sourceRecordId, or book and poem identity")
+
+    canonical_poem_id = str(
+        request.get("canonicalPoemId")
+        or request.get("poemId")
+        or request.get("fullPoemId")
+        or extract_handoff_value(source_payload, "canonicalPoemId", "poemId", "fullPoemId")
+        or ""
+    ).strip()
+    if canonical_poem_id:
+        canonical_token = re.sub(
+            r"(^|-)FP(?=-|$)",
+            r"\1FPI",
+            slug_identity_token(canonical_poem_id),
+        )
+        return f"FPI:{canonical_token}"
+
+    source_record_id = str(
+        request.get("sourceRecordId")
+        or extract_handoff_value(source_payload, "sourceRecordId", "source_record_id")
+        or request.get("graphicsRequestId")
+        or ""
+    ).strip()
+    if source_record_id and re.search(r"(^|[-:])FPI?($|[-:])", source_record_id, re.IGNORECASE):
+        return f"FPI:{slug_identity_token(source_record_id)}"
+    raise ValueError("FPI requests require canonicalPoemId, book and poem identity, or a canonical FP/FPI sourceRecordId")
+
+
+def assert_compatible_graphics_content_type(existing: dict[str, Any] | None, content_type: str) -> None:
+    if not existing:
+        return
+    existing_type = normalize_content_type(existing.get("contentType") or existing.get("imageType"), "")
+    if existing_type == "FP":
+        existing_type = "FPI"
+    if existing_type and existing_type != content_type:
+        raise ValueError(
+            f"graphicsRequestId already belongs to contentType {existing_type}, not {content_type}"
+        )
 
 
 def row_to_handoff(row: sqlite3.Row) -> dict[str, Any]:
@@ -1120,6 +1141,7 @@ class FirestoreLedgerClient:
         existing = self.get_handoff(graphics_request_id)
         source_payload = request.get("sourcePayload") or request.get("payload") or request
         content_type = infer_graphics_content_type(request, source_payload, existing)
+        assert_compatible_graphics_content_type(existing, content_type)
         canonical_content_id = ""
         if content_type == "FPI":
             canonical_content_id = canonical_fpi_content_id(request, source_payload)
@@ -1135,6 +1157,9 @@ class FirestoreLedgerClient:
                 canonical_record = normalize_handoff_record(canonical_matches[0])
                 graphics_request_id = str(canonical_record.get("graphicsRequestId") or graphics_request_id)
                 existing = canonical_record
+            elif not existing:
+                graphics_request_id = canonical_fpi_graphics_request_id(canonical_content_id)
+                existing = self.get_handoff(graphics_request_id)
         existing = existing or default_handoff_record(graphics_request_id)
         image_type = normalize_content_type(
             request.get("imageType")
@@ -1416,12 +1441,68 @@ class FirestoreLedgerClient:
             "ingestedAt": ingested_at,
             "sourcePayload": completion.get("source_payload") or completion.get("sourcePayload") or {},
         }
+        pending_candidates = [completion_record]
+        for existing in self.query_raw_documents(
+            FIRESTORE_GRAPHICS_COMPLETIONS_COLLECTION,
+            "graphicsRequestId",
+            graphics_request_id,
+        ):
+            existing_id = str(existing.get("id") or "").strip()
+            if not existing_id or existing_id == completion_id:
+                continue
+            queue_card = self.get_raw_document(FIRESTORE_GRAPHICS_QC_QUEUE_COLLECTION, existing_id) or {}
+            if queue_card.get("isPendingQc") is True:
+                pending_candidates.append(existing)
+
+        winner = max(
+            pending_candidates,
+            key=lambda record: (
+                str(record.get("completedAt") or ""),
+                str(record.get("id") or ""),
+            ),
+        )
+        winner_id = str(winner.get("id") or completion_id)
+        if completion_id != winner_id:
+            completion_record.update({
+                "completionStatus": "SUPERSEDED",
+                "supersededBy": winner_id,
+                "supersededAt": utc_now_iso(),
+            })
         self.write_raw_document(FIRESTORE_GRAPHICS_COMPLETIONS_COLLECTION, completion_id, completion_record)
         self.write_raw_document(
             FIRESTORE_GRAPHICS_QC_QUEUE_COLLECTION,
             completion_id,
-            build_graphics_qc_queue_card(completion_record),
+            {
+                **build_graphics_qc_queue_card(completion_record),
+                "isPendingQc": completion_id == winner_id,
+                **({
+                    "graphicsQcDecision": "SUPERSEDED",
+                    "supersededBy": winner_id,
+                } if completion_id != winner_id else {}),
+            },
         )
+        for existing in pending_candidates:
+            existing_id = str(existing.get("id") or "").strip()
+            if not existing_id or existing_id in {completion_id, winner_id}:
+                continue
+            superseded_at = utc_now_iso()
+            self.write_raw_document(FIRESTORE_GRAPHICS_COMPLETIONS_COLLECTION, existing_id, {
+                **existing,
+                "completionStatus": "SUPERSEDED",
+                "supersededBy": winner_id,
+                "supersededAt": superseded_at,
+            })
+            queue_card = self.get_raw_document(FIRESTORE_GRAPHICS_QC_QUEUE_COLLECTION, existing_id) or {
+                "pigCompletionId": existing_id,
+                "graphicsRequestId": graphics_request_id,
+            }
+            self.write_raw_document(FIRESTORE_GRAPHICS_QC_QUEUE_COLLECTION, existing_id, {
+                **queue_card,
+                "isPendingQc": False,
+                "graphicsQcDecision": "SUPERSEDED",
+                "supersededBy": winner_id,
+                "updatedAt": superseded_at,
+            })
         return completion_id
 
     def insert_graphics_qc_review(self, review: dict[str, Any]) -> int:
@@ -1566,6 +1647,7 @@ def upsert_graphics_handoff_request(connection: Any, request: dict[str, Any]) ->
     source_payload = request.get("sourcePayload") or request.get("payload") or request
     existing_record = row_to_handoff(existing) if existing else None
     content_type = infer_graphics_content_type(request, source_payload, existing_record)
+    assert_compatible_graphics_content_type(existing_record, content_type)
     if content_type == "FPI":
         canonical_content_id = canonical_fpi_content_id(request, source_payload)
         canonical_matches = []

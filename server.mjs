@@ -225,6 +225,13 @@ function normalizeExcerptTransferText(text) {
   return String(text || "").replace(/\r\n?/g, "\n").trim();
 }
 
+function canonicalFullPoemSourceRecordId(record) {
+  const bookShortener = cleanSheetWhitespace(record?.bookShortener);
+  const poemTitle = cleanSheetWhitespace(record?.poemTitle || record?.title);
+  if (!bookShortener || !poemTitle) return "";
+  return `${slugToken(bookShortener)}-FP-${slugToken(poemTitle)}`;
+}
+
 function normalizeExcerptContentType(value) {
   const cleaned = cleanSheetWhitespace(value).toUpperCase();
   if (cleaned === "FP" || cleaned === "FULL POEM") return "FP";
@@ -3732,16 +3739,21 @@ function buildPoetryPleaseExcerptRecord(record) {
   const bookShortener = cleanSheetWhitespace(record.bookShortener);
   const releaseCatalog = cleanSheetWhitespace(record.releaseCatalog);
   const contentType = normalizeExcerptContentType(record.contentType || "EXC");
+  const intakeSourceRecordId = cleanSheetWhitespace(record.sourceRecordId);
+  const canonicalSourceRecordId = contentType === "FP"
+    ? canonicalFullPoemSourceRecordId(record)
+    : intakeSourceRecordId;
   if (!recordId || !cleanSheetWhitespace(excerpt)) {
     return null;
   }
-  if (!bookShortener || !releaseCatalog) {
+  if (!bookShortener || !releaseCatalog || (contentType === "FP" && !canonicalSourceRecordId)) {
     return {
       invalid: true,
       recordId,
       error: `Missing required publishing metadata: ${[
         !bookShortener ? "bookShortener" : "",
-        !releaseCatalog ? "releaseCatalog" : ""
+        !releaseCatalog ? "releaseCatalog" : "",
+        contentType === "FP" && !canonicalSourceRecordId ? "poemTitle" : ""
       ].filter(Boolean).join(", ")}`
     };
   }
@@ -3750,7 +3762,8 @@ function buildPoetryPleaseExcerptRecord(record) {
     contentType,
     recordId,
     sourceSystem: cleanSheetWhitespace(record.sourceSystem || "weaver"),
-    sourceRecordId: cleanSheetWhitespace(record.sourceRecordId),
+    sourceRecordId: canonicalSourceRecordId,
+    sourceIntakeRecordId: intakeSourceRecordId,
     author: String(record.author || ""),
     bookTitle: String(record.bookTitle || ""),
     poemTitle: String(record.poemTitle || ""),
@@ -3996,9 +4009,13 @@ async function backfillApprovedExcerptHandoffs({ since = "", sourceRecordIds = [
     ? approvedRecords.filter(record => requestedIds.has(cleanSheetWhitespace(record?.sourceRecordId)))
     : approvedRecords;
   const targetRecordIds = candidates
-    .map(record => cleanSheetWhitespace(record?.sourceRecordId))
-    .filter(Boolean)
-    .map(sourceRecordId => `weaver-exc-${sourceRecordId}`);
+    .map(record => {
+      const sourceRecordId = cleanSheetWhitespace(record?.sourceRecordId);
+      if (!sourceRecordId) return "";
+      const contentType = normalizeExcerptContentType(record?.contentType || "EXC");
+      return `weaver-${contentType.toLowerCase()}-${sourceRecordId}`;
+    })
+    .filter(Boolean);
   const existingResult = await getExcerptHandoffRecords({ recordIds: targetRecordIds });
   const existingIds = new Set(
     (Array.isArray(existingResult?.records) ? existingResult.records : [])
@@ -4006,7 +4023,11 @@ async function backfillApprovedExcerptHandoffs({ since = "", sourceRecordIds = [
       .filter(Boolean)
   );
   const missing = candidates.filter(
-    record => !existingIds.has(`weaver-exc-${cleanSheetWhitespace(record?.sourceRecordId)}`)
+    record => {
+      const sourceRecordId = cleanSheetWhitespace(record?.sourceRecordId);
+      const contentType = normalizeExcerptContentType(record?.contentType || "EXC");
+      return !existingIds.has(`weaver-${contentType.toLowerCase()}-${sourceRecordId}`);
+    }
   );
   const handoffs = missing
     .map(buildExcerptHandoffFromApprovedExportRecord)
