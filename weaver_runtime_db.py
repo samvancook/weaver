@@ -651,6 +651,15 @@ def normalize_handoff_record(record: dict[str, Any]) -> dict[str, Any]:
         normalized["reworkReason"] = str(
             normalized.get("reworkReason") or "correct_and_recreate"
         )
+        normalized["previousAssetUrl"] = str(
+            normalized.get("previousAssetUrl") or normalized.get("assetUrl") or ""
+        )
+        normalized["previousAssetPreviewUrl"] = str(
+            normalized.get("previousAssetPreviewUrl")
+            or normalized.get("assetPreviewUrl")
+            or normalized.get("previousAssetUrl")
+            or ""
+        )
     apply_handoff_queue_contract(normalized)
     return normalized
 

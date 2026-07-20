@@ -317,6 +317,8 @@ def sync_qc_reviews(connection, payload: dict[str, Any]) -> dict[str, Any]:
                 "handoffStatus": "approved" if decision == "approve" else "rejected",
                 "pigStatus": "not_started" if revision_reject else None,
                 "qcStatus": "approved" if decision == "approve" else ("needs_revision" if revision_reject else "rejected"),
+                "assetUrl": str(review.get("assetUrl") or review.get("assetLinkUrl") or ""),
+                "assetPreviewUrl": str(review.get("assetPreviewUrl") or ""),
                 "qcPayload": review,
             })
         written += 1
