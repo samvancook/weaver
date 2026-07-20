@@ -353,9 +353,13 @@ def is_revision_reject(review: dict[str, Any]) -> bool:
         review.get("rejectReason")
         or review.get("qcRejectReason")
         or review.get("revisionReason")
+        or review.get("reworkReason")
         or review.get("qcStatus")
     ).lower()
-    return reject_reason in {"needs_revision", "correct_and_recreate"}
+    if reject_reason in {"needs_revision", "correct_and_recreate"}:
+        return True
+    qc_note = normalize_text(review.get("qcNote") or review.get("graphicsQcNote")).lower()
+    return "reject reason: correct and recreate" in qc_note
 
 
 def sync_poetry_please_handoffs(connection, payload: dict[str, Any]) -> dict[str, Any]:
