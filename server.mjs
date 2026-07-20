@@ -5648,13 +5648,23 @@ async function saveGraphicsQcToSheets(updates) {
     return { ok: false, error: "No graphics QC updates provided." };
   }
 
-  await ensureCleanupQcColumnsServer();
-  await ensurePigCompletedGraphicsSheetServer();
+  const storageTargets = new Set(
+    updates.map(update => cleanSheetWhitespace(update?.storageTarget).toLowerCase())
+  );
+  if (storageTargets.has("sheet_cleanup") || storageTargets.has("cleanup_sheet")) {
+    await ensureCleanupQcColumnsServer();
+  }
+  if (storageTargets.has("pig_sheet")) {
+    await ensurePigCompletedGraphicsSheetServer();
+  }
 
   const cleanupRequests = [];
   const pigRequests = [];
   const approvedPigSheetRows = [];
+  const approvedFirestoreRecords = [];
   const replacementCompletions = [];
+  const matchedUpdates = [];
+  let firestoreMatchedCount = 0;
   let savedCount = 0;
 
   for (const update of updates) {
@@ -5662,6 +5672,26 @@ async function saveGraphicsQcToSheets(updates) {
     const note = String(update?.qcNote || "").trim();
     const updatedAt = decision ? new Date().toISOString() : "";
     const rowNumber = parseInt(update?.sheetRow, 10) || 0;
+    const storageTarget = cleanSheetWhitespace(update?.storageTarget).toLowerCase();
+    const completionId = cleanSheetWhitespace(update?.pigCompletionId);
+
+    if (storageTarget === "firestore") {
+      if (!completionId || !decision) continue;
+      const normalizedUpdate = {
+        ...update,
+        graphicsQcDecision: decision,
+        graphicsQcNote: note,
+        graphicsQcUpdatedAt: updatedAt
+      };
+      matchedUpdates.push(normalizedUpdate);
+      firestoreMatchedCount++;
+      if (decision === "APPROVE") {
+        approvedFirestoreRecords.push(normalizedUpdate);
+      }
+      savedCount++;
+      continue;
+    }
+
     if (!rowNumber) continue;
 
     const replacementDecision = String(update?.qcDecision || "").trim().toLowerCase();
@@ -5675,7 +5705,7 @@ async function saveGraphicsQcToSheets(updates) {
       replacementCompletions.push(await buildReplacementGraphicCompletion(update));
     }
 
-    if (cleanSheetWhitespace(update?.storageTarget).toLowerCase() === "pig_sheet") {
+    if (storageTarget === "pig_sheet") {
       if (decision === "APPROVE") {
         approvedPigSheetRows.push(rowNumber);
       }
@@ -5709,10 +5739,11 @@ async function saveGraphicsQcToSheets(updates) {
         }
       );
     }
+    matchedUpdates.push(update);
     savedCount++;
   }
 
-  if (!cleanupRequests.length && !pigRequests.length) {
+  if (!matchedUpdates.length) {
     return { ok: false, error: "No matching graphics QC rows found." };
   }
 
@@ -5721,14 +5752,17 @@ async function saveGraphicsQcToSheets(updates) {
   }
 
   let runtimeDb = { ok: false, skipped: true };
-  if (updates.length) {
+  if (matchedUpdates.length) {
     try {
-      runtimeDb = await syncWeaverRuntimeDb("insert_qc_reviews", { reviews: updates });
+      runtimeDb = await syncWeaverRuntimeDb("insert_qc_reviews", { reviews: matchedUpdates });
     } catch (error) {
       runtimeDb = { ok: false, error: error.message };
     }
     if (!runtimeDb?.ok) {
       throw new Error(runtimeDb?.error || "Runtime DB QC ledger write failed.");
+    }
+    if (firestoreMatchedCount && Number(runtimeDb?.written || 0) < firestoreMatchedCount) {
+      throw new Error("Firestore QC ledger did not save every submitted review.");
     }
   }
   const sheetSync = { ok: true, cleanupWrites: cleanupRequests.length, pigWrites: pigRequests.length };
@@ -5745,14 +5779,18 @@ async function saveGraphicsQcToSheets(updates) {
   }
 
   let poetryPlease = { ok: true, skipped: true, reason: "no_new_approvals" };
-  if (approvedPigSheetRows.length && sheetSync.ok) {
+  if ((approvedPigSheetRows.length || approvedFirestoreRecords.length) && sheetSync.ok) {
     const approvedRowSet = new Set(approvedPigSheetRows.map(value => String(value)));
-    const approvedRecords = (await readPigCompletedGraphicsRows())
+    const approvedSheetRecords = approvedPigSheetRows.length ? (await readPigCompletedGraphicsRows())
       .map((row, index) => buildPigQcRecordFromSheetRow(row, index))
       .filter(record => record && approvedRowSet.has(String(record.sheetRow)))
       .filter(record => normalizeGraphicsQcDecision(record.graphicsQcDecision) === "APPROVE")
       .map(buildPoetryPleaseGraphicRecord)
-      .filter(Boolean);
+      .filter(Boolean) : [];
+    const approvedRecords = [
+      ...approvedSheetRecords,
+      ...approvedFirestoreRecords.map(buildPoetryPleaseGraphicRecord).filter(Boolean)
+    ];
 
     try {
       poetryPlease = await handoffApprovedGraphicsToPoetryPlease(approvedRecords);

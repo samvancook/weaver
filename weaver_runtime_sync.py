@@ -232,7 +232,7 @@ def sync_qc_reviews(connection, payload: dict[str, Any]) -> dict[str, Any]:
         request_id = normalize_text(review.get("graphicsRequestId"))
         if storage_target == "cleanup_sheet" and not completion_id and request_id:
             completion_id = f"cleanup:{request_id}"
-        if storage_target not in {"pig_sheet", "cleanup_sheet"} or not completion_id:
+        if storage_target not in {"firestore", "pig_sheet", "cleanup_sheet"} or not completion_id:
             skipped.append({
                 "reason": "not_qc_queue_backed",
                 "recordId": normalize_text(review.get("recordId")),
@@ -252,36 +252,37 @@ def sync_qc_reviews(connection, payload: dict[str, Any]) -> dict[str, Any]:
         if not content_type:
             raise ValueError(f"contentType is required for QC review {request_id}")
 
-        upsert_graphics_request(connection, {
-            "id": request_id,
-            "request_status": "COMPLETED_RETURNED",
-            "source_type": "weaver_sheet_queue",
-            "content_type": content_type,
-            "image_type": content_type,
-            "book_title": normalize_text(review.get("bookTitle")),
-            "poem_title": normalize_text(review.get("poemTitle")),
-            "author": normalize_text(review.get("author")),
-            "quote_text": str(review.get("quoteText") or ""),
-            "source_record_id": normalize_text(review.get("recordId")),
-            "source_sheet_name": str(review.get("storageTarget") or ""),
-            "source_sheet_row": review.get("sheetRow") or 0,
-            "source_payload": review,
-            "latest_completion_id": completion_id,
-        })
+        if storage_target != "firestore":
+            upsert_graphics_request(connection, {
+                "id": request_id,
+                "request_status": "COMPLETED_RETURNED",
+                "source_type": "weaver_sheet_queue",
+                "content_type": content_type,
+                "image_type": content_type,
+                "book_title": normalize_text(review.get("bookTitle")),
+                "poem_title": normalize_text(review.get("poemTitle")),
+                "author": normalize_text(review.get("author")),
+                "quote_text": str(review.get("quoteText") or ""),
+                "source_record_id": normalize_text(review.get("recordId")),
+                "source_sheet_name": str(review.get("storageTarget") or ""),
+                "source_sheet_row": review.get("sheetRow") or 0,
+                "source_payload": review,
+                "latest_completion_id": completion_id,
+            })
 
-        insert_graphics_completion(connection, {
-            "id": completion_id,
-            "graphics_request_id": request_id,
-            "source_tool": normalize_text(review.get("sourceTool") or "P.I.G."),
-            "content_type": content_type,
-            "image_type": content_type,
-            "asset_url": str(review.get("assetUrl") or ""),
-            "asset_preview_url": str(review.get("assetPreviewUrl") or review.get("assetUrl") or ""),
-            "production_notes": str(review.get("notes") or ""),
-            "completion_status": "RETURNED",
-            "completed_at": normalize_text(review.get("completedAt")) or utc_now_iso(),
-            "source_payload": review,
-        })
+            insert_graphics_completion(connection, {
+                "id": completion_id,
+                "graphics_request_id": request_id,
+                "source_tool": normalize_text(review.get("sourceTool") or "P.I.G."),
+                "content_type": content_type,
+                "image_type": content_type,
+                "asset_url": str(review.get("assetUrl") or ""),
+                "asset_preview_url": str(review.get("assetPreviewUrl") or review.get("assetUrl") or ""),
+                "production_notes": str(review.get("notes") or ""),
+                "completion_status": "RETURNED",
+                "completed_at": normalize_text(review.get("completedAt")) or utc_now_iso(),
+                "source_payload": review,
+            })
 
         insert_graphics_qc_review(connection, {
             "graphics_completion_id": completion_id,

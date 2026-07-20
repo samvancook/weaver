@@ -4661,6 +4661,11 @@ function buildGraphicsCard(record) {
   card.dataset.poemTitle = record.poemTitle || "";
   card.dataset.bookTitle = record.bookTitle || "";
   card.dataset.quoteText = record.quoteText || "";
+  card.dataset.assetLinkUrl = record.assetLinkUrl || record.previousAssetUrl || "";
+  card.dataset.assetPreviewUrl = record.assetPreviewUrl || record.previousAssetPreviewUrl || "";
+  card.dataset.contentType = record.contentType || record.imageType || "";
+  card.dataset.completedAt = record.completedAt || "";
+  card.dataset.sourceTool = record.sourceTool || "P.I.G.";
   card.dataset.currentQcDecision = normalizeGraphicsQcDecisionClient(record.graphicsQcDecision || "");
   card.dataset.currentQcNote = record.graphicsQcNote || "";
   card.dataset.currentReplacementAssetUrl = record.assetLinkUrl || "";
@@ -4889,6 +4894,13 @@ function collectGraphicsQcUpdates() {
       poemTitle: card.dataset.poemTitle || "",
       bookTitle: card.dataset.bookTitle || "",
       quoteText: card.dataset.quoteText || "",
+      assetLinkUrl: card.dataset.assetLinkUrl || "",
+      assetUrl: card.dataset.assetLinkUrl || "",
+      assetPreviewUrl: card.dataset.assetPreviewUrl || "",
+      contentType: card.dataset.contentType || "",
+      imageType: card.dataset.contentType || "",
+      completedAt: card.dataset.completedAt || "",
+      sourceTool: card.dataset.sourceTool || "P.I.G.",
       rejectReason,
       metadataIssue,
       aestheticIssue,
