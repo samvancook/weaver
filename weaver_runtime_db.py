@@ -471,8 +471,7 @@ def row_to_handoff(row: sqlite3.Row) -> dict[str, Any]:
         "approvedAt": str(row["approved_at"] or ""),
         "rejectedAt": str(row["rejected_at"] or ""),
     }
-    apply_handoff_queue_contract(record)
-    return record
+    return normalize_handoff_record(record)
 
 
 def default_handoff_record(graphics_request_id: str) -> dict[str, Any]:
@@ -514,6 +513,11 @@ def default_handoff_record(graphics_request_id: str) -> dict[str, Any]:
         "pigProjectId": "",
         "editableProjectFileId": "",
         "editableProjectUrl": "",
+        "reworkReason": "",
+        "metadataIssue": "",
+        "aestheticIssue": "",
+        "qcNote": "",
+        "requestedChanges": "",
         "claimedBy": "",
         "errorMessage": "",
         "blockedReason": "",
@@ -552,6 +556,16 @@ def normalize_handoff_record(record: dict[str, Any]) -> dict[str, Any]:
 
     source_payload = normalized["sourcePayload"]
     nested_source = extract_nested_payload(source_payload)
+    qc_payload = normalized["qcPayload"]
+    pig_payload = normalized["pigPayload"]
+    payload_sources = [
+        source_payload,
+        nested_source,
+        qc_payload,
+        extract_nested_payload(qc_payload),
+        pig_payload,
+        extract_nested_payload(pig_payload),
+    ]
     quote_text = str(normalized.get("quoteText") or extract_handoff_text(source_payload) or "").strip()
     if not quote_text and nested_source:
         quote_text = extract_handoff_text(nested_source)
@@ -580,6 +594,42 @@ def normalize_handoff_record(record: dict[str, Any]) -> dict[str, Any]:
     normalized["author"] = str(normalized.get("author") or source_payload.get("author") or source_payload.get("author_name") or nested_source.get("author") or nested_source.get("author_name") or "")
     normalized["poemTitle"] = str(normalized.get("poemTitle") or source_payload.get("poemTitle") or source_payload.get("title") or source_payload.get("poem_title") or nested_source.get("poemTitle") or nested_source.get("title") or nested_source.get("poem_title") or "")
     normalized["bookTitle"] = str(normalized.get("bookTitle") or source_payload.get("bookTitle") or source_payload.get("book_title") or nested_source.get("bookTitle") or nested_source.get("book_title") or "")
+    payload_fields = {
+        "pigProjectId": ("pigProjectId", "pig_project_id"),
+        "editableProjectFileId": ("editableProjectFileId", "projectFileId", "editable_project_file_id"),
+        "editableProjectUrl": ("editableProjectUrl", "editable_project_url"),
+        "originalGraphicsRequestId": ("originalGraphicsRequestId", "original_graphics_request_id"),
+        "revisionOf": ("revisionOf", "revision_of"),
+        "version": ("version",),
+        "imageType": ("imageType", "contentType", "image_type", "content_type"),
+        "reworkReason": ("reworkReason", "rejectReason", "rejectedReason"),
+        "metadataIssue": ("metadataIssue", "metadata_issue"),
+        "aestheticIssue": ("aestheticIssue", "aesthetic_issue"),
+        "qcNote": ("qcNote", "graphicsQcNote", "qc_note"),
+        "requestedChanges": ("requestedChanges", "requested_changes", "qcNote", "graphicsQcNote", "qc_note"),
+    }
+    for field, aliases in payload_fields.items():
+        if normalized.get(field) not in {None, ""}:
+            continue
+        for alias in aliases:
+            for payload_source in payload_sources:
+                value = payload_source.get(alias)
+                if value not in {None, ""}:
+                    normalized[field] = value
+                    break
+            if normalized.get(field) not in {None, ""}:
+                break
+    if normalized.get("qcStatus") == "needs_revision" or normalized.get("handoffStatus") == "rejected":
+        normalized["originalGraphicsRequestId"] = str(
+            normalized.get("originalGraphicsRequestId") or graphics_request_id
+        )
+        normalized["revisionOf"] = str(
+            normalized.get("revisionOf") or normalized.get("sourceCompletionId") or ""
+        )
+        normalized["version"] = normalized.get("version") or 2
+        normalized["reworkReason"] = str(
+            normalized.get("reworkReason") or "correct_and_recreate"
+        )
     apply_handoff_queue_contract(normalized)
     return normalized
 
@@ -1142,6 +1192,15 @@ class FirestoreLedgerClient:
             "originalGraphicsRequestId": str(request.get("originalGraphicsRequestId") or extract_handoff_value(source_payload, "originalGraphicsRequestId") or ""),
             "reviewStatus": str(request.get("reviewStatus") or extract_handoff_value(source_payload, "reviewStatus") or ""),
             "ocrText": str(request.get("ocrText") or extract_handoff_value(source_payload, "ocrText") or ""),
+            "version": str(request.get("version") or extract_handoff_value(source_payload, "version") or existing.get("version") or ""),
+            "pigProjectId": str(request.get("pigProjectId") or extract_handoff_value(source_payload, "pigProjectId", "pig_project_id") or existing.get("pigProjectId") or ""),
+            "editableProjectFileId": str(request.get("editableProjectFileId") or request.get("projectFileId") or extract_handoff_value(source_payload, "editableProjectFileId", "projectFileId", "editable_project_file_id") or existing.get("editableProjectFileId") or ""),
+            "editableProjectUrl": str(request.get("editableProjectUrl") or extract_handoff_value(source_payload, "editableProjectUrl", "editable_project_url") or existing.get("editableProjectUrl") or ""),
+            "reworkReason": str(request.get("reworkReason") or extract_handoff_value(source_payload, "reworkReason", "rejectReason", "rejectedReason") or existing.get("reworkReason") or ""),
+            "metadataIssue": str(request.get("metadataIssue") or extract_handoff_value(source_payload, "metadataIssue", "metadata_issue") or existing.get("metadataIssue") or ""),
+            "aestheticIssue": str(request.get("aestheticIssue") or extract_handoff_value(source_payload, "aestheticIssue", "aesthetic_issue") or existing.get("aestheticIssue") or ""),
+            "qcNote": str(request.get("qcNote") or extract_handoff_value(source_payload, "qcNote", "graphicsQcNote", "qc_note") or existing.get("qcNote") or ""),
+            "requestedChanges": str(request.get("requestedChanges") or extract_handoff_value(source_payload, "requestedChanges", "requested_changes") or existing.get("requestedChanges") or ""),
             "pigStatus": pig_status,
             "handoffStatus": handoff_status,
             "qcStatus": qc_status,
@@ -1240,6 +1299,11 @@ class FirestoreLedgerClient:
                 or ""
             ),
             "editableProjectUrl": str(update.get("editableProjectUrl") or existing.get("editableProjectUrl") or ""),
+            "reworkReason": str(update.get("reworkReason") or update.get("rejectReason") or existing.get("reworkReason") or ""),
+            "metadataIssue": str(update.get("metadataIssue") or existing.get("metadataIssue") or ""),
+            "aestheticIssue": str(update.get("aestheticIssue") or existing.get("aestheticIssue") or ""),
+            "qcNote": str(update.get("qcNote") or existing.get("qcNote") or ""),
+            "requestedChanges": str(update.get("requestedChanges") or existing.get("requestedChanges") or ""),
             "errorMessage": str(update.get("errorMessage") or existing["errorMessage"] or ""),
             "blockedReason": str(update.get("blockedReason") or existing["blockedReason"] or ""),
             "pigPayload": update.get("pigPayload") or update,

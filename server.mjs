@@ -1304,10 +1304,25 @@ function buildGraphicsHandoffLedgerRequest(record) {
     record?.contentType || record?.imageType,
     "QI"
   );
+  const reworkReason = cleanSheetWhitespace(record?.reworkReason || record?.rejectReason || record?.rejectedReason);
+  const requestedChanges = String(record?.requestedChanges || record?.qcNote || record?.graphicsQcNote || "");
   return {
     graphicsRequestId: cleanSheetWhitespace(record?.graphicsRequestId),
     sourceSystem: isRework ? "weaver_qc_rework" : "weaver",
     sourceStatus: cleanSheetWhitespace(record?.requestStatus || (isRework ? "rework_requested" : "open")),
+    contentType,
+    imageType: contentType,
+    pigProjectId: cleanSheetWhitespace(record?.pigProjectId),
+    editableProjectFileId: cleanSheetWhitespace(record?.editableProjectFileId || record?.projectFileId),
+    editableProjectUrl: cleanSheetWhitespace(record?.editableProjectUrl),
+    originalGraphicsRequestId: cleanSheetWhitespace(record?.originalGraphicsRequestId),
+    revisionOf: cleanSheetWhitespace(record?.revisionOf),
+    version: record?.version || "",
+    reworkReason,
+    metadataIssue: cleanSheetWhitespace(record?.metadataIssue),
+    aestheticIssue: cleanSheetWhitespace(record?.aestheticIssue),
+    qcNote: String(record?.qcNote || record?.graphicsQcNote || ""),
+    requestedChanges,
     sourcePayload: {
       graphicsRequestId: cleanSheetWhitespace(record?.graphicsRequestId),
       originalGraphicsRequestId: cleanSheetWhitespace(record?.originalGraphicsRequestId),
@@ -1321,8 +1336,15 @@ function buildGraphicsHandoffLedgerRequest(record) {
       quoteText: String(record?.quoteText || ""),
       contentType,
       imageType: contentType,
-      reworkReason: cleanSheetWhitespace(record?.reworkReason || record?.rejectReason),
-      requestedChanges: String(record?.requestedChanges || record?.qcNote || ""),
+      pigProjectId: cleanSheetWhitespace(record?.pigProjectId),
+      editableProjectFileId: cleanSheetWhitespace(record?.editableProjectFileId || record?.projectFileId),
+      editableProjectUrl: cleanSheetWhitespace(record?.editableProjectUrl),
+      version: record?.version || "",
+      reworkReason,
+      metadataIssue: cleanSheetWhitespace(record?.metadataIssue),
+      aestheticIssue: cleanSheetWhitespace(record?.aestheticIssue),
+      qcNote: String(record?.qcNote || record?.graphicsQcNote || ""),
+      requestedChanges,
       previousAssetUrl: cleanSheetWhitespace(record?.previousAssetUrl || record?.assetUrl),
       previousAssetPreviewUrl: cleanSheetWhitespace(record?.previousAssetPreviewUrl || record?.assetPreviewUrl),
       socialMediaHandle,
@@ -3423,6 +3445,15 @@ async function createManualGraphicsReworkRequests(records = [], note = "") {
       sourceCompletionId: originalCompletionId,
       revisionOf: originalCompletionId,
       originalGraphicsRequestId: cleanSheetWhitespace(record.graphicsRequestId),
+      version: record.version || 2,
+      pigProjectId: cleanSheetWhitespace(record.pigProjectId),
+      editableProjectFileId: cleanSheetWhitespace(record.editableProjectFileId || record.projectFileId),
+      editableProjectUrl: cleanSheetWhitespace(record.editableProjectUrl),
+      reworkReason: "correct_and_recreate",
+      metadataIssue: cleanSheetWhitespace(record.metadataIssue),
+      aestheticIssue: cleanSheetWhitespace(record.aestheticIssue),
+      qcNote: trimmedNote,
+      requestedChanges: trimmedNote,
       handoffStatus: "requested",
       pigStatus: "not_started",
       qcStatus: "needs_revision",
@@ -3449,6 +3480,11 @@ async function createManualGraphicsReworkRequests(records = [], note = "") {
         sourceCompletionId: originalCompletionId,
         revisionOf: originalCompletionId,
         originalGraphicsRequestId: cleanSheetWhitespace(record.graphicsRequestId),
+        version: record.version || 2,
+        pigProjectId: cleanSheetWhitespace(record.pigProjectId),
+        editableProjectFileId: cleanSheetWhitespace(record.editableProjectFileId || record.projectFileId),
+        editableProjectUrl: cleanSheetWhitespace(record.editableProjectUrl),
+        reworkReason: "correct_and_recreate",
         previousAssetUrl: cleanSheetWhitespace(record.assetLinkUrl || record.assetUrl),
         previousAssetPreviewUrl: cleanSheetWhitespace(record.assetPreviewUrl),
         requestedAt: now
@@ -4128,7 +4164,10 @@ function buildGraphicsReworkRequestRecord(completion) {
   const originalGraphicsRequestId = cleanSheetWhitespace(completion.graphicsRequestId);
   const revisionOf = cleanSheetWhitespace(completion.pigCompletionId);
   const sourceRecordId = cleanSheetWhitespace(completion.sourceRecordId || completion.recordId);
-  const contentType = normalizePoetryPleaseContentType(completion.contentType || completion.imageType, "QI");
+  const contentType = inferPoetryPleaseContentType(completion, "");
+  if (!contentType) {
+    throw new Error(`Rejected completion ${revisionOf || "without an ID"} is missing contentType`);
+  }
   const contentId = cleanSheetWhitespace(completion.contentId || completion.imageId || sourceRecordId || `pig:${revisionOf}`);
   const requestedChanges = parsedNote.details || completion.graphicsQcNote || reworkNotes;
 
