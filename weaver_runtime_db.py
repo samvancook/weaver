@@ -376,6 +376,48 @@ def canonical_fpi_graphics_request_id(canonical_content_id: str) -> str:
     return f"weaver:fpi:{digest}"
 
 
+def canonical_qi_content_id(request: dict[str, Any], source_payload: dict[str, Any]) -> str:
+    book_title = str(
+        request.get("bookTitle")
+        or extract_handoff_value(source_payload, "bookTitle", "book_title", "book")
+        or ""
+    ).strip()
+    author = str(
+        request.get("author")
+        or extract_handoff_value(source_payload, "author", "author_name")
+        or ""
+    ).strip()
+    poem_title = str(
+        request.get("poemTitle")
+        or request.get("title")
+        or extract_handoff_value(source_payload, "poemTitle", "poem_title", "title")
+        or ""
+    ).strip()
+    quote_text = str(
+        request.get("quoteText")
+        or request.get("text")
+        or extract_handoff_text(source_payload)
+        or ""
+    ).strip()
+    if not quote_text or not (book_title or poem_title):
+        raise ValueError("QI requests require excerpt text and book or poem identity")
+    identity = "\n".join(normalize_key(value) for value in (
+        book_title,
+        author,
+        poem_title,
+        quote_text,
+    ))
+    digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:32]
+    return f"QI:EXCERPT:{digest}"
+
+
+def canonical_qi_graphics_request_id(canonical_content_id: str) -> str:
+    digest = str(canonical_content_id or "").rsplit(":", 1)[-1].strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{32}", digest):
+        digest = hashlib.sha256(canonical_content_id.encode("utf-8")).hexdigest()[:32]
+    return f"weaver:qi:{digest}"
+
+
 def canonical_fpi_content_id(request: dict[str, Any], source_payload: dict[str, Any]) -> str:
     book_shortener = str(
         request.get("bookShortener")
@@ -1102,17 +1144,18 @@ class FirestoreLedgerClient:
         graphics_request_id = str(graphics_request_id or "").strip()
         if not graphics_request_id:
             return None
-        record = self.decode_document(self.request("GET", self.document_url(graphics_request_id)))
-        if record:
-            return record
         alias = self.get_raw_document(
             FIRESTORE_HANDOFF_ALIASES_COLLECTION,
             hashlib.sha256(graphics_request_id.encode("utf-8")).hexdigest(),
         )
         canonical_request_id = str((alias or {}).get("canonicalGraphicsRequestId") or "").strip()
-        if not canonical_request_id or canonical_request_id == graphics_request_id:
-            return None
-        return self.decode_document(self.request("GET", self.document_url(canonical_request_id)))
+        if canonical_request_id and canonical_request_id != graphics_request_id:
+            canonical = self.decode_document(
+                self.request("GET", self.document_url(canonical_request_id))
+            )
+            if canonical:
+                return canonical
+        return self.decode_document(self.request("GET", self.document_url(graphics_request_id)))
 
     def get_handoffs(self, graphics_request_ids: list[str]) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
@@ -1152,7 +1195,24 @@ class FirestoreLedgerClient:
         content_type = infer_graphics_content_type(request, source_payload, existing)
         assert_compatible_graphics_content_type(existing, content_type)
         canonical_content_id = ""
-        if content_type == "FPI":
+        if content_type == "QI":
+            canonical_content_id = canonical_qi_content_id(request, source_payload)
+            canonical_matches = self.query_raw_documents(
+                FIRESTORE_COLLECTION,
+                "canonicalContentId",
+                canonical_content_id,
+                page_size=2,
+            )
+            if len(canonical_matches) > 1:
+                raise ValueError(f"Duplicate QI canonical identity: {canonical_content_id}")
+            if canonical_matches:
+                canonical_record = normalize_handoff_record(canonical_matches[0])
+                graphics_request_id = str(canonical_record.get("graphicsRequestId") or graphics_request_id)
+                existing = canonical_record
+            elif not existing:
+                graphics_request_id = canonical_qi_graphics_request_id(canonical_content_id)
+                existing = self.get_handoff(graphics_request_id)
+        elif content_type == "FPI":
             canonical_content_id = canonical_fpi_content_id(request, source_payload)
             canonical_matches = self.query_raw_documents(
                 FIRESTORE_COLLECTION,

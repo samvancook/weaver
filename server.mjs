@@ -744,21 +744,22 @@ function canonicalizeKnownAuthorName(value, { bookTitle = "" } = {}) {
   return cleaned;
 }
 
-function buildWeaverGraphicsRequestId({ recordId = "", sheetRow = "", author = "", poemTitle = "", bookTitle = "" } = {}) {
-  const stable = cleanSheetWhitespace(recordId) || (parseInt(sheetRow, 10) ? `row-${parseInt(sheetRow, 10)}` : "");
-  if (stable) {
-    return `weaver:${stable}`;
+function buildWeaverGraphicsRequestId({ recordId = "", author = "", poemTitle = "", bookTitle = "", quoteText = "" } = {}) {
+  const stable = cleanSheetWhitespace(recordId);
+  if (stable && !/^(?:weaver:)?row-\d+$/i.test(stable)) {
+    return stable.startsWith("weaver:") ? stable : `weaver:${stable}`;
   }
 
-  const fallbackHash = createHash("sha1")
-    .update(JSON.stringify({
-      author: cleanSheetWhitespace(author).toLowerCase(),
-      poemTitle: cleanSheetWhitespace(poemTitle).toLowerCase(),
-      bookTitle: cleanSheetWhitespace(bookTitle).toLowerCase()
-    }))
+  const excerptHash = createHash("sha256")
+    .update([
+      cleanSheetWhitespace(bookTitle).toLowerCase(),
+      cleanSheetWhitespace(author).toLowerCase(),
+      cleanSheetWhitespace(poemTitle).toLowerCase(),
+      cleanSheetWhitespace(quoteText).toLowerCase()
+    ].join("\n"))
     .digest("hex")
-    .slice(0, 16);
-  return `weaver:${fallbackHash}`;
+    .slice(0, 32);
+  return `weaver:qi:${excerptHash}`;
 }
 
 function buildPigCompletionId(completion = {}) {
@@ -1292,10 +1293,10 @@ function buildGraphicsRequestRecordFromQueueRow(row, index, canonicalBookAuthorM
     recordId,
     graphicsRequestId: buildWeaverGraphicsRequestId({
       recordId,
-      sheetRow: index + 2,
       author,
       poemTitle,
-      bookTitle
+      bookTitle,
+      quoteText
     }),
     source: "weaver_graphics_queue"
   };
@@ -1755,7 +1756,7 @@ function buildPigQcRecordFromSheetRow(row, index, canonicalBookAuthorMap = null)
     created: "Y",
     workflowStatus: isReworkCompletion ? "Rework returned by P.I.G." : "Returned by P.I.G.",
     recordId: `pig:${completionId}`,
-    graphicsRequestId: requestId || buildWeaverGraphicsRequestId({ recordId: sourceRecordId, sheetRow: sourceSheetRow, author, poemTitle, bookTitle }),
+    graphicsRequestId: requestId || buildWeaverGraphicsRequestId({ recordId: sourceRecordId, author, poemTitle, bookTitle, quoteText }),
     assetLinkUrl: assetUrl,
     assetPreviewUrl,
     sourceRecordId,
@@ -4092,10 +4093,10 @@ function buildCleanupSheetGraphicsRecords(values = [], qcState = new Map(), cano
       recordId,
       graphicsRequestId: buildWeaverGraphicsRequestId({
         recordId,
-        sheetRow: index + 2,
         author: resolveGraphicsAuthor(row[0] || "", currentBookTitle, canonicalBookAuthorMap),
         poemTitle: (row[1] || "").toString(),
-        bookTitle: currentBookTitle
+        bookTitle: currentBookTitle,
+        quoteText: (row[3] || "").toString()
       }),
       graphicsQcDecision: cleanSheetWhitespace(qc.decision),
       graphicsQcNote: qc.note || "",
@@ -4337,10 +4338,10 @@ function buildCompletedRequestLookup(rows = []) {
     }
     const sourceRowRequestId = buildWeaverGraphicsRequestId({
       recordId: sourceRecordId,
-      sheetRow: completion.sourceSheetRow,
       author: completion.author,
       poemTitle: completion.poemTitle,
-      bookTitle: completion.bookTitle
+      bookTitle: completion.bookTitle,
+      quoteText: completion.quoteText
     });
     if (sourceRowRequestId) {
       requestIds.add(sourceRowRequestId);
@@ -4533,10 +4534,10 @@ function getCoverageRequestId(record = {}) {
   return cleanSheetWhitespace(record.graphicsRequestId)
     || buildWeaverGraphicsRequestId({
       recordId: record.recordId,
-      sheetRow: record.queueSheetRow || record.sourceSheetRow,
       author: record.author,
       poemTitle: record.poemTitle,
-      bookTitle: record.bookTitle
+      bookTitle: record.bookTitle,
+      quoteText: record.quoteText || record.text
     });
 }
 

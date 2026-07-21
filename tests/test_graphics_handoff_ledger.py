@@ -7,6 +7,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from weaver_runtime_db import (  # noqa: E402
+    canonical_qi_content_id,
+    canonical_qi_graphics_request_id,
     claim_graphics_handoff,
     ensure_runtime_schema,
     get_excerpt_handoff,
@@ -37,6 +39,7 @@ def seed_request(connection: sqlite3.Connection, request_id: str = "weaver:row-2
             "graphicsRequestId": request_id,
             "sourceSystem": "weaver",
             "sourceStatus": "needs_graphics",
+            "contentType": "QI",
             "sourcePayload": {
                 "sourceSheetRow": 2130,
                 "bookTitle": "Test Book",
@@ -48,6 +51,53 @@ def seed_request(connection: sqlite3.Connection, request_id: str = "weaver:row-2
 
 
 class GraphicsHandoffLedgerTest(unittest.TestCase):
+    def test_qi_identity_does_not_depend_on_sheet_row(self):
+        first = {
+            "graphicsRequestId": "weaver:row-258",
+            "contentType": "QI",
+            "sourcePayload": {
+                "queueSheetRow": 258,
+                "author": "Angela Spinzig",
+                "poemTitle": "In a Gaza refugee camp",
+                "bookTitle": "Short Form Contest May 2026",
+                "quoteText": "The same excerpt text",
+            },
+        }
+        moved = {
+            **first,
+            "graphicsRequestId": "weaver:row-353",
+            "sourcePayload": {**first["sourcePayload"], "queueSheetRow": 353},
+        }
+
+        first_content_id = canonical_qi_content_id(first, first["sourcePayload"])
+        moved_content_id = canonical_qi_content_id(moved, moved["sourcePayload"])
+
+        self.assertEqual(first_content_id, moved_content_id)
+        self.assertEqual(
+            canonical_qi_graphics_request_id(first_content_id),
+            canonical_qi_graphics_request_id(moved_content_id),
+        )
+
+    def test_qi_identity_distinguishes_different_excerpts(self):
+        request = {
+            "contentType": "QI",
+            "sourcePayload": {
+                "author": "Test Author",
+                "poemTitle": "Test Poem",
+                "bookTitle": "Test Book",
+                "quoteText": "First excerpt",
+            },
+        }
+        changed = {
+            **request,
+            "sourcePayload": {**request["sourcePayload"], "quoteText": "Second excerpt"},
+        }
+
+        self.assertNotEqual(
+            canonical_qi_content_id(request, request["sourcePayload"]),
+            canonical_qi_content_id(changed, changed["sourcePayload"]),
+        )
+
     def test_create_request(self):
         with memory_db() as connection:
             record = seed_request(connection)
@@ -249,6 +299,7 @@ class GraphicsHandoffLedgerTest(unittest.TestCase):
                             "storageTarget": "pig_sheet",
                             "graphicsRequestId": "weaver:revision",
                             "pigCompletionId": "pig-revision",
+                            "contentType": "QI",
                             "qcDecision": "reject",
                             "rejectReason": "correct_and_recreate",
                         },
@@ -256,6 +307,7 @@ class GraphicsHandoffLedgerTest(unittest.TestCase):
                             "storageTarget": "pig_sheet",
                             "graphicsRequestId": "weaver:final",
                             "pigCompletionId": "pig-final",
+                            "contentType": "QI",
                             "qcDecision": "reject",
                             "rejectReason": "final_reject",
                         },
@@ -263,6 +315,7 @@ class GraphicsHandoffLedgerTest(unittest.TestCase):
                             "storageTarget": "pig_sheet",
                             "graphicsRequestId": "weaver:mismatch",
                             "pigCompletionId": "pig-mismatch",
+                            "contentType": "QI",
                             "qcDecision": "reject",
                             "rejectReason": "mismatched_graphic",
                         },
@@ -322,6 +375,7 @@ class GraphicsHandoffLedgerTest(unittest.TestCase):
                             "storageTarget": "pig_sheet",
                             "graphicsRequestId": "weaver:approve",
                             "pigCompletionId": "pig-approve",
+                            "contentType": "QI",
                             "qcDecision": "approve",
                         }
                     ]
@@ -343,6 +397,7 @@ class GraphicsHandoffLedgerTest(unittest.TestCase):
                     "graphicsRequestId": "weaver:row-3",
                     "sourceSystem": "weaver",
                     "sourceStatus": "needs_graphics",
+                    "contentType": "QI",
                     "sourcePayload": {
                         "sourceSheetRow": 3,
                         "bookTitle": "Blank Book",
