@@ -1493,6 +1493,9 @@ class FirestoreLedgerClient:
         graphics_request_id = str(completion["graphics_request_id"]).strip()
         if not completion_id or not graphics_request_id:
             raise ValueError("completion id and graphics_request_id are required")
+        handoff = self.get_handoff(graphics_request_id)
+        if handoff and handoff.get("graphicsRequestId"):
+            graphics_request_id = str(handoff["graphicsRequestId"])
         content_type = normalize_content_type(completion.get("content_type") or completion.get("contentType") or completion.get("imageType"))
         image_type = normalize_content_type(completion.get("image_type") or completion.get("imageType") or completion.get("contentType"), content_type)
         ingested_at = str(completion.get("ingested_at") or completion.get("ingestedAt") or utc_now_iso())
