@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from weaver_runtime_db import (  # noqa: E402
+    build_graphics_qc_queue_card,
     canonical_qi_content_id,
     canonical_qi_graphics_request_id,
     claim_graphics_handoff,
@@ -16,6 +17,7 @@ from weaver_runtime_db import (  # noqa: E402
     get_graphics_handoff_queue,
     insert_graphics_completion,
     insert_graphics_qc_review,
+    normalize_handoff_record,
     update_graphics_handoff,
     upsert_excerpt_handoff,
     upsert_graphics_handoff_request,
@@ -51,6 +53,51 @@ def seed_request(connection: sqlite3.Connection, request_id: str = "weaver:row-2
 
 
 class GraphicsHandoffLedgerTest(unittest.TestCase):
+    def test_rework_explicitly_reports_missing_editable_project(self):
+        record = normalize_handoff_record({
+            "graphicsRequestId": "weaver:qi:test",
+            "contentType": "QI",
+            "imageType": "QI",
+            "handoffStatus": "rejected",
+            "pigStatus": "not_started",
+            "qcStatus": "needs_revision",
+            "quoteText": "Test quote",
+        })
+
+        self.assertFalse(record["editableProjectAvailable"])
+
+    def test_rework_reports_complete_editable_project_identity(self):
+        record = normalize_handoff_record({
+            "graphicsRequestId": "weaver:qi:test",
+            "contentType": "QI",
+            "imageType": "QI",
+            "handoffStatus": "rejected",
+            "pigStatus": "not_started",
+            "qcStatus": "needs_revision",
+            "quoteText": "Test quote",
+            "pigProjectId": "project-real",
+            "editableProjectFileId": "drive-file-real",
+            "editableProjectUrl": "https://drive.google.com/file/d/drive-file-real/view",
+        })
+
+        self.assertTrue(record["editableProjectAvailable"])
+
+    def test_qc_queue_card_preserves_editable_project_identity(self):
+        card = build_graphics_qc_queue_card({
+            "id": "pig-completion-real",
+            "graphicsRequestId": "weaver:qi:test",
+            "contentType": "QI",
+            "sourcePayload": {
+                "pigProjectId": "project-real",
+                "editableProjectFileId": "drive-file-real",
+                "editableProjectUrl": "https://drive.google.com/file/d/drive-file-real/view",
+            },
+        })
+
+        self.assertEqual(card["pigProjectId"], "project-real")
+        self.assertEqual(card["editableProjectFileId"], "drive-file-real")
+        self.assertTrue(card["editableProjectAvailable"])
+
     def test_qi_identity_does_not_depend_on_sheet_row(self):
         first = {
             "graphicsRequestId": "weaver:row-258",

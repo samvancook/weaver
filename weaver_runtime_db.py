@@ -65,6 +65,17 @@ def build_graphics_qc_queue_card(completion: dict[str, Any]) -> dict[str, Any]:
         completion.get("graphicsRequestId") or payload.get("graphicsRequestId") or ""
     ).strip()
     asset_url = str(completion.get("assetUrl") or payload.get("assetUrl") or "").strip()
+    pig_project_id = str(completion.get("pigProjectId") or payload.get("pigProjectId") or "").strip()
+    editable_project_file_id = str(
+        completion.get("editableProjectFileId")
+        or completion.get("projectFileId")
+        or payload.get("editableProjectFileId")
+        or payload.get("projectFileId")
+        or ""
+    ).strip()
+    editable_project_url = str(
+        completion.get("editableProjectUrl") or payload.get("editableProjectUrl") or ""
+    ).strip()
     return {
         "pigCompletionId": completion_id,
         "graphicsRequestId": graphics_request_id,
@@ -82,6 +93,12 @@ def build_graphics_qc_queue_card(completion: dict[str, Any]) -> dict[str, Any]:
         "assetPreviewUrl": str(
             completion.get("assetPreviewUrl") or payload.get("assetPreviewUrl") or asset_url
         ).strip(),
+        "pigProjectId": pig_project_id,
+        "editableProjectFileId": editable_project_file_id,
+        "editableProjectUrl": editable_project_url,
+        "editableProjectAvailable": bool(
+            pig_project_id and editable_project_file_id and editable_project_url
+        ),
         "completedAt": str(completion.get("completedAt") or payload.get("completedAt") or ""),
         "graphicsQcDecision": "",
         "graphicsQcNote": "",
@@ -576,6 +593,7 @@ def default_handoff_record(graphics_request_id: str) -> dict[str, Any]:
         "pigProjectId": "",
         "editableProjectFileId": "",
         "editableProjectUrl": "",
+        "editableProjectAvailable": False,
         "reworkReason": "",
         "metadataIssue": "",
         "aestheticIssue": "",
@@ -682,6 +700,11 @@ def normalize_handoff_record(record: dict[str, Any]) -> dict[str, Any]:
                     break
             if normalized.get(field) not in {None, ""}:
                 break
+    normalized["editableProjectAvailable"] = bool(
+        str(normalized.get("pigProjectId") or "").strip()
+        and str(normalized.get("editableProjectFileId") or "").strip()
+        and str(normalized.get("editableProjectUrl") or "").strip()
+    )
     if normalized.get("qcStatus") == "needs_revision" or normalized.get("handoffStatus") == "rejected":
         normalized["originalGraphicsRequestId"] = str(
             normalized.get("originalGraphicsRequestId") or graphics_request_id
@@ -835,6 +858,7 @@ def queue_card_record(record: dict[str, Any]) -> dict[str, Any]:
         "pigProjectId": record.get("pigProjectId") or "",
         "editableProjectFileId": record.get("editableProjectFileId") or "",
         "editableProjectUrl": record.get("editableProjectUrl") or "",
+        "editableProjectAvailable": bool(record.get("editableProjectAvailable")),
         "assetUrl": record.get("assetUrl") or "",
         "assetPreviewUrl": record.get("assetPreviewUrl") or "",
         "previousAssetUrl": record.get("previousAssetUrl") or record.get("assetUrl") or "",
@@ -1499,6 +1523,31 @@ class FirestoreLedgerClient:
         content_type = normalize_content_type(completion.get("content_type") or completion.get("contentType") or completion.get("imageType"))
         image_type = normalize_content_type(completion.get("image_type") or completion.get("imageType") or completion.get("contentType"), content_type)
         ingested_at = str(completion.get("ingested_at") or completion.get("ingestedAt") or utc_now_iso())
+        source_payload = completion.get("source_payload") or completion.get("sourcePayload") or {}
+        pig_project_id = str(
+            completion.get("pig_project_id")
+            or completion.get("pigProjectId")
+            or extract_handoff_value(source_payload, "pigProjectId", "pig_project_id")
+            or ""
+        ).strip()
+        editable_project_file_id = str(
+            completion.get("editable_project_file_id")
+            or completion.get("editableProjectFileId")
+            or completion.get("projectFileId")
+            or extract_handoff_value(
+                source_payload,
+                "editableProjectFileId",
+                "projectFileId",
+                "editable_project_file_id",
+            )
+            or ""
+        ).strip()
+        editable_project_url = str(
+            completion.get("editable_project_url")
+            or completion.get("editableProjectUrl")
+            or extract_handoff_value(source_payload, "editableProjectUrl", "editable_project_url")
+            or ""
+        ).strip()
         completion_record = {
             "id": completion_id,
             "graphicsRequestId": graphics_request_id,
@@ -1507,11 +1556,17 @@ class FirestoreLedgerClient:
             "imageType": image_type,
             "assetUrl": str(completion.get("asset_url") or completion.get("assetUrl") or ""),
             "assetPreviewUrl": str(completion.get("asset_preview_url") or completion.get("assetPreviewUrl") or ""),
+            "pigProjectId": pig_project_id,
+            "editableProjectFileId": editable_project_file_id,
+            "editableProjectUrl": editable_project_url,
+            "editableProjectAvailable": bool(
+                pig_project_id and editable_project_file_id and editable_project_url
+            ),
             "productionNotes": str(completion.get("production_notes") or completion.get("productionNotes") or ""),
             "completionStatus": str(completion.get("completion_status") or completion.get("completionStatus") or "RETURNED"),
             "completedAt": str(completion.get("completed_at") or completion.get("completedAt") or utc_now_iso()),
             "ingestedAt": ingested_at,
-            "sourcePayload": completion.get("source_payload") or completion.get("sourcePayload") or {},
+            "sourcePayload": source_payload,
         }
         pending_candidates = [completion_record]
         for existing in self.query_raw_documents(
