@@ -12,3 +12,12 @@ Primary Excerpt Database - Excerpt Database.csv
 data/excerpt_library.db
 data/excerpt_library.db-shm
 data/excerpt_library.db-wal
+
+# Keep Docker build context focused on runtime inputs.
+data/*
+!data/book_link_overrides.json
+!data/excerpt_library_qi_status.db
+!data/excerpt_library_runtime.db
+!data/formal_catalog.db
+!data/qi_image_database.csv
+!data/qi_queue_cleanup_updates.csv

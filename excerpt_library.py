@@ -74,8 +74,16 @@ def clean_whitespace(text: str | None) -> str:
     return re.sub(r"\s+", " ", (text or "")).strip()
 
 
+def strip_markdown_italics(text: str | None) -> str:
+    raw = text or ""
+    raw = re.sub(r"\*([^*\n]+)\*", r"\1", raw)
+    raw = raw.replace("*", "")
+    return raw
+
+
 def preserve_excerpt_text(text: str | None) -> str:
-    raw = (text or "").replace("\r\n", "\n").replace("\r", "\n")
+    raw = strip_markdown_italics(text).replace("\r\n", "\n").replace("\r", "\n")
+    raw = re.sub(r"(?<![a-z0-9])'|'(?![a-z0-9])", "", raw, flags=re.IGNORECASE)
     lines = [re.sub(r"[ \t]+", " ", line).strip() for line in raw.split("\n")]
     while lines and not lines[0]:
         lines.pop(0)
@@ -94,11 +102,12 @@ def line_break_signature(text: str | None) -> tuple[int, ...]:
 def normalize_text(text: str | None) -> str:
     if not text:
         return ""
-    normalized = text.lower()
+    normalized = strip_markdown_italics(text).lower()
     normalized = normalized.replace("—", " ").replace("–", " ")
     normalized = normalized.replace("&", " and ")
     normalized = normalized.replace("’", "'").replace("‘", "'")
     normalized = re.sub(r"[\"“”`]", "", normalized)
+    normalized = re.sub(r"(?<![a-z0-9])'|'(?![a-z0-9])", "", normalized)
     normalized = re.sub(r"\s+", " ", normalized)
     return normalized.strip()
 
@@ -125,6 +134,16 @@ def normalize_flag(value: str | None) -> str:
     if normalized in {"N", "NO", "FALSE", "0"}:
         return "N"
     return ""
+
+
+def normalize_bool(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return normalize_flag(str(value)) == "Y"
 
 
 def parse_metadata_json(text: str | None) -> dict[str, str]:
@@ -312,6 +331,96 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
             ON excerpt_entries(normalized_poem_title);
         CREATE INDEX IF NOT EXISTS idx_excerpt_entries_chars
             ON excerpt_entries(character_count);
+
+        CREATE TABLE IF NOT EXISTS raw_import_rows (
+            id INTEGER PRIMARY KEY,
+            source_name TEXT NOT NULL,
+            source_file TEXT NOT NULL,
+            source_row_number INTEGER NOT NULL,
+            record_id TEXT,
+            timestamp_text TEXT,
+            email_address TEXT,
+            request_type TEXT,
+            author TEXT,
+            title TEXT,
+            book_title TEXT,
+            excerpt_text TEXT,
+            excerpt_review_decision TEXT,
+            exclude_from_quote_db TEXT,
+            row_json TEXT NOT NULL,
+            imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(source_file, source_row_number)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_raw_import_rows_record_id
+            ON raw_import_rows(record_id);
+        CREATE INDEX IF NOT EXISTS idx_raw_import_rows_timestamp
+            ON raw_import_rows(timestamp_text);
+        CREATE INDEX IF NOT EXISTS idx_raw_import_rows_author
+            ON raw_import_rows(author);
+
+        CREATE TABLE IF NOT EXISTS raw_excerpt_links (
+            id INTEGER PRIMARY KEY,
+            raw_import_row_id INTEGER NOT NULL UNIQUE REFERENCES raw_import_rows(id) ON DELETE CASCADE,
+            excerpt_entry_id INTEGER NOT NULL REFERENCES excerpt_entries(id) ON DELETE CASCADE,
+            match_type TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_raw_excerpt_links_excerpt_entry
+            ON raw_excerpt_links(excerpt_entry_id);
+
+        CREATE VIEW IF NOT EXISTS v_raw_row_status AS
+        SELECT
+            r.id AS raw_import_row_id,
+            r.source_name,
+            r.source_file,
+            r.source_row_number,
+            r.record_id,
+            r.timestamp_text,
+            r.email_address,
+            r.request_type,
+            r.author,
+            r.title,
+            r.book_title,
+            r.excerpt_text,
+            r.excerpt_review_decision,
+            r.exclude_from_quote_db,
+            CASE
+                WHEN r.excerpt_review_decision = 'ACCEPT' THEN 1
+                ELSE 0
+            END AS is_accepted,
+            CASE
+                WHEN r.excerpt_review_decision = 'REJECT' THEN 1
+                ELSE 0
+            END AS is_rejected,
+            CASE
+                WHEN UPPER(COALESCE(r.exclude_from_quote_db, '')) = 'Y' THEN 1
+                ELSE 0
+            END AS is_excluded,
+            CASE
+                WHEN COALESCE(TRIM(r.excerpt_text), '') != '' THEN 1
+                ELSE 0
+            END AS has_excerpt_text,
+            l.id AS raw_excerpt_link_id,
+            l.match_type,
+            l.excerpt_entry_id,
+            CASE
+                WHEN l.id IS NOT NULL THEN 1
+                ELSE 0
+            END AS is_linked,
+            e.source_id AS excerpt_source_id,
+            e.source_row_number AS excerpt_source_row_number,
+            e.external_id AS excerpt_external_id,
+            e.author AS excerpt_author,
+            e.poem_title AS excerpt_poem_title,
+            e.book_title AS excerpt_book_title,
+            e.excerpt_text AS excerpt_entry_text
+        FROM raw_import_rows r
+        LEFT JOIN raw_excerpt_links l
+            ON l.raw_import_row_id = r.id
+        LEFT JOIN excerpt_entries e
+            ON e.id = l.excerpt_entry_id;
         """
     )
 
@@ -466,6 +575,316 @@ def import_csv_to_library(
     }
 
 
+def _get_or_create_source_id(
+    connection: sqlite3.Connection,
+    source_name: str,
+    source_kind: str,
+    source_path: str,
+) -> int:
+    cursor = connection.cursor()
+    cursor.execute(
+        """
+        INSERT OR IGNORE INTO excerpt_sources (source_name, source_kind, source_path)
+        VALUES (?, ?, ?)
+        """,
+        (source_name, source_kind, source_path),
+    )
+    row = cursor.execute(
+        """
+        SELECT id
+        FROM excerpt_sources
+        WHERE source_name = ? AND source_path = ?
+        """,
+        (source_name, source_path),
+    ).fetchone()
+    if not row:
+        raise RuntimeError("Could not resolve excerpt source id.")
+    return int(row[0])
+
+
+def ingest_weaver_approved_records(
+    records: list[dict],
+    db_path: Path = DEFAULT_DB_PATH,
+    source_name: str = "weaver_approved",
+    source_kind: str = "weaver",
+    source_path: str = "weaver://approved",
+) -> dict[str, int | str]:
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(db_path)
+    try:
+        ensure_schema(connection)
+        inserted = 0
+        updated = 0
+        skipped = 0
+        archived_inserted = 0
+        archived_updated = 0
+        source_cache: dict[tuple[str, str, str], int] = {}
+
+        with connection:
+            cursor = connection.cursor()
+
+            for index, record in enumerate(records, start=1):
+                approval = record.get("approval") or {}
+                status = record.get("status") or {}
+                canonical = record.get("canonical") or {}
+
+                review_decision = clean_whitespace(approval.get("reviewDecision")).lower()
+                is_excluded = normalize_bool(status.get("excluded"))
+                needs_correction = normalize_bool(status.get("needsCorrection"))
+                if review_decision and review_decision != "approve":
+                    skipped += 1
+                    continue
+                if is_excluded or needs_correction:
+                    skipped += 1
+                    continue
+
+                source_kind_value = clean_whitespace(record.get("sourceKind")) or source_kind
+                source_name_value = f"{source_name}:{source_kind_value}"
+                source_path_value = f"{source_path}:{source_kind_value}"
+                source_key = (source_name_value, source_kind_value, source_path_value)
+                source_id = source_cache.get(source_key)
+                if source_id is None:
+                    source_id = _get_or_create_source_id(
+                        connection,
+                        source_name_value,
+                        source_kind_value,
+                        source_path_value,
+                    )
+                    source_cache[source_key] = source_id
+
+                excerpt_text = preserve_excerpt_text(record.get("excerptText"))
+                if not excerpt_text:
+                    skipped += 1
+                    continue
+
+                source_row_number = int(record.get("sourceRow") or index)
+                external_id = clean_whitespace(record.get("sourceRecordId") or record.get("recordId"))
+                author = clean_whitespace(
+                    canonical.get("canonicalAuthor") or record.get("author")
+                )
+                book_title = clean_whitespace(
+                    canonical.get("canonicalBookTitle") or record.get("bookTitle")
+                )
+                poem_title = clean_whitespace(
+                    canonical.get("canonicalPoemTitle")
+                    or record.get("poemTitle")
+                    or record.get("title")
+                )
+                metadata_json = json.dumps(record, ensure_ascii=True)
+                normalized_author = normalize_lookup_text(author)
+                normalized_book_title = normalize_lookup_text(book_title)
+                normalized_poem_title = normalize_lookup_text(poem_title)
+                normalized_excerpt = normalize_lookup_text(excerpt_text)
+                excerpt_hash = fingerprint_excerpt(excerpt_text)
+
+                archive_payload = {
+                    "source_name": source_name_value,
+                    "source_file": source_path_value,
+                    "source_row_number": source_row_number,
+                    "record_id": external_id,
+                    "timestamp_text": clean_whitespace(
+                        record.get("sourceApprovedAt") or record.get("sourceUpdatedAt")
+                    ),
+                    "email_address": clean_whitespace(record.get("emailAddress")),
+                    "request_type": clean_whitespace(record.get("contentType")) or "EXC",
+                    "author": author,
+                    "title": poem_title,
+                    "book_title": book_title,
+                    "excerpt_text": excerpt_text,
+                    "excerpt_review_decision": review_decision or "approve",
+                    "exclude_from_quote_db": "N",
+                    "row_json": metadata_json,
+                }
+                archive_row = cursor.execute(
+                    """
+                    SELECT id FROM raw_import_rows
+                    WHERE source_name = ? AND source_file = ? AND source_row_number = ?
+                    LIMIT 1
+                    """,
+                    (source_name_value, source_path_value, source_row_number),
+                ).fetchone()
+                if archive_row is None:
+                    cursor.execute(
+                        """
+                        INSERT INTO raw_import_rows (
+                            source_name, source_file, source_row_number, record_id,
+                            timestamp_text, email_address, request_type, author, title,
+                            book_title, excerpt_text, excerpt_review_decision,
+                            exclude_from_quote_db, row_json
+                        ) VALUES (
+                            :source_name, :source_file, :source_row_number, :record_id,
+                            :timestamp_text, :email_address, :request_type, :author, :title,
+                            :book_title, :excerpt_text, :excerpt_review_decision,
+                            :exclude_from_quote_db, :row_json
+                        )
+                        """,
+                        archive_payload,
+                    )
+                    archived_inserted += 1
+                else:
+                    cursor.execute(
+                        """
+                        UPDATE raw_import_rows SET
+                            record_id = :record_id,
+                            timestamp_text = :timestamp_text,
+                            email_address = :email_address,
+                            request_type = :request_type,
+                            author = :author,
+                            title = :title,
+                            book_title = :book_title,
+                            excerpt_text = :excerpt_text,
+                            excerpt_review_decision = :excerpt_review_decision,
+                            exclude_from_quote_db = :exclude_from_quote_db,
+                            row_json = :row_json
+                        WHERE id = :id
+                        """,
+                        {**archive_payload, "id": int(archive_row[0])},
+                    )
+                    archived_updated += 1
+
+                existing_row = None
+                if external_id:
+                    existing_row = cursor.execute(
+                        """
+                        SELECT id
+                        FROM excerpt_entries
+                        WHERE source_id = ? AND external_id = ?
+                        LIMIT 1
+                        """,
+                        (source_id, external_id),
+                    ).fetchone()
+                if existing_row is None:
+                    existing_row = cursor.execute(
+                        """
+                        SELECT id
+                        FROM excerpt_entries
+                        WHERE source_id = ?
+                          AND normalized_author = ?
+                          AND normalized_poem_title = ?
+                          AND normalized_book_title = ?
+                          AND excerpt_hash = ?
+                        LIMIT 1
+                        """,
+                        (
+                            source_id,
+                            normalized_author,
+                            normalized_poem_title,
+                            normalized_book_title,
+                            excerpt_hash,
+                        ),
+                    ).fetchone()
+                if existing_row is None:
+                    existing_row = cursor.execute(
+                        """
+                        SELECT id
+                        FROM excerpt_entries
+                        WHERE source_id = ? AND source_row_number = ?
+                        LIMIT 1
+                        """,
+                        (source_id, source_row_number),
+                    ).fetchone()
+
+                payload = {
+                    "source_id": source_id,
+                    "source_row_number": source_row_number,
+                    "external_id": external_id,
+                    "author": author,
+                    "normalized_author": normalized_author,
+                    "book_title": book_title,
+                    "normalized_book_title": normalized_book_title,
+                    "poem_title": poem_title,
+                    "normalized_poem_title": normalized_poem_title,
+                    "excerpt_text": excerpt_text,
+                    "normalized_excerpt": normalized_excerpt,
+                    "excerpt_hash": excerpt_hash,
+                    "word_count": len(excerpt_text.split()),
+                    "character_count": len(excerpt_text),
+                    "metadata_json": metadata_json,
+                }
+
+                if existing_row is not None:
+                    cursor.execute(
+                        """
+                        UPDATE excerpt_entries
+                        SET
+                            source_row_number = :source_row_number,
+                            external_id = :external_id,
+                            author = :author,
+                            normalized_author = :normalized_author,
+                            book_title = :book_title,
+                            normalized_book_title = :normalized_book_title,
+                            poem_title = :poem_title,
+                            normalized_poem_title = :normalized_poem_title,
+                            excerpt_text = :excerpt_text,
+                            normalized_excerpt = :normalized_excerpt,
+                            excerpt_hash = :excerpt_hash,
+                            word_count = :word_count,
+                            character_count = :character_count,
+                            metadata_json = :metadata_json
+                        WHERE id = :id
+                        """,
+                        {
+                            **payload,
+                            "id": int(existing_row[0]),
+                        },
+                    )
+                    updated += 1
+                else:
+                    cursor.execute(
+                        """
+                        INSERT INTO excerpt_entries (
+                            source_id,
+                            source_row_number,
+                            external_id,
+                            author,
+                            normalized_author,
+                            book_title,
+                            normalized_book_title,
+                            poem_title,
+                            normalized_poem_title,
+                            excerpt_text,
+                            normalized_excerpt,
+                            excerpt_hash,
+                            word_count,
+                            character_count,
+                            metadata_json
+                        ) VALUES (
+                            :source_id,
+                            :source_row_number,
+                            :external_id,
+                            :author,
+                            :normalized_author,
+                            :book_title,
+                            :normalized_book_title,
+                            :poem_title,
+                            :normalized_poem_title,
+                            :excerpt_text,
+                            :normalized_excerpt,
+                            :excerpt_hash,
+                            :word_count,
+                            :character_count,
+                            :metadata_json
+                        )
+                        """,
+                        payload,
+                    )
+                    inserted += 1
+    finally:
+        connection.close()
+
+    return {
+        "db_path": str(db_path),
+        "source_name": source_name,
+        "source_kind": source_kind,
+        "source_path": source_path,
+        "inserted": inserted,
+        "updated": updated,
+        "skipped": skipped,
+        "archived_inserted": archived_inserted,
+        "archived_updated": archived_updated,
+    }
+
+
 def find_library_excerpt_match(
     connection: sqlite3.Connection,
     excerpt_text: str | None,
@@ -496,6 +915,17 @@ def find_library_excerpt_match(
         metadata_select=", metadata_json" if include_metadata else ""
     )
     exact_row = connection.execute(exact_sql, (excerpt_hash,)).fetchone()
+    if not exact_row and normalized_excerpt:
+        normalized_exact_sql = """
+            SELECT source_row_number, external_id, author, book_title, poem_title, excerpt_text
+            {metadata_select}
+            FROM excerpt_entries
+            WHERE normalized_excerpt = ?
+            LIMIT 1
+        """.format(
+            metadata_select=", metadata_json" if include_metadata else ""
+        )
+        exact_row = connection.execute(normalized_exact_sql, (normalized_excerpt,)).fetchone()
     if exact_row:
         candidate_excerpt = exact_row[5] or ""
         candidate_line_break_signature = line_break_signature(candidate_excerpt)
@@ -534,6 +964,30 @@ def find_library_excerpt_match(
         candidate_sql,
         (max(1, excerpt_len - 160), excerpt_len + 160, excerpt_len),
     ).fetchall()
+
+    for row in candidate_rows:
+        candidate_text = row[7] or ""
+        if normalize_lookup_text(candidate_text) != normalized_excerpt:
+            continue
+        candidate_line_break_signature = line_break_signature(candidate_text)
+        return {
+            "matchType": "exact",
+            "score": 1.0,
+            "sourceRow": row[0],
+            "recordId": row[1],
+            "author": row[2],
+            "bookTitle": row[4],
+            "poemTitle": row[6],
+            "excerptPreview": candidate_text[:180],
+            "formattingMatch": preserve_excerpt_text(candidate_text) == preserved_excerpt,
+            "lineBreaksMatch": candidate_line_break_signature == query_line_break_signature,
+            "queryLineCount": len(query_line_break_signature),
+            "matchedLineCount": len(candidate_line_break_signature),
+            "libraryStatus": build_best_library_status(
+                excerpt_hash=fingerprint_excerpt(candidate_text),
+                metadata_json=row[9] if include_metadata else None,
+            ),
+        }
 
     best_match: dict | None = None
     best_score = threshold

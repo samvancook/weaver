@@ -1,0 +1,10 @@
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --no-cache
+      - -t
+      - gcr.io/button-weaver-internal/weaver:manual-20260423a
+      - .
+images:
+  - gcr.io/button-weaver-internal/weaver:manual-20260423a
