@@ -207,9 +207,25 @@ async function verifyAdministrativeCaller(req) {
     throw adminAuthError("administrator_token_wrong_audience");
   }
 
-  const email = cleanSheetWhitespace(tokenInfo.email).toLowerCase();
-  const emailVerified = tokenInfo.verified_email === true || tokenInfo.verified_email === "true";
-  if (!email || !emailVerified) {
+  const userInfoResponse = await fetch("https://openidconnect.googleapis.com/v1/userinfo", {
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${accessToken}`
+    }
+  });
+  const userInfo = userInfoResponse.ok
+    ? await userInfoResponse.json().catch(() => ({}))
+    : {};
+  const email = cleanSheetWhitespace(userInfo.email || tokenInfo.email).toLowerCase();
+  const emailVerified = [
+    userInfo.email_verified,
+    tokenInfo.email_verified,
+    tokenInfo.verified_email
+  ].some(value => value === true || value === "true");
+  if (!email) {
+    throw adminAuthError("administrator_email_missing", 403);
+  }
+  if (!emailVerified) {
     throw adminAuthError("administrator_verified_email_required", 403);
   }
   const domain = email.includes("@") ? email.split("@").pop() : "";
@@ -219,7 +235,7 @@ async function verifyAdministrativeCaller(req) {
 
   const principal = {
     email,
-    subject: cleanSheetWhitespace(tokenInfo.user_id || tokenInfo.sub),
+    subject: cleanSheetWhitespace(userInfo.sub || tokenInfo.user_id || tokenInfo.sub),
     audience: defaultGoogleOAuthClientId
   };
   const expiresInSeconds = Math.max(1, Number(tokenInfo.expires_in || 60));
