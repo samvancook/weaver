@@ -166,6 +166,8 @@ let currentGatheringBatchRows = [];
 let currentGatheringVideoPlaylist = null;
 let googleSheetsTokenClient = null;
 let googleSheetsAccessToken = "";
+let googleAdminTokenClient = null;
+let googleAdminAccessToken = "";
 let reviewVisibleCount = 1;
 let reviewPinnedRowOrder = [];
 let weirdVisibleCount = 25;
@@ -183,6 +185,7 @@ const REVIEW_MULTI_BATCH_SIZE = 25;
 const EXTRA_REVIEW_BATCH_SIZE = 1;
 const REVIEW_VIDEOS_BOOK_KEY = "__video_excerpts__";
 const GOOGLE_SHEETS_SCOPES = "https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.file";
+const GOOGLE_ADMIN_SCOPES = "openid email";
 const INTAKE_MODE_LABELS = {
   book: "Add a quote from a book",
   video: "Add a quote from a video"
@@ -2400,6 +2403,68 @@ async function getGoogleSheetsAccessToken() {
   });
 }
 
+function ensureGoogleAdminTokenClient() {
+  if (googleAdminTokenClient) {
+    return googleAdminTokenClient;
+  }
+  const clientId = runtimeConfig.googleOAuthClientId || "";
+  if (!clientId) {
+    throw new Error("Weaver administrator authentication is not configured.");
+  }
+  if (!window.google?.accounts?.oauth2) {
+    throw new Error("Google administrator authentication is still loading.");
+  }
+  googleAdminTokenClient = window.google.accounts.oauth2.initTokenClient({
+    client_id: clientId,
+    scope: GOOGLE_ADMIN_SCOPES,
+    callback: () => {}
+  });
+  return googleAdminTokenClient;
+}
+
+async function getGoogleAdminAccessToken({ forceAccountSelection = false } = {}) {
+  if (googleAdminAccessToken && !forceAccountSelection) {
+    return googleAdminAccessToken;
+  }
+  const tokenClient = ensureGoogleAdminTokenClient();
+  return await new Promise((resolve, reject) => {
+    tokenClient.callback = response => {
+      if (response?.error) {
+        reject(new Error(response.error));
+        return;
+      }
+      googleAdminAccessToken = response?.access_token || "";
+      if (!googleAdminAccessToken) {
+        reject(new Error("missing_google_admin_access_token"));
+        return;
+      }
+      resolve(googleAdminAccessToken);
+    };
+    tokenClient.requestAccessToken({
+      prompt: forceAccountSelection ? "select_account" : ""
+    });
+  });
+}
+
+async function adminFetch(path, options = {}) {
+  const request = async forceAccountSelection => {
+    const token = await getGoogleAdminAccessToken({ forceAccountSelection });
+    const headers = new Headers(options.headers || {});
+    headers.set("Authorization", `Bearer ${token}`);
+    return fetch(path, {
+      ...options,
+      headers
+    });
+  };
+
+  let response = await request(false);
+  if (response.status === 401) {
+    googleAdminAccessToken = "";
+    response = await request(true);
+  }
+  return response;
+}
+
 async function fetchSheetValues(range, { valueRenderOption = "FORMATTED_VALUE" } = {}) {
   const token = await getGoogleSheetsAccessToken();
   const spreadsheetId = runtimeConfig.spreadsheetId || "";
@@ -2689,7 +2754,7 @@ function buildBatchReviewSavePayload(update) {
 }
 
 async function requestBatchSave(updates) {
-  const response = await fetch("/api/save-reviews", {
+  const response = await adminFetch("/api/save-reviews", {
     method: "POST",
     headers: {
       "Content-Type": "application/json"
@@ -2715,7 +2780,7 @@ async function requestBatchSave(updates) {
 
 async function saveReviewsSequentially(changedUpdates) {
   for (const update of changedUpdates) {
-    const response = await fetch("/api/save-review-single", {
+    const response = await adminFetch("/api/save-review-single", {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
@@ -3279,7 +3344,7 @@ async function applyGraphicsFolderImport() {
     const manualSelections = collectGraphicsFolderManualSelections();
     const importCount = Number(currentGraphicsFolderImportPreview.matches?.length || 0) + Object.keys(manualSelections).length;
     setStatus(`Importing up to ${importCount} matched graphics into QC...`);
-    const response = await fetch("/api/graphics/folder-import/apply", {
+    const response = await adminFetch("/api/graphics/folder-import/apply", {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
@@ -3419,7 +3484,7 @@ async function loadExcerptHandoffs() {
 async function retryFailedExcerptHandoffs() {
   try {
     setStatus("Retrying failed EXC handoffs...");
-    const response = await fetch("/api/excerpts/handoffs/retry", {
+    const response = await adminFetch("/api/excerpts/handoffs/retry", {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
@@ -3528,7 +3593,7 @@ async function loadGraphicsAssetMatches(records) {
   }
 
   try {
-    const response = await fetch("/api/graphics/links", {
+    const response = await adminFetch("/api/graphics/links", {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
@@ -3901,7 +3966,7 @@ function buildPoetryPleaseRepairCard(record) {
 async function syncPoetryPleaseRepairCanary() {
   try {
     setStatus("Syncing one Poetry Please repair canary...");
-    const response = await fetch("/api/repair-requests/sync", {
+    const response = await adminFetch("/api/repair-requests/sync", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ limit: 1, allowBulk: false })
@@ -3922,7 +3987,7 @@ async function syncPoetryPleaseRepairCanary() {
 async function retryPoetryPleaseRepairStatus(repairRequestId) {
   try {
     setStatus(`Retrying Poetry Please status for ${repairRequestId}...`);
-    const response = await fetch(`/api/repair-requests/${encodeURIComponent(repairRequestId)}/retry-status`, {
+    const response = await adminFetch(`/api/repair-requests/${encodeURIComponent(repairRequestId)}/retry-status`, {
       method: "POST"
     });
     const result = await response.json();
@@ -4016,7 +4081,7 @@ async function applyStalledPigRecovery(records) {
   const windowDates = getStalledRecoveryWindow();
   try {
     setStatus(`Returning ${records.length} stalled request${records.length === 1 ? "" : "s"} to P.I.G....`);
-    const response = await fetch("/api/graphics/stalled-pig-recovery", {
+    const response = await adminFetch("/api/graphics/stalled-pig-recovery", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -4105,7 +4170,7 @@ async function submitGraphicsReworkRequests() {
 
   try {
     setStatus(`Sending ${selectedRecords.length} approved graphic${selectedRecords.length === 1 ? "" : "s"} back to P.I.G....`);
-    const response = await fetch("/api/graphics/rework-request", {
+    const response = await adminFetch("/api/graphics/rework-request", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ records: selectedRecords, note })
@@ -4207,7 +4272,7 @@ async function submitGraphicsHandoffRetries() {
 
   try {
     setStatus(`Retrying ${selectedRecords.length} failed graphics handoff${selectedRecords.length === 1 ? "" : "s"}...`);
-    const response = await fetch("/api/graphics/handoffs/retry", {
+    const response = await adminFetch("/api/graphics/handoffs/retry", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ records: selectedRecords })
@@ -5229,7 +5294,7 @@ async function submitGraphicsQc() {
     const savedRecordIds = new Set(updates.map(update => update.recordId));
     const removedGraphicsRecords = currentGraphicsRecords.filter(record => savedRecordIds.has(record.recordId));
 
-    const response = await fetch("/api/save-graphics-qc", {
+    const response = await adminFetch("/api/save-graphics-qc", {
       method: "POST",
       headers: {
         "Content-Type": "application/json"

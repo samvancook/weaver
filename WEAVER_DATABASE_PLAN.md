@@ -190,3 +190,42 @@ That gives us the first real payoff:
 - QC no longer depends solely on sheet columns
 - Poetry Please can read from a Weaver-owned model
 - P.I.G. completions become durable app state instead of a sheet-only lane
+
+## Administrator Authentication Roadmap
+
+Server-side authorization is required for staff actions that change Weaver or downstream
+workflow state. Hiding controls in Under the Hood and limiting batch size reduce blast
+radius, but they are not authorization boundaries.
+
+### Bare-bones implementation
+
+- Require a Google OAuth bearer token on administrative mutation routes.
+- Verify the token with Google on the server.
+- Require the token audience to match `WEAVER_GOOGLE_OAUTH_CLIENT_ID`.
+- Require a verified email allowed by `WEAVER_ADMIN_EMAILS` or
+  `WEAVER_ADMIN_EMAIL_DOMAINS`.
+- Default the allowed domain to `buttonpoetry.com`; production may replace or narrow it.
+- Cache successful verification briefly in memory and never log the token.
+- Log the verified administrator email, HTTP method, and route.
+- Keep contributor intake and read-only endpoints outside the administrator guard.
+
+Covered staff mutations:
+
+- excerpt handoff retry and approved backfill
+- review saves and single-review saves
+- graphics QC saves, link saves, rework creation, handoff retries, and folder-import apply
+- stalled P.I.G. recovery changes
+- Poetry Please repair sync and repair-status retry
+
+### Follow-up hardening
+
+1. Replace domain-wide access with a small explicit `WEAVER_ADMIN_EMAILS` allowlist or a
+   managed administrator group.
+2. Store the verified administrator identity in each durable mutation history record.
+3. Add rate limits and structured security audit logs.
+4. Add automated route-policy tests so new administrative mutation endpoints cannot ship
+   without an explicit authorization classification.
+5. Add separate service-to-service authentication for P.I.G. lifecycle endpoints. These
+   routes must use workload credentials and must not depend on an interactive staff token.
+6. Add a Poetry Please acceptance callback or readable returned/resolved status before
+   Weaver automatically marks repair requests resolved.
