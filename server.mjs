@@ -42,6 +42,19 @@ const publishingOrderSheetName =
 const defaultGoogleOAuthClientId =
   process.env.WEAVER_GOOGLE_OAUTH_CLIENT_ID ||
   "912447899335-a7uuvddqb8g1llm7bt3ov5rao0ie13qf.apps.googleusercontent.com";
+const weaverAdminEmails = new Set(
+  String(process.env.WEAVER_ADMIN_EMAILS || "")
+    .split(",")
+    .map(value => value.trim().toLowerCase())
+    .filter(Boolean)
+);
+const weaverAdminEmailDomains = new Set(
+  String(process.env.WEAVER_ADMIN_EMAIL_DOMAINS || "buttonpoetry.com")
+    .split(",")
+    .map(value => value.trim().toLowerCase().replace(/^@/, ""))
+    .filter(Boolean)
+);
+const adminTokenCache = new Map();
 const poetryPleaseApiUrl =
   process.env.POETRY_PLEASE_API_URL ||
   "https://poetryplease.org/api";
@@ -135,6 +148,87 @@ const PIG_COMPLETION_COLUMNS = {
 const QUEUE_CACHE_TTL_MS = 5000;
 const queueSnapshotCache = new Map();
 const SOURCE_SHEET_CACHE_KEY = "source-sheet-values";
+const ADMIN_MUTATION_PATHS = new Set([
+  "/api/excerpts/handoffs/retry",
+  "/api/excerpts/handoffs/backfill-approved",
+  "/api/graphics/folder-import/apply",
+  "/api/graphics/handoffs/retry",
+  "/api/graphics/links",
+  "/api/graphics/rework-request",
+  "/api/repair-requests/sync",
+  "/api/save-graphics-qc",
+  "/api/save-review-single",
+  "/api/save-reviews"
+]);
+
+function isAdministrativeMutationRequest(req, url) {
+  if (!["POST", "PATCH", "PUT", "DELETE"].includes(req.method || "")) return false;
+  if (ADMIN_MUTATION_PATHS.has(url.pathname)) return true;
+  if (url.pathname === "/api/graphics/stalled-pig-recovery" && req.method === "POST") return true;
+  return /^\/api\/repair-requests\/[^/]+\/retry-status$/.test(url.pathname);
+}
+
+function adminAuthError(message, statusCode = 401) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
+}
+
+async function verifyAdministrativeCaller(req) {
+  const authorization = String(req.headers.authorization || "").trim();
+  const match = authorization.match(/^Bearer\s+(.+)$/i);
+  if (!match) {
+    throw adminAuthError("administrator_authentication_required");
+  }
+
+  const accessToken = match[1].trim();
+  const cacheKey = createHash("sha256").update(accessToken).digest("hex");
+  const cached = adminTokenCache.get(cacheKey);
+  if (cached?.expiresAt > Date.now()) {
+    return cached.principal;
+  }
+
+  const tokenInfoUrl = new URL("https://oauth2.googleapis.com/tokeninfo");
+  tokenInfoUrl.searchParams.set("access_token", accessToken);
+  const response = await fetch(tokenInfoUrl, {
+    headers: { Accept: "application/json" }
+  });
+  const tokenInfo = await response.json().catch(() => ({}));
+  if (!response.ok || tokenInfo.error) {
+    throw adminAuthError("administrator_token_invalid");
+  }
+
+  const tokenAudiences = [
+    tokenInfo.audience,
+    tokenInfo.aud,
+    tokenInfo.issued_to
+  ].map(cleanSheetWhitespace).filter(Boolean);
+  if (!tokenAudiences.includes(defaultGoogleOAuthClientId)) {
+    throw adminAuthError("administrator_token_wrong_audience");
+  }
+
+  const email = cleanSheetWhitespace(tokenInfo.email).toLowerCase();
+  const emailVerified = tokenInfo.verified_email === true || tokenInfo.verified_email === "true";
+  if (!email || !emailVerified) {
+    throw adminAuthError("administrator_verified_email_required", 403);
+  }
+  const domain = email.includes("@") ? email.split("@").pop() : "";
+  if (!weaverAdminEmails.has(email) && !weaverAdminEmailDomains.has(domain)) {
+    throw adminAuthError("administrator_access_denied", 403);
+  }
+
+  const principal = {
+    email,
+    subject: cleanSheetWhitespace(tokenInfo.user_id || tokenInfo.sub),
+    audience: defaultGoogleOAuthClientId
+  };
+  const expiresInSeconds = Math.max(1, Number(tokenInfo.expires_in || 60));
+  adminTokenCache.set(cacheKey, {
+    principal,
+    expiresAt: Date.now() + Math.min(expiresInSeconds * 1000, 5 * 60 * 1000)
+  });
+  return principal;
+}
 
 async function getCachedQueueSnapshot(key, loader, ttlMs = QUEUE_CACHE_TTL_MS) {
   const now = Date.now();
@@ -6724,6 +6818,22 @@ async function serveFile(res, filePath) {
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url || "/", `http://${req.headers.host}`);
 
+  if (isAdministrativeMutationRequest(req, url)) {
+    try {
+      req.weaverAdmin = await verifyAdministrativeCaller(req);
+      console.log("[admin-auth]", {
+        email: req.weaverAdmin.email,
+        method: req.method,
+        path: url.pathname
+      });
+    } catch (error) {
+      return sendJson(res, Number(error.statusCode || 401), {
+        ok: false,
+        error: error.message
+      });
+    }
+  }
+
   if (url.pathname === "/health") {
     return sendJson(res, 200, { ok: true, service: "weaver-web" });
   }
@@ -6768,6 +6878,12 @@ const server = http.createServer(async (req, res) => {
         stalledPigRecovery: "GET|POST /api/graphics/stalled-pig-recovery",
         repairQueue: "GET /api/repair-requests",
         repairSync: "POST /api/repair-requests/sync"
+      },
+      administratorAuthentication: {
+        provider: "google_oauth_access_token",
+        enforcedForAdminMutations: true,
+        allowedEmailDomains: Array.from(weaverAdminEmailDomains),
+        explicitEmailCount: weaverAdminEmails.size
       }
     });
   }
