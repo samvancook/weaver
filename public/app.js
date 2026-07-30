@@ -142,6 +142,7 @@ let currentWeirdExcerpts = [];
 let currentCorrectionExcerpts = [];
 let currentPendingRecords = [];
 let currentGraphicsRecords = [];
+let stalledRecoveryWindow = null;
 let currentGraphicsBookSummaries = [];
 let currentGraphicsAssetMatches = new Map();
 let currentGraphicsCoverage = null;
@@ -2871,6 +2872,8 @@ function getGraphicsModeLabel(mode = getSelectedGraphicsMode()) {
   if (mode === "mismatch") return "mismatch pairing";
   if (mode === "handoff") return "Poetry Please handoff";
   if (mode === "handoff_retry") return "retry failed handoffs";
+  if (mode === "stalled_recovery") return "recover stalled P.I.G. requests";
+  if (mode === "repair_requests") return "Poetry Please repairs";
   if (mode === "rework") return "send back to P.I.G.";
   if (mode === "coverage_needs") return "coverage needs";
   if (mode === "coverage") return "coverage";
@@ -2895,6 +2898,20 @@ function syncGraphicsModeOptionsForView() {
     handoffRetryOption.hidden = true;
     elements.graphicsMode.appendChild(handoffRetryOption);
   }
+  let stalledRecoveryOption = elements.graphicsMode.querySelector('option[value="stalled_recovery"]');
+  if (!stalledRecoveryOption) {
+    stalledRecoveryOption = document.createElement("option");
+    stalledRecoveryOption.value = "stalled_recovery";
+    stalledRecoveryOption.hidden = true;
+    elements.graphicsMode.appendChild(stalledRecoveryOption);
+  }
+  let repairRequestsOption = elements.graphicsMode.querySelector('option[value="repair_requests"]');
+  if (!repairRequestsOption) {
+    repairRequestsOption = document.createElement("option");
+    repairRequestsOption.value = "repair_requests";
+    repairRequestsOption.hidden = true;
+    elements.graphicsMode.appendChild(repairRequestsOption);
+  }
   const queueOption = elements.graphicsMode.querySelector('option[value="queue"]');
   const qcOption = elements.graphicsMode.querySelector('option[value="qc"]');
   const mismatchOption = elements.graphicsMode.querySelector('option[value="mismatch"]');
@@ -2914,6 +2931,14 @@ function syncGraphicsModeOptionsForView() {
     handoffRetryOption.hidden = !isOpsView;
     handoffRetryOption.textContent = "Retry failed handoffs";
   }
+  if (stalledRecoveryOption) {
+    stalledRecoveryOption.hidden = !isOpsView;
+    stalledRecoveryOption.textContent = "Recover stalled P.I.G. requests";
+  }
+  if (repairRequestsOption) {
+    repairRequestsOption.hidden = !isOpsView;
+    repairRequestsOption.textContent = "Poetry Please repairs";
+  }
   if (reworkOption) {
     reworkOption.hidden = !isOpsView;
     reworkOption.textContent = "Send back to P.I.G.";
@@ -2929,7 +2954,7 @@ function syncGraphicsModeOptionsForView() {
   if (qcOption) qcOption.hidden = isOpsView;
   if (mismatchOption) mismatchOption.hidden = isOpsView;
 
-  if (isOpsView && !["queue", "handoff", "handoff_retry", "coverage_needs", "coverage", "rework"].includes(elements.graphicsMode.value)) {
+  if (isOpsView && !["queue", "handoff", "handoff_retry", "stalled_recovery", "repair_requests", "coverage_needs", "coverage", "rework"].includes(elements.graphicsMode.value)) {
     elements.graphicsMode.value = "queue";
   }
   if (!isOpsView && !["qc", "mismatch"].includes(elements.graphicsMode.value)) {
@@ -3419,21 +3444,34 @@ async function retryFailedExcerptHandoffs() {
 async function loadGraphicsRecords() {
   const mode = getSelectedGraphicsMode();
   const bookKey = elements.graphicsBookSelect?.value || "";
-  if (!bookKey) {
+  if (!bookKey && !["stalled_recovery", "repair_requests"].includes(mode)) {
     setStatus("Choose a graphics book title first.");
     return;
   }
 
   const summary = graphicsBookSummaryByKey.get(bookKey);
   const bookTitle = isGraphicsQcSweepSelection(bookKey) ? "__qc_sweep__" : (summary?.title || bookKey);
-  const statusLabel = isGraphicsQcSweepSelection(bookKey) ? "QC Sweep" : bookTitle;
+  const statusLabel = mode === "repair_requests"
+    ? "all repair jobs"
+    : mode === "stalled_recovery"
+    ? "selected date window"
+    : isGraphicsQcSweepSelection(bookKey) ? "QC Sweep" : bookTitle;
   const loadSequence = ++graphicsRecordsLoadSequence;
 
   try {
     setStatus(`Loading ${getGraphicsModeLabel(mode)} rows for "${statusLabel}"...`);
     let data;
     try {
-      if (mode === "coverage_needs") {
+      if (mode === "repair_requests") {
+        data = await requestReviewApi("/api/repair-requests", { limit: 500 });
+      } else if (mode === "stalled_recovery") {
+        const window = getStalledRecoveryWindow();
+        data = await requestReviewApi("/api/graphics/stalled-pig-recovery", {
+          startAt: recoveryDateStartIso(window.startDate),
+          endBefore: recoveryDateEndExclusiveIso(window.endDate)
+        });
+        data.records = Array.isArray(data.candidates) ? data.candidates : [];
+      } else if (mode === "coverage_needs") {
         const queueData = await requestReviewApi("/graphics-handoff/queue", { filter: "coverage_needs", limit: 500 });
         const records = Array.isArray(queueData.records)
           ? queueData.records.filter(record => normalizeBookKey(record.bookTitle || "") === bookKey)
@@ -3462,7 +3500,7 @@ async function loadGraphicsRecords() {
 
     currentGraphicsRecords = Array.isArray(data.records) ? data.records : [];
     currentGraphicsCoverage = data.coverage || null;
-    currentGraphicsAssetMatches = mode === "coverage_needs"
+    currentGraphicsAssetMatches = ["coverage_needs", "repair_requests", "stalled_recovery"].includes(mode)
       ? new Map()
       : await loadGraphicsAssetMatches(currentGraphicsRecords);
     if (
@@ -3754,6 +3792,18 @@ function renderGraphicsRecords(records) {
     }
   }
 
+  if (getSelectedGraphicsMode() === "stalled_recovery") {
+    elements.graphicsList.appendChild(buildStalledPigRecoveryPanel(records));
+    records.forEach(record => elements.graphicsList.appendChild(buildStalledPigRecoveryCard(record)));
+    return;
+  }
+
+  if (getSelectedGraphicsMode() === "repair_requests") {
+    elements.graphicsList.appendChild(buildPoetryPleaseRepairPanel(records));
+    records.forEach(record => elements.graphicsList.appendChild(buildPoetryPleaseRepairCard(record)));
+    return;
+  }
+
   if (!records.length) {
     const empty = document.createElement("p");
     empty.className = "empty-state";
@@ -3783,6 +3833,208 @@ function renderGraphicsRecords(records) {
           : buildGraphicsCard(record)
     );
   });
+}
+
+function buildPoetryPleaseRepairPanel(records) {
+  const counts = records.reduce((summary, record) => {
+    const status = record.weaverRepairStatus || "requested";
+    summary[status] = Number(summary[status] || 0) + 1;
+    return summary;
+  }, {});
+  const panel = document.createElement("article");
+  panel.className = "excerpt-card";
+  panel.innerHTML = `
+    <div class="excerpt-card__meta">
+      <span class="badge badge--muted">Requested ${Number(counts.requested || 0)}</span>
+      <span class="badge badge--signal">Waiting on P.I.G. ${Number(counts.waiting_on_pig || 0)}</span>
+      <span class="badge badge--muted">Manual review ${Number(counts.in_progress || 0)}</span>
+      <span class="badge badge--signal">Returned ${Number(counts.returned || 0)}</span>
+      <span class="badge badge--warn">Blocked / failed ${Number(counts.blocked || 0) + Number(counts.failed || 0)}</span>
+      <span class="badge badge--muted">Resolved ${Number(counts.resolved || 0)}</span>
+    </div>
+    <button id="sync-poetry-please-repairs" class="button" type="button">Sync one canary</button>
+  `;
+  panel.querySelector("#sync-poetry-please-repairs")?.addEventListener("click", syncPoetryPleaseRepairCanary);
+  return panel;
+}
+
+function buildPoetryPleaseRepairCard(record) {
+  const card = document.createElement("article");
+  card.className = "excerpt-card";
+  const destination = record.repairDestination === "pig" ? "P.I.G." : "Weaver review";
+  const relatedLinks = [
+    record.originalAssetLink
+      ? `<a href="${escapeAttribute(record.originalAssetLink)}" target="_blank" rel="noopener noreferrer">Original asset</a>`
+      : "",
+    record.replacementAssetLink
+      ? `<a href="${escapeAttribute(record.replacementAssetLink)}" target="_blank" rel="noopener noreferrer">Replacement asset</a>`
+      : ""
+  ].filter(Boolean).join(" · ");
+  card.innerHTML = `
+    <div class="excerpt-card__meta">
+      <span class="badge badge--signal">${escapeHtml(record.contentType || "Unknown")}</span>
+      <span class="badge badge--muted">${escapeHtml(record.weaverRepairStatus || "requested")}</span>
+      <span class="badge badge--muted">${escapeHtml(destination)}</span>
+      <span class="excerpt-card__title">${escapeHtml(record.poemTitle || "Untitled item")}</span>
+      <span class="excerpt-card__author">${escapeHtml(record.author || "Unknown author")}</span>
+    </div>
+    <div class="correction-source__grid">
+      <div><strong>Book</strong><span>${escapeHtml(record.canonicalBook || "(blank)")}</span></div>
+      <div><strong>Repair request</strong><span>${escapeHtml(record.poetryPleaseRepairRequestId || "")}</span></div>
+      <div><strong>Original item</strong><span>${escapeHtml(record.originalContentId || record.originalDocId || "")}</span></div>
+      <div><strong>P.I.G. job</strong><span>${escapeHtml(record.pigJobId || "Not applicable")}</span></div>
+      <div><strong>Updated</strong><span>${escapeHtml(record.updatedAt || "")}</span></div>
+      <div><strong>Returned</strong><span>${escapeHtml(record.returnedAt || "Not returned")}</span></div>
+    </div>
+    <p class="hint"><strong>Issue:</strong> ${escapeHtml(record.issueReason || "(none supplied)")}</p>
+    <p class="hint"><strong>Instructions:</strong> ${escapeHtml(record.repairInstructions || "(none supplied)")}</p>
+    ${record.blockedReason ? `<p class="hint"><strong>Blocked:</strong> ${escapeHtml(record.blockedReason)}</p>` : ""}
+    ${relatedLinks ? `<p class="hint">${relatedLinks}</p>` : ""}
+    ${record.retryable ? `<button class="button button--secondary retry-repair-status" type="button">Retry Poetry Please status</button>` : ""}
+  `;
+  card.querySelector(".retry-repair-status")?.addEventListener("click", () => (
+    retryPoetryPleaseRepairStatus(record.poetryPleaseRepairRequestId)
+  ));
+  return card;
+}
+
+async function syncPoetryPleaseRepairCanary() {
+  try {
+    setStatus("Syncing one Poetry Please repair canary...");
+    const response = await fetch("/api/repair-requests/sync", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ limit: 1, allowBulk: false })
+    });
+    const result = await response.json();
+    if (!response.ok || !result.ok) {
+      throw new Error(result.error || result.errors?.[0]?.error || `/api/repair-requests/sync returned ${response.status}`);
+    }
+    await loadGraphicsRecords();
+    setStatus(
+      `Repair sync: created ${Number(result.createdCount || 0)}, updated ${Number(result.updatedCount || 0)}, duplicate ${Number(result.duplicateCount || 0)}, blocked ${Number(result.blockedCount || 0)}, errors ${Number(result.errorCount || 0)}.`
+    );
+  } catch (error) {
+    setStatus(`Poetry Please repair sync failed: ${error.message}`);
+  }
+}
+
+async function retryPoetryPleaseRepairStatus(repairRequestId) {
+  try {
+    setStatus(`Retrying Poetry Please status for ${repairRequestId}...`);
+    const response = await fetch(`/api/repair-requests/${encodeURIComponent(repairRequestId)}/retry-status`, {
+      method: "POST"
+    });
+    const result = await response.json();
+    if (!response.ok || !result.ok) {
+      throw new Error(result.error || `/retry-status returned ${response.status}`);
+    }
+    await loadGraphicsRecords();
+    setStatus(`Poetry Please repair ${repairRequestId} is ${result.status}.`);
+  } catch (error) {
+    setStatus(`Repair status retry failed: ${error.message}`);
+  }
+}
+
+function getStalledRecoveryWindow() {
+  const selectedStart = document.querySelector("#stalled-recovery-start")?.value || "";
+  const selectedEnd = document.querySelector("#stalled-recovery-end")?.value || "";
+  if (selectedStart && selectedEnd) {
+    stalledRecoveryWindow = { startDate: selectedStart, endDate: selectedEnd };
+  }
+  if (stalledRecoveryWindow) {
+    return stalledRecoveryWindow;
+  }
+  const today = new Date();
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+  const format = date => [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, "0"),
+    String(date.getDate()).padStart(2, "0")
+  ].join("-");
+  stalledRecoveryWindow = {
+    startDate: format(yesterday),
+    endDate: format(today)
+  };
+  return stalledRecoveryWindow;
+}
+
+function recoveryDateStartIso(dateValue) {
+  return new Date(`${dateValue}T00:00:00`).toISOString();
+}
+
+function recoveryDateEndExclusiveIso(dateValue) {
+  const date = new Date(`${dateValue}T00:00:00`);
+  date.setDate(date.getDate() + 1);
+  return date.toISOString();
+}
+
+function buildStalledPigRecoveryPanel(records) {
+  const window = getStalledRecoveryWindow();
+  const panel = document.createElement("article");
+  panel.className = "excerpt-card";
+  panel.innerHTML = `
+    <div class="excerpt-card__meta">
+      <span class="badge badge--warn">${records.length} eligible stalled request${records.length === 1 ? "" : "s"}</span>
+      <span class="badge badge--muted">Completed and QC records are protected</span>
+    </div>
+    <div class="correction-source__grid">
+      <label class="field"><span>Start date</span><input id="stalled-recovery-start" type="date" value="${escapeAttribute(window.startDate)}"></label>
+      <label class="field"><span>End date</span><input id="stalled-recovery-end" type="date" value="${escapeAttribute(window.endDate)}"></label>
+    </div>
+    <div class="excerpt-card__actions">
+      <button id="preview-stalled-recovery" class="button button--secondary" type="button">Preview</button>
+      <button id="apply-stalled-recovery" class="button" type="button" ${records.length ? "" : "disabled"}>Return eligible requests to P.I.G.</button>
+    </div>
+  `;
+  panel.querySelector("#preview-stalled-recovery")?.addEventListener("click", loadGraphicsRecords);
+  panel.querySelector("#apply-stalled-recovery")?.addEventListener("click", () => applyStalledPigRecovery(records));
+  return panel;
+}
+
+function buildStalledPigRecoveryCard(record) {
+  const card = document.createElement("article");
+  card.className = "excerpt-card";
+  card.innerHTML = `
+    <div class="excerpt-card__meta">
+      <span class="badge badge--signal">${escapeHtml(record.contentType || "")}</span>
+      <span class="badge badge--muted">${escapeHtml(record.previousHandoffStatus || "")}</span>
+      <span class="excerpt-card__title">${escapeHtml(record.poemTitle || "Untitled poem")}</span>
+      <span class="excerpt-card__author">${escapeHtml(record.author || "Unknown author")}</span>
+    </div>
+    <p class="hint">${escapeHtml(record.bookTitle || "(blank book)")} · ${escapeHtml(record.graphicsRequestId || "")}</p>
+  `;
+  return card;
+}
+
+async function applyStalledPigRecovery(records) {
+  if (!records.length) return;
+  if (!window.confirm(`Return these ${records.length} canonical request${records.length === 1 ? "" : "s"} to the P.I.G. queue?`)) {
+    return;
+  }
+  const windowDates = getStalledRecoveryWindow();
+  try {
+    setStatus(`Returning ${records.length} stalled request${records.length === 1 ? "" : "s"} to P.I.G....`);
+    const response = await fetch("/api/graphics/stalled-pig-recovery", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        startAt: recoveryDateStartIso(windowDates.startDate),
+        endBefore: recoveryDateEndExclusiveIso(windowDates.endDate),
+        graphicsRequestIds: records.map(record => record.graphicsRequestId),
+        apply: true
+      })
+    });
+    const result = await response.json();
+    if (!response.ok || !result.ok) {
+      throw new Error(result.error || `/api/graphics/stalled-pig-recovery returned ${response.status}`);
+    }
+    await loadGraphicsRecords();
+    setStatus(`Returned ${Number(result.repairedCount || 0)} canonical request${Number(result.repairedCount || 0) === 1 ? "" : "s"} to P.I.G.`);
+  } catch (error) {
+    setStatus(`Stalled P.I.G. recovery failed: ${error.message}`);
+  }
 }
 
 function buildGraphicsReworkPanel(records) {

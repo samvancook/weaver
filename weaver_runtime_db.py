@@ -25,6 +25,7 @@ FIRESTORE_GRAPHICS_COMPLETIONS_COLLECTION = "graphicsCompletions"
 FIRESTORE_GRAPHICS_QC_REVIEWS_COLLECTION = "graphicsQcReviews"
 FIRESTORE_GRAPHICS_QC_QUEUE_COLLECTION = "graphicsQcQueueCards"
 FIRESTORE_POETRY_PLEASE_HANDOFFS_COLLECTION = "poetryPleaseHandoffs"
+FIRESTORE_EXCERPT_RECORDS_COLLECTION = "excerptRecords"
 FIRESTORE_DEFAULT_DATABASE_ID = "weaverledger"
 FIRESTORE_DEFAULT_PROJECT_ID = "button-weaver-internal"
 FIRESTORE_DEFAULT_SERVICE_ACCOUNT = (
@@ -76,6 +77,27 @@ def build_graphics_qc_queue_card(completion: dict[str, Any]) -> dict[str, Any]:
     editable_project_url = str(
         completion.get("editableProjectUrl") or payload.get("editableProjectUrl") or ""
     ).strip()
+    content_id = str(
+        completion.get("contentId")
+        or completion.get("imageId")
+        or payload.get("contentId")
+        or payload.get("imageId")
+        or payload.get("sourceRecordId")
+        or ""
+    ).strip()
+    text_hash = str(completion.get("textHash") or payload.get("textHash") or "").strip()
+    if not text_hash and payload.get("quoteText"):
+        text_hash = stable_text_hash(payload.get("quoteText"))
+    source_identity = completion.get("sourceIdentity") or payload.get("sourceIdentity")
+    if not isinstance(source_identity, dict):
+        source_identity = {}
+    source_identity = {
+        **source_identity,
+        "graphicsRequestId": str(source_identity.get("graphicsRequestId") or graphics_request_id),
+        "contentId": str(source_identity.get("contentId") or content_id),
+        "imageId": str(source_identity.get("imageId") or content_id),
+        "textHash": str(source_identity.get("textHash") or text_hash),
+    }
     return {
         "pigCompletionId": completion_id,
         "graphicsRequestId": graphics_request_id,
@@ -99,6 +121,20 @@ def build_graphics_qc_queue_card(completion: dict[str, Any]) -> dict[str, Any]:
         "editableProjectAvailable": bool(
             pig_project_id and editable_project_file_id and editable_project_url
         ),
+        "editableProjectValidationStatus": str(
+            completion.get("editableProjectValidationStatus")
+            or payload.get("editableProjectValidationStatus")
+            or ""
+        ),
+        "editableProjectValidationError": (
+            completion.get("editableProjectValidationError")
+            or payload.get("editableProjectValidationError")
+            or {}
+        ),
+        "contentId": content_id,
+        "imageId": content_id,
+        "sourceIdentity": source_identity,
+        "textHash": text_hash,
         "completedAt": str(completion.get("completedAt") or payload.get("completedAt") or ""),
         "graphicsQcDecision": "",
         "graphicsQcNote": "",
@@ -109,6 +145,118 @@ def build_graphics_qc_queue_card(completion: dict[str, Any]) -> dict[str, Any]:
         "isPendingQc": True,
         "updatedAt": utc_now_iso(),
     }
+
+
+def normalize_identity_text(value: Any) -> str:
+    return " ".join(str(value or "").split()).casefold()
+
+
+def stable_text_hash(value: Any) -> str:
+    return hashlib.sha256(normalize_identity_text(value).encode("utf-8")).hexdigest()
+
+
+def assert_completion_identity_consistent(record: dict[str, Any]) -> None:
+    payload = record.get("sourcePayload") if isinstance(record.get("sourcePayload"), dict) else {}
+    source_identity = record.get("sourceIdentity") or payload.get("sourceIdentity")
+    if not isinstance(source_identity, dict):
+        source_identity = {}
+    request_ids = {
+        str(value).strip().casefold()
+        for value in (
+            record.get("graphicsRequestId"),
+            payload.get("graphicsRequestId"),
+            payload.get("requestId"),
+            source_identity.get("graphicsRequestId"),
+        )
+        if str(value or "").strip()
+    }
+    if len(request_ids) > 1:
+        raise ValueError("Completion contains conflicting graphicsRequestId values")
+
+    text_hashes = {
+        str(value).strip().casefold()
+        for value in (
+            record.get("textHash"),
+            payload.get("textHash"),
+            source_identity.get("textHash"),
+        )
+        if len(str(value or "").strip()) == 64
+    }
+    quote_text = payload.get("quoteText") or record.get("quoteText")
+    if quote_text:
+        text_hashes.add(stable_text_hash(quote_text))
+    if len(text_hashes) > 1:
+        raise ValueError("Completion contains a textHash that conflicts with its quote text")
+
+
+def completion_canonical_identity(record: dict[str, Any]) -> str:
+    payload = record.get("sourcePayload") if isinstance(record.get("sourcePayload"), dict) else {}
+    source_identity = record.get("sourceIdentity") or payload.get("sourceIdentity")
+    if not isinstance(source_identity, dict):
+        source_identity = {}
+    for value in (
+        source_identity.get("graphicsRequestId"),
+        record.get("graphicsRequestId"),
+        payload.get("graphicsRequestId"),
+        payload.get("requestId"),
+        source_identity.get("contentId"),
+        source_identity.get("imageId"),
+        record.get("contentId"),
+        record.get("imageId"),
+        payload.get("contentId"),
+        payload.get("imageId"),
+        payload.get("sourceRecordId"),
+        source_identity.get("textHash"),
+        record.get("textHash"),
+        payload.get("textHash"),
+    ):
+        normalized = str(value or "").strip()
+        if normalized:
+            return normalized.casefold()
+    quote_text = payload.get("quoteText") or record.get("quoteText")
+    return stable_text_hash(quote_text) if quote_text else ""
+
+
+def assert_editable_project_file_not_cross_linked(
+    existing_records: list[dict[str, Any]], candidate: dict[str, Any]
+) -> None:
+    file_id = str(candidate.get("editableProjectFileId") or "").strip()
+    candidate_identity = completion_canonical_identity(candidate)
+    if not file_id or not candidate_identity:
+        return
+    for existing in existing_records:
+        existing_id = str(existing.get("id") or "").strip()
+        if existing_id and existing_id == str(candidate.get("id") or "").strip():
+            continue
+        existing_identity = completion_canonical_identity(existing)
+        if existing_identity and existing_identity != candidate_identity:
+            raise ValueError(
+                f"Editable project file {file_id} is already linked to canonical identity "
+                f"{existing_identity}; refusing cross-link to {candidate_identity}."
+            )
+
+
+def find_editable_project_link_conflicts(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    by_file: dict[str, list[dict[str, str]]] = {}
+    for record in records:
+        file_id = str(record.get("editableProjectFileId") or "").strip()
+        identity = completion_canonical_identity(record)
+        if not file_id or not identity:
+            continue
+        by_file.setdefault(file_id, []).append({
+            "completionId": str(record.get("id") or ""),
+            "graphicsRequestId": str(record.get("graphicsRequestId") or ""),
+            "canonicalIdentity": identity,
+        })
+    return [
+        {
+            "editableProjectFileId": file_id,
+            "canonicalIdentities": sorted({entry["canonicalIdentity"] for entry in entries}),
+            "records": entries,
+        }
+        for file_id, entries in sorted(by_file.items())
+        if len({entry["canonicalIdentity"] for entry in entries}) > 1
+    ]
 
 
 def connect_runtime_db(db_path: Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
@@ -607,6 +755,7 @@ def default_handoff_record(graphics_request_id: str) -> dict[str, Any]:
         "author": "",
         "poemTitle": "",
         "bookTitle": "",
+        "bookKey": "",
         "quoteText": "",
         "text": "",
         "sourcePayload": {},
@@ -675,6 +824,7 @@ def normalize_handoff_record(record: dict[str, Any]) -> dict[str, Any]:
     normalized["author"] = str(normalized.get("author") or source_payload.get("author") or source_payload.get("author_name") or nested_source.get("author") or nested_source.get("author_name") or "")
     normalized["poemTitle"] = str(normalized.get("poemTitle") or source_payload.get("poemTitle") or source_payload.get("title") or source_payload.get("poem_title") or nested_source.get("poemTitle") or nested_source.get("title") or nested_source.get("poem_title") or "")
     normalized["bookTitle"] = str(normalized.get("bookTitle") or source_payload.get("bookTitle") or source_payload.get("book_title") or nested_source.get("bookTitle") or nested_source.get("book_title") or "")
+    normalized["bookKey"] = str(normalized.get("bookKey") or source_payload.get("bookKey") or source_payload.get("book_key") or nested_source.get("bookKey") or nested_source.get("book_key") or "")
     payload_fields = {
         "pigProjectId": ("pigProjectId", "pig_project_id"),
         "editableProjectFileId": ("editableProjectFileId", "projectFileId", "editable_project_file_id"),
@@ -838,6 +988,9 @@ def compact_handoff_record(record: dict[str, Any]) -> dict[str, Any]:
 
 
 def queue_card_record(record: dict[str, Any]) -> dict[str, Any]:
+    content_type = normalize_content_type(record.get("contentType") or record.get("imageType"))
+    is_rework = str(record.get("nextAction") or "").strip().lower() == "rework"
+    source_payload = record.get("sourcePayload") if isinstance(record.get("sourcePayload"), dict) else {}
     return {
         "graphicsRequestId": record.get("graphicsRequestId") or "",
         "queueView": record.get("queueView") or "",
@@ -847,10 +1000,25 @@ def queue_card_record(record: dict[str, Any]) -> dict[str, Any]:
         "handoffStatus": record.get("handoffStatus") or "",
         "pigStatus": record.get("pigStatus") or "",
         "qcStatus": record.get("qcStatus") or "",
-        "imageType": record.get("imageType") or "",
-        "contentType": record.get("contentType") or "",
+        "imageType": content_type,
+        "contentType": content_type,
+        "queueLane": content_type,
+        "reworkLane": content_type if is_rework else "",
         "sourceSystem": record.get("sourceSystem") or "",
         "sourceStatus": record.get("sourceStatus") or "",
+        "repairRequestId": source_payload.get("repairRequestId") or "",
+        "sourceFlagId": source_payload.get("sourceFlagId") or "",
+        "originalContentId": source_payload.get("originalContentId") or "",
+        "originalDocId": source_payload.get("originalDocId") or "",
+        "originalCollection": source_payload.get("originalCollection") or "",
+        "releaseCatalog": source_payload.get("releaseCatalog") or "",
+        "bookShortener": source_payload.get("bookShortener") or "",
+        "issueReason": source_payload.get("issueReason") or "",
+        "repairInstructions": source_payload.get("requestNote") or source_payload.get("requestedChanges") or "",
+        "originalAssetLink": source_payload.get("previousAssetUrl") or source_payload.get("assetUrl") or "",
+        "originalContent": source_payload.get("originalContent") or {},
+        "existingPigHistory": source_payload.get("existingPigHistory") or {},
+        "existingWeaverHistory": source_payload.get("existingWeaverHistory") or {},
         "sourceCompletionId": record.get("sourceCompletionId") or "",
         "revisionOf": record.get("revisionOf") or "",
         "originalGraphicsRequestId": record.get("originalGraphicsRequestId") or "",
@@ -859,6 +1027,8 @@ def queue_card_record(record: dict[str, Any]) -> dict[str, Any]:
         "editableProjectFileId": record.get("editableProjectFileId") or "",
         "editableProjectUrl": record.get("editableProjectUrl") or "",
         "editableProjectAvailable": bool(record.get("editableProjectAvailable")),
+        "editableProjectValidationStatus": record.get("editableProjectValidationStatus") or "",
+        "editableProjectValidationError": record.get("editableProjectValidationError") or {},
         "assetUrl": record.get("assetUrl") or "",
         "assetPreviewUrl": record.get("assetPreviewUrl") or "",
         "previousAssetUrl": record.get("previousAssetUrl") or record.get("assetUrl") or "",
@@ -876,6 +1046,7 @@ def queue_card_record(record: dict[str, Any]) -> dict[str, Any]:
         "author": record.get("author") or "",
         "poemTitle": record.get("poemTitle") or "",
         "bookTitle": record.get("bookTitle") or "",
+        "bookKey": record.get("bookKey") or "",
         "quoteText": record.get("quoteText") or "",
         "targetCount": int(record.get("targetCount") or 0),
         "approvedCount": int(record.get("approvedCount") or 0),
@@ -1218,8 +1389,19 @@ class FirestoreLedgerClient:
         source_payload = request.get("sourcePayload") or request.get("payload") or request
         content_type = infer_graphics_content_type(request, source_payload, existing)
         assert_compatible_graphics_content_type(existing, content_type)
+        repair_request_id = str(
+            request.get("repairRequestId")
+            or extract_handoff_value(source_payload, "repairRequestId")
+            or ""
+        ).strip()
+        is_external_repair_request = bool(
+            repair_request_id
+            and str(request.get("sourceSystem") or "").strip().lower() == "poetry_please_repair"
+        )
         canonical_content_id = ""
-        if content_type == "QI":
+        if is_external_repair_request:
+            canonical_content_id = f"REPAIR:{repair_request_id}"
+        elif content_type == "QI":
             canonical_content_id = canonical_qi_content_id(request, source_payload)
             canonical_matches = self.query_raw_documents(
                 FIRESTORE_COLLECTION,
@@ -1275,6 +1457,8 @@ class FirestoreLedgerClient:
         blocked_reason = str(request.get("blockedReason") or "")
         existing_handoff_status = str(existing.get("handoffStatus") or "")
         is_rework_request = bool(
+            is_external_repair_request
+            or
             request.get("revisionOf")
             or request.get("originalGraphicsRequestId")
             or extract_handoff_value(source_payload, "revisionOf", "originalGraphicsRequestId")
@@ -1409,14 +1593,47 @@ class FirestoreLedgerClient:
             "exportType": str(update.get("exportType") or existing["exportType"] or ""),
             "variant": str(update.get("variant") or existing["variant"] or ""),
             "version": str(update.get("version") or existing["version"] or ""),
-            "pigProjectId": str(update.get("pigProjectId") or existing.get("pigProjectId") or ""),
+            "pigProjectId": str(
+                update.get("pigProjectId") if "pigProjectId" in update else existing.get("pigProjectId") or ""
+            ),
             "editableProjectFileId": str(
                 update.get("editableProjectFileId")
-                or update.get("projectFileId")
-                or existing.get("editableProjectFileId")
+                if "editableProjectFileId" in update
+                else update.get("projectFileId")
+                if "projectFileId" in update
+                else existing.get("editableProjectFileId") or ""
+            ),
+            "editableProjectUrl": str(
+                update.get("editableProjectUrl")
+                if "editableProjectUrl" in update
+                else existing.get("editableProjectUrl") or ""
+            ),
+            "editableProjectAvailable": bool(update.get("editableProjectAvailable"))
+            if "editableProjectAvailable" in update
+            else bool(existing.get("editableProjectAvailable")),
+            "candidatePigProjectId": str(
+                update.get("candidatePigProjectId") or existing.get("candidatePigProjectId") or ""
+            ),
+            "candidateEditableProjectFileId": str(
+                update.get("candidateEditableProjectFileId")
+                or existing.get("candidateEditableProjectFileId")
                 or ""
             ),
-            "editableProjectUrl": str(update.get("editableProjectUrl") or existing.get("editableProjectUrl") or ""),
+            "candidateEditableProjectUrl": str(
+                update.get("candidateEditableProjectUrl")
+                or existing.get("candidateEditableProjectUrl")
+                or ""
+            ),
+            "editableProjectValidationStatus": str(
+                update.get("editableProjectValidationStatus")
+                or existing.get("editableProjectValidationStatus")
+                or ""
+            ),
+            "editableProjectValidationError": (
+                update.get("editableProjectValidationError")
+                or existing.get("editableProjectValidationError")
+                or {}
+            ),
             "reworkReason": str(update.get("reworkReason") or update.get("rejectReason") or existing.get("reworkReason") or ""),
             "metadataIssue": str(update.get("metadataIssue") or existing.get("metadataIssue") or ""),
             "aestheticIssue": str(update.get("aestheticIssue") or existing.get("aestheticIssue") or ""),
@@ -1442,12 +1659,26 @@ class FirestoreLedgerClient:
         })
         return self.write_record(existing)
 
-    def get_handoff_queue(self, limit: int = 100, filter_mode: str = "all", cursor: int = 0) -> list[dict[str, Any]]:
+    def get_handoff_queue(
+        self,
+        limit: int = 100,
+        filter_mode: str = "all",
+        cursor: int = 0,
+        content_type: str = "",
+    ) -> list[dict[str, Any]]:
         normalized_filter = str(filter_mode or "all").strip().lower()
+        normalized_content_type = str(content_type or "").strip().upper()
+        if normalized_content_type not in {"", "QI", "FPI"}:
+            raise ValueError("contentType must be QI or FPI")
         offset = max(0, int(cursor or 0))
         records = [
             record for record in self.list_handoffs()
             if record.get("isActionable")
+            and (
+                not normalized_content_type
+                or normalize_content_type(record.get("contentType") or record.get("imageType"))
+                == normalized_content_type
+            )
             and (
                 normalized_filter in {"all", ""}
                 or record.get("queueView") == normalized_filter
@@ -1548,6 +1779,32 @@ class FirestoreLedgerClient:
             or extract_handoff_value(source_payload, "editableProjectUrl", "editable_project_url")
             or ""
         ).strip()
+        content_id = str(
+            completion.get("content_id")
+            or completion.get("contentId")
+            or completion.get("imageId")
+            or extract_handoff_value(source_payload, "contentId", "imageId", "sourceRecordId")
+            or ""
+        ).strip()
+        text_hash = str(
+            completion.get("text_hash")
+            or completion.get("textHash")
+            or extract_handoff_value(source_payload, "textHash")
+            or ""
+        ).strip()
+        if not text_hash:
+            quote_text = extract_handoff_value(source_payload, "quoteText", "text")
+            text_hash = stable_text_hash(quote_text) if quote_text else ""
+        source_identity = completion.get("sourceIdentity") or source_payload.get("sourceIdentity")
+        if not isinstance(source_identity, dict):
+            source_identity = {}
+        source_identity = {
+            **source_identity,
+            "graphicsRequestId": str(source_identity.get("graphicsRequestId") or graphics_request_id),
+            "contentId": str(source_identity.get("contentId") or content_id),
+            "imageId": str(source_identity.get("imageId") or content_id),
+            "textHash": str(source_identity.get("textHash") or text_hash),
+        }
         completion_record = {
             "id": completion_id,
             "graphicsRequestId": graphics_request_id,
@@ -1562,12 +1819,35 @@ class FirestoreLedgerClient:
             "editableProjectAvailable": bool(
                 pig_project_id and editable_project_file_id and editable_project_url
             ),
+            "candidatePigProjectId": str(source_payload.get("candidatePigProjectId") or ""),
+            "candidateEditableProjectFileId": str(
+                source_payload.get("candidateEditableProjectFileId") or ""
+            ),
+            "candidateEditableProjectUrl": str(source_payload.get("candidateEditableProjectUrl") or ""),
+            "editableProjectValidationStatus": str(
+                source_payload.get("editableProjectValidationStatus") or ""
+            ),
+            "editableProjectValidationError": source_payload.get("editableProjectValidationError") or {},
+            "contentId": content_id,
+            "imageId": content_id,
+            "sourceIdentity": source_identity,
+            "textHash": text_hash,
             "productionNotes": str(completion.get("production_notes") or completion.get("productionNotes") or ""),
             "completionStatus": str(completion.get("completion_status") or completion.get("completionStatus") or "RETURNED"),
             "completedAt": str(completion.get("completed_at") or completion.get("completedAt") or utc_now_iso()),
             "ingestedAt": ingested_at,
             "sourcePayload": source_payload,
         }
+        assert_completion_identity_consistent(completion_record)
+        if editable_project_file_id:
+            assert_editable_project_file_not_cross_linked(
+                self.query_raw_documents(
+                    FIRESTORE_GRAPHICS_COMPLETIONS_COLLECTION,
+                    "editableProjectFileId",
+                    editable_project_file_id,
+                ),
+                completion_record,
+            )
         pending_candidates = [completion_record]
         for existing in self.query_raw_documents(
             FIRESTORE_GRAPHICS_COMPLETIONS_COLLECTION,
@@ -2051,10 +2331,19 @@ def update_graphics_handoff(connection: Any, graphics_request_id: str, update: d
     return get_graphics_handoff(connection, graphics_request_id) or {}
 
 
-def get_graphics_handoff_queue(connection: Any, limit: int = 100, filter_mode: str = "all", cursor: int = 0) -> list[dict[str, Any]]:
+def get_graphics_handoff_queue(
+    connection: Any,
+    limit: int = 100,
+    filter_mode: str = "all",
+    cursor: int = 0,
+    content_type: str = "",
+) -> list[dict[str, Any]]:
     if is_firestore_ledger(connection):
-        return connection.get_handoff_queue(limit, filter_mode, cursor)
+        return connection.get_handoff_queue(limit, filter_mode, cursor, content_type)
     normalized_filter = str(filter_mode or "all").strip().lower()
+    normalized_content_type = str(content_type or "").strip().upper()
+    if normalized_content_type not in {"", "QI", "FPI"}:
+        raise ValueError("contentType must be QI or FPI")
     offset = max(0, int(cursor or 0))
     rows = connection.execute(
         """
@@ -2074,6 +2363,11 @@ def get_graphics_handoff_queue(connection: Any, limit: int = 100, filter_mode: s
             record
             for record in (row_to_handoff(row) for row in rows)
             if record.get("isActionable")
+            and (
+                not normalized_content_type
+                or normalize_content_type(record.get("contentType") or record.get("imageType"))
+                == normalized_content_type
+            )
             and (
                 normalized_filter in {"all", ""}
                 or record.get("queueView") == normalized_filter

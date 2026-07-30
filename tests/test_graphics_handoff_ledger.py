@@ -7,23 +7,28 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from weaver_runtime_db import (  # noqa: E402
+    assert_completion_identity_consistent,
+    assert_editable_project_file_not_cross_linked,
     build_graphics_qc_queue_card,
     canonical_qi_content_id,
     canonical_qi_graphics_request_id,
     claim_graphics_handoff,
     ensure_runtime_schema,
+    find_editable_project_link_conflicts,
+    FirestoreLedgerClient,
     get_excerpt_handoff,
     get_graphics_handoff,
     get_graphics_handoff_queue,
     insert_graphics_completion,
     insert_graphics_qc_review,
     normalize_handoff_record,
+    queue_card_record,
     update_graphics_handoff,
     upsert_excerpt_handoff,
     upsert_graphics_handoff_request,
     upsert_graphics_request,
 )
-from weaver_runtime_sync import sync_excerpt_handoffs, sync_qc_reviews  # noqa: E402
+from weaver_runtime_sync import sync_excerpt_handoffs, sync_qc_reviews, upsert_repair_requests  # noqa: E402
 
 
 def memory_db() -> sqlite3.Connection:
@@ -52,7 +57,229 @@ def seed_request(connection: sqlite3.Connection, request_id: str = "weaver:row-2
     )
 
 
+class MemoryFirestoreLedger(FirestoreLedgerClient):
+    def __init__(self):
+        self.documents = {}
+        self.handoffs = {}
+        self.handoff_calls = []
+
+    def get_raw_document(self, collection, document_id):
+        return self.documents.get((collection, document_id))
+
+    def write_raw_document(self, collection, document_id, record):
+        written = dict(record)
+        self.documents[(collection, document_id)] = written
+        return written
+
+    def list_raw_documents(self, collection, page_size=500):
+        return [
+            record for (stored_collection, _), record in self.documents.items()
+            if stored_collection == collection
+        ]
+
+    def upsert_handoff_request(self, request):
+        request_id = request["graphicsRequestId"]
+        self.handoff_calls.append(request_id)
+        self.handoffs[request_id] = dict(request)
+        return dict(request)
+
+
+class RepairIdentityFirestoreLedger(FirestoreLedgerClient):
+    def __init__(self):
+        self.records = {}
+        self.canonical_query_count = 0
+
+    def get_handoff(self, graphics_request_id):
+        return self.records.get(graphics_request_id)
+
+    def query_raw_documents(self, collection, field, value, page_size=100):
+        self.canonical_query_count += 1
+        return []
+
+    def write_record(self, record):
+        self.records[record["graphicsRequestId"]] = dict(record)
+        return dict(record)
+
+    def write_raw_document(self, collection, document_id, record):
+        return dict(record)
+
+
 class GraphicsHandoffLedgerTest(unittest.TestCase):
+    def test_external_repair_preserves_stable_job_id_without_canonical_collapse(self):
+        connection = RepairIdentityFirestoreLedger()
+        repair_job_id = "weaver:repair:stable-canary"
+        written = connection.upsert_handoff_request({
+            "graphicsRequestId": repair_job_id,
+            "sourceSystem": "poetry_please_repair",
+            "sourceStatus": "repair_requested",
+            "contentType": "QI",
+            "repairRequestId": "repair-canary-stable",
+            "sourcePayload": {
+                "repairRequestId": "repair-canary-stable",
+                "bookTitle": "Test Book",
+                "poemTitle": "Test Poem",
+                "author": "Test Author",
+                "quoteText": "Canonical excerpt text",
+                "queueView": "rework",
+            },
+        })
+
+        self.assertEqual(written["graphicsRequestId"], repair_job_id)
+        self.assertEqual(written["canonicalContentId"], "REPAIR:repair-canary-stable")
+        self.assertEqual(connection.canonical_query_count, 0)
+
+    def test_poetry_please_repair_ingest_is_idempotent_and_routes_by_type(self):
+        connection = MemoryFirestoreLedger()
+        qi_request = {
+            "id": "repair-canary-1",
+            "status": "requested",
+            "action": "recreate",
+            "sourceFlagId": "flag-1",
+            "imageId": "original-qi-1",
+            "contentType": "QI",
+            "author": "Test Author",
+            "book": "Test Book",
+            "title": "Test Poem",
+            "issueReason": "Incorrect text",
+            "requestNote": "Recreate from canonical excerpt",
+            "originalContent": {"quoteText": "Canonical excerpt text"},
+        }
+
+        first = upsert_repair_requests(connection, {"requests": [qi_request]})
+        second = upsert_repair_requests(connection, {"requests": [qi_request]})
+        exc = upsert_repair_requests(connection, {"requests": [{
+            **qi_request,
+            "id": "repair-canary-exc",
+            "imageId": "original-exc-1",
+            "contentType": "EXC",
+        }]})
+
+        self.assertEqual(first["createdCount"], 1)
+        self.assertEqual(first["records"][0]["repairDestination"], "pig")
+        self.assertTrue(first["records"][0]["pigJobId"].startswith("weaver:repair:"))
+        self.assertEqual(second["duplicateCount"], 1)
+        self.assertEqual(connection.handoff_calls.count(first["records"][0]["pigJobId"]), 1)
+        queue_card = queue_card_record(normalize_handoff_record({
+            **connection.handoffs[first["records"][0]["pigJobId"]],
+            "sourcePayload": connection.handoffs[first["records"][0]["pigJobId"]]["sourcePayload"],
+        }))
+        self.assertEqual(queue_card["repairRequestId"], "repair-canary-1")
+        self.assertEqual(queue_card["sourceFlagId"], "flag-1")
+        self.assertEqual(queue_card["originalContentId"], "original-qi-1")
+        self.assertEqual(queue_card["repairInstructions"], "Recreate from canonical excerpt")
+        self.assertEqual(exc["createdCount"], 1)
+        self.assertEqual(exc["records"][0]["repairDestination"], "weaver_review")
+        self.assertFalse(exc["records"][0]["pigJobId"])
+
+    def test_qc_card_preserves_structured_drive_validation_error(self):
+        error = {
+            "failingService": "google_drive",
+            "operation": "drive.files.get?alt=media&supportsAllDrives=true",
+            "fileId": "drive-json-file",
+            "httpStatus": 404,
+        }
+        card = build_graphics_qc_queue_card({
+            "id": "pig-completion-drive-warning",
+            "graphicsRequestId": "weaver:fpi:drive-warning",
+            "contentType": "FPI",
+            "assetUrl": "https://drive.google.com/file/d/png-file/view",
+            "editableProjectAvailable": False,
+            "editableProjectValidationStatus": "drive_inaccessible",
+            "editableProjectValidationError": error,
+        })
+
+        self.assertEqual(card["assetLinkUrl"], "https://drive.google.com/file/d/png-file/view")
+        self.assertFalse(card["editableProjectAvailable"])
+        self.assertEqual(card["editableProjectValidationError"], error)
+
+    def test_rework_queue_splits_qi_and_fpi_lanes(self):
+        with memory_db() as connection:
+            for request_id, content_type in (("weaver:qi:test", "QI"), ("weaver:fpi:test", "FPI")):
+                upsert_graphics_handoff_request(connection, {
+                    "graphicsRequestId": request_id,
+                    "contentType": content_type,
+                    "imageType": content_type,
+                    "sourcePayload": {"quoteText": f"{content_type} text"},
+                })
+                update_graphics_handoff(connection, request_id, {
+                    "handoffStatus": "rejected",
+                    "pigStatus": "not_started",
+                    "qcStatus": "needs_revision",
+                })
+
+            qi_records = get_graphics_handoff_queue(connection, filter_mode="rework", content_type="QI")
+            fpi_records = get_graphics_handoff_queue(connection, filter_mode="rework", content_type="FPI")
+
+        self.assertEqual([record["graphicsRequestId"] for record in qi_records], ["weaver:qi:test"])
+        self.assertEqual([record["graphicsRequestId"] for record in fpi_records], ["weaver:fpi:test"])
+        self.assertEqual(qi_records[0]["queueLane"], "QI")
+        self.assertEqual(fpi_records[0]["reworkLane"], "FPI")
+
+    def test_completion_rejects_conflicting_request_identity(self):
+        with self.assertRaisesRegex(ValueError, "conflicting graphicsRequestId"):
+            assert_completion_identity_consistent({
+                "graphicsRequestId": "weaver:fpi:book-a-poem-a",
+                "sourcePayload": {"requestId": "weaver:fpi:book-b-poem-b"},
+            })
+
+    def test_completion_rejects_conflicting_text_hash(self):
+        with self.assertRaisesRegex(ValueError, "textHash"):
+            assert_completion_identity_consistent({
+                "graphicsRequestId": "weaver:fpi:book-a-poem-a",
+                "textHash": "0" * 64,
+                "sourcePayload": {"quoteText": "Actual poem text"},
+            })
+
+    def test_consecutive_fpi_completions_cannot_cross_link_editable_projects(self):
+        existing = [{
+            "id": "pig-completion-a",
+            "graphicsRequestId": "weaver:fpi:book-a-poem-a",
+            "editableProjectFileId": "drive-editable-shared",
+        }]
+        candidate = {
+            "id": "pig-completion-b",
+            "graphicsRequestId": "weaver:fpi:book-b-poem-b",
+            "editableProjectFileId": "drive-editable-shared",
+        }
+
+        with self.assertRaisesRegex(ValueError, "refusing cross-link"):
+            assert_editable_project_file_not_cross_linked(existing, candidate)
+
+    def test_editable_project_reconciliation_reports_conflicting_identities(self):
+        conflicts = find_editable_project_link_conflicts([
+            {
+                "id": "pig-completion-a",
+                "graphicsRequestId": "weaver:fpi:book-a-poem-a",
+                "editableProjectFileId": "drive-editable-shared",
+            },
+            {
+                "id": "pig-completion-b",
+                "graphicsRequestId": "weaver:fpi:book-b-poem-b",
+                "editableProjectFileId": "drive-editable-shared",
+            },
+        ])
+
+        self.assertEqual(len(conflicts), 1)
+        self.assertEqual(conflicts[0]["editableProjectFileId"], "drive-editable-shared")
+
+    def test_handoff_queue_preserves_canonical_book_key(self):
+        connection = memory_db()
+        upsert_graphics_handoff_request(connection, {
+            "graphicsRequestId": "weaver:qi:book-key",
+            "sourceSystem": "weaver",
+            "sourceStatus": "open",
+            "contentType": "QI",
+            "sourcePayload": {
+                "bookTitle": "Book Display Title",
+                "bookKey": "canonical-book-key",
+                "quoteText": "Test quote",
+            },
+        })
+
+        records = get_graphics_handoff_queue(connection, limit=10, filter_mode="current_titles")
+
+        self.assertEqual(records[0]["bookKey"], "canonical-book-key")
+
     def test_rework_explicitly_reports_missing_editable_project(self):
         record = normalize_handoff_record({
             "graphicsRequestId": "weaver:qi:test",

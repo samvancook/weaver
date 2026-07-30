@@ -13,6 +13,8 @@ const appVersion =
   process.env.K_REVISION ||
   process.env.WEAVER_APP_VERSION ||
   "dev-local";
+const excerptStorageMode = cleanSheetWhitespace(process.env.WEAVER_EXCERPT_STORAGE_MODE).toLowerCase()
+  || (process.env.K_SERVICE ? "dual" : "sheet");
 const spreadsheetId =
   process.env.WEAVER_SPREADSHEET_ID ||
   "1yTCRQKAavimDEJka1-Ice4xlJ1mCm8hq0-G1PTQkTLM";
@@ -1314,12 +1316,14 @@ function buildGraphicsHandoffLedgerRequest(record) {
   );
   const reworkReason = cleanSheetWhitespace(record?.reworkReason || record?.rejectReason || record?.rejectedReason);
   const requestedChanges = String(record?.requestedChanges || record?.qcNote || record?.graphicsQcNote || "");
+  const bookKey = cleanSheetWhitespace(record?.bookKey) || normalizeBookKey(record?.bookTitle);
   return {
     graphicsRequestId: cleanSheetWhitespace(record?.graphicsRequestId),
     sourceSystem: isRework ? "weaver_qc_rework" : "weaver",
     sourceStatus: cleanSheetWhitespace(record?.requestStatus || (isRework ? "rework_requested" : "open")),
     contentType,
     imageType: contentType,
+    bookKey,
     pigProjectId: cleanSheetWhitespace(record?.pigProjectId),
     editableProjectFileId: cleanSheetWhitespace(record?.editableProjectFileId || record?.projectFileId),
     editableProjectUrl: cleanSheetWhitespace(record?.editableProjectUrl),
@@ -1341,6 +1345,7 @@ function buildGraphicsHandoffLedgerRequest(record) {
       author: String(record?.author || ""),
       poemTitle: String(record?.poemTitle || ""),
       bookTitle: String(record?.bookTitle || ""),
+      bookKey,
       quoteText: String(record?.quoteText || ""),
       contentType,
       imageType: contentType,
@@ -3083,8 +3088,71 @@ function buildExcerptGatheringAppendRow(payload = {}) {
   throw new Error("Unsupported excerpt gathering mode.");
 }
 
+function buildExcerptRuntimeRecord(payload = {}, { sourceRow = 0, createdAt = "" } = {}) {
+  const sourceRecordId = cleanSheetWhitespace(payload.recordId || payload.sourceRecordId);
+  if (!sourceRecordId) {
+    throw new Error("Excerpt runtime record requires a source record ID.");
+  }
+  const mode = cleanSheetWhitespace(payload.mode || payload.intakeMode).toLowerCase();
+  const now = new Date().toISOString();
+  return {
+    sourceKind: "weaver",
+    sourceRecordId,
+    sourceRow: parseInt(sourceRow || payload.sourceRow, 10) || 0,
+    intakeMode: mode,
+    intakeLabel: mode === "video" ? "Add a quote from a video" : "Add a quote from a book",
+    submittedBy: cleanSheetWhitespace(payload.email || payload.submittedBy),
+    author: cleanSheetWhitespace(payload.author),
+    poemTitle: cleanSheetWhitespace(payload.title || payload.poemTitle),
+    bookTitle: cleanSheetWhitespace(payload.bookTitle),
+    excerptText: String(payload.quote || payload.excerptText || "").trim(),
+    sourceEvent: cleanSheetWhitespace(payload.eventName || payload.sourceEvent),
+    notes: String(payload.notes || "").trim(),
+    contentType: normalizeExcerptContentType(payload.contentType || "EXC"),
+    releaseCatalog: cleanSheetWhitespace(payload.releaseCatalog),
+    bookShortener: cleanSheetWhitespace(payload.bookShortener),
+    socialMediaHandle: cleanSheetWhitespace(payload.socialMediaHandle || payload.instagramHandle || payload.igHandle),
+    reviewDecision: normalizeReviewDecisionValue(payload.reviewDecision || payload.approval),
+    approvedForUse: isAcceptedExcerptReviewDecision(payload.reviewDecision || payload.approval),
+    approvedForQuoteImage: isTruthyParam(payload.useForQi || payload.graphicsQi),
+    approvedForGraphics: isTruthyParam(payload.useForQi || payload.graphicsQi),
+    useForInt: isTruthyParam(payload.useForInt || payload.photos),
+    excluded: isTruthyParam(payload.excluded),
+    needsCorrection: normalizeReviewDecisionValue(payload.reviewDecision || payload.approval) === "NEEDS_CORRECTION",
+    correctionNote: String(payload.correctionNote || "").trim(),
+    correctedAuthor: cleanSheetWhitespace(payload.correctedAuthor),
+    correctedPoemTitle: cleanSheetWhitespace(payload.correctedTitle || payload.correctedPoemTitle),
+    correctedBookTitle: cleanSheetWhitespace(payload.correctedBookTitle),
+    correctedExcerptText: String(payload.correctedExcerpt || payload.correctedExcerptText || ""),
+    duplicateGroupId: cleanSheetWhitespace(payload.duplicateGroupId),
+    validation: payload.catalogValidation && typeof payload.catalogValidation === "object"
+      ? payload.catalogValidation
+      : {},
+    sourcePayload: payload,
+    createdAt: createdAt || now,
+    updatedAt: now
+  };
+}
+
+async function shadowExcerptRecordsToRuntime(records) {
+  if (excerptStorageMode === "sheet" || !records.length) {
+    return { ok: true, skipped: true, count: 0 };
+  }
+  try {
+    return await syncWeaverRuntimeDb("upsert_excerpt_records", { records });
+  } catch (error) {
+    if (excerptStorageMode === "firestore") {
+      throw error;
+    }
+    return { ok: false, shadowWriteFailed: true, error: error.message };
+  }
+}
+
 async function appendExcerptGatheringRow(payload = {}) {
-  const rowValues = buildExcerptGatheringAppendRow(payload);
+  const sourceRecordId = cleanSheetWhitespace(payload.recordId || payload.sourceRecordId)
+    || `weaver:${randomUUID()}`;
+  const normalizedPayload = { ...payload, recordId: sourceRecordId };
+  const rowValues = buildExcerptGatheringAppendRow(normalizedPayload);
   const response = await appendSheetValuesServer(`'${sourceSheetName.replace(/'/g, "''")}'!A:S`, [rowValues]);
   const updatedRange = cleanSheetWhitespace(response?.updates?.updatedRange || "");
   const rowMatch = updatedRange.match(/![A-Z]+(\d+):/);
@@ -3111,7 +3179,6 @@ async function appendExcerptGatheringRow(payload = {}) {
         values: [[cleanSheetWhitespace(payload.bookTitle)]]
       }
     ];
-    const sourceRecordId = cleanSheetWhitespace(payload.recordId);
     if (sourceRecordId) {
       writes.unshift({
         range: `'${sourceSheetName.replace(/'/g, "''")}'!${toA1Column(config.recordId)}${rowNumber}`,
@@ -3121,12 +3188,18 @@ async function appendExcerptGatheringRow(payload = {}) {
     await batchUpdateSheetValuesServer(writes);
   }
 
+  const runtimeDb = await shadowExcerptRecordsToRuntime([
+    buildExcerptRuntimeRecord(normalizedPayload, { sourceRow: rowNumber })
+  ]);
+
   return {
     ok: true,
     version: `${appVersion}-service-account`,
     rowNumber,
+    recordId: sourceRecordId,
     intakeMode: mode,
-    updatedRange
+    updatedRange,
+    runtimeDb
   };
 }
 
@@ -3532,6 +3605,170 @@ async function getPoetryPleaseHandoffRecords(bookTitle = "") {
 async function getFailedPoetryPleaseHandoffRecords(bookTitle = "") {
   const records = await getPoetryPleaseHandoffRecords(bookTitle);
   return records.filter(record => cleanSheetWhitespace(record.poetryPleaseStatus).toUpperCase() === "FAILED");
+}
+
+async function fetchPoetryPleaseRepairRequests() {
+  if (!poetryPleaseApiKey) {
+    return { ok: false, requests: [], error: "missing_poetry_please_api_key", httpStatus: 0 };
+  }
+  const url = new URL(`${poetryPleaseApiUrl.replace(/\/$/, "")}/internal/repairRequests`);
+  url.searchParams.set("status", "requested");
+  const response = await fetch(url, {
+    headers: {
+      Accept: "application/json",
+      "x-api-key": poetryPleaseApiKey
+    },
+    signal: AbortSignal.timeout(15000)
+  });
+  const result = await response.json().catch(() => ({}));
+  return {
+    ...result,
+    ok: response.ok && result.ok === true,
+    requests: Array.isArray(result.requests) ? result.requests : [],
+    error: response.ok ? cleanSheetWhitespace(result.error) : (result.error || `repairRequests failed with ${response.status}`),
+    httpStatus: response.status
+  };
+}
+
+async function updatePoetryPleaseRepairStatus(repairRequestId, status, note = "") {
+  if (!poetryPleaseApiKey) {
+    return { ok: false, error: "missing_poetry_please_api_key", httpStatus: 0 };
+  }
+  const response = await fetch(
+    `${poetryPleaseApiUrl.replace(/\/$/, "")}/internal/repairRequests/${encodeURIComponent(repairRequestId)}/status`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": poetryPleaseApiKey
+      },
+      body: JSON.stringify({ status, ...(note ? { note } : {}) }),
+      signal: AbortSignal.timeout(15000)
+    }
+  );
+  const result = await response.json().catch(() => ({}));
+  return {
+    ...result,
+    ok: response.ok && result.ok !== false,
+    error: response.ok ? cleanSheetWhitespace(result.error) : (result.error || `repair status failed with ${response.status}`),
+    httpStatus: response.status
+  };
+}
+
+async function persistRepairStatusResponse(repairRequestId, status, response, note = "") {
+  const successful = Boolean(response?.ok);
+  return syncWeaverRuntimeDb("update_repair_request", {
+    repairRequestId,
+    update: {
+      ...(successful ? { poetryPleaseStatus: status } : {}),
+      latestPoetryPleaseResponse: {
+        ...response,
+        operation: `set_status:${status}`,
+        at: new Date().toISOString()
+      },
+      retryable: !successful,
+      lastError: successful ? "" : cleanSheetWhitespace(response?.error || "poetry_please_status_failed"),
+      historyEvent: successful ? `poetry_please_${status}` : "poetry_please_status_failed",
+      historyNote: note || cleanSheetWhitespace(response?.error)
+    }
+  });
+}
+
+async function syncPoetryPleaseRepairRequests({ limit = 1, allowBulk = false } = {}) {
+  const fetched = await fetchPoetryPleaseRepairRequests();
+  if (!fetched.ok) {
+    return {
+      ok: false,
+      fetchedCount: fetched.requests.length,
+      createdCount: 0,
+      updatedCount: 0,
+      duplicateCount: 0,
+      blockedCount: 0,
+      errorCount: 1,
+      error: fetched.error,
+      poetryPleaseResponse: fetched
+    };
+  }
+
+  const bulkEnabled = cleanSheetWhitespace(process.env.WEAVER_REPAIR_BULK_ENABLED).toLowerCase() === "true";
+  const requestedLimit = Math.max(1, Math.min(Number(limit || 1), 100));
+  const effectiveLimit = allowBulk && bulkEnabled ? requestedLimit : 1;
+  const selected = fetched.requests.slice(0, effectiveLimit);
+  const runtime = await syncWeaverRuntimeDb("upsert_repair_requests", { requests: selected });
+  const statusResults = [];
+  for (const accepted of (runtime.acceptedForStatusSync || [])) {
+    const note = accepted.destination === "pig"
+      ? `Accepted by Weaver; waiting on P.I.G. job ${accepted.pigJobId}.`
+      : "Accepted by Weaver; routed to manual review because the content type is not graphics-backed.";
+    const response = await updatePoetryPleaseRepairStatus(
+      accepted.repairRequestId,
+      "in_progress",
+      note
+    );
+    await persistRepairStatusResponse(accepted.repairRequestId, "in_progress", response, note);
+    statusResults.push({
+      repairRequestId: accepted.repairRequestId,
+      status: "in_progress",
+      ok: Boolean(response.ok),
+      httpStatus: Number(response.httpStatus || 0),
+      error: cleanSheetWhitespace(response.error)
+    });
+  }
+  const statusErrorCount = statusResults.filter(result => !result.ok).length;
+  return {
+    ok: Boolean(runtime.ok) && statusErrorCount === 0,
+    canaryMode: !(allowBulk && bulkEnabled),
+    bulkEnabled,
+    fetchedCount: fetched.requests.length,
+    processedCount: selected.length,
+    deferredCount: Math.max(0, fetched.requests.length - selected.length),
+    createdCount: Number(runtime.createdCount || 0),
+    updatedCount: Number(runtime.updatedCount || 0),
+    duplicateCount: Number(runtime.duplicateCount || 0),
+    blockedCount: Number(runtime.blockedCount || 0),
+    errorCount: Number(runtime.errorCount || 0) + statusErrorCount,
+    records: runtime.records || [],
+    errors: runtime.errors || [],
+    statusResults
+  };
+}
+
+async function returnRepairToPoetryPlease(repairReturn) {
+  const note = [
+    `Replacement ${cleanSheetWhitespace(repairReturn.replacementAssetId) || "asset"}`,
+    cleanSheetWhitespace(repairReturn.replacementAssetLink),
+    `Weaver/P.I.G. job ${cleanSheetWhitespace(repairReturn.pigJobId)}`,
+    cleanSheetWhitespace(repairReturn.pigCompletionId)
+  ].filter(Boolean).join(" | ");
+  const response = await updatePoetryPleaseRepairStatus(
+    repairReturn.repairRequestId,
+    "returned",
+    note
+  );
+  await persistRepairStatusResponse(
+    repairReturn.repairRequestId,
+    "returned",
+    response,
+    note
+  );
+  if (response.ok) {
+    await syncWeaverRuntimeDb("update_repair_request", {
+      repairRequestId: repairReturn.repairRequestId,
+      update: {
+        weaverRepairStatus: "returned",
+        returnedAt: new Date().toISOString(),
+        retryable: false,
+        historyEvent: "replacement_returned_to_poetry_please",
+        historyNote: note
+      }
+    });
+  }
+  return {
+    repairRequestId: repairReturn.repairRequestId,
+    ok: Boolean(response.ok),
+    httpStatus: Number(response.httpStatus || 0),
+    error: cleanSheetWhitespace(response.error)
+  };
 }
 
 async function handoffApprovedGraphicsToPoetryPlease(records = []) {
@@ -4483,7 +4720,10 @@ function summarizeGraphicsHandoffBooks(records = []) {
     .sort((left, right) => left.bookTitle.localeCompare(right.bookTitle));
 }
 
-const COVERAGE_NEEDS_TARGET_COUNT = 25;
+const COVERAGE_NEEDS_DEFAULT_TARGET_COUNT = 10;
+const COVERAGE_NEEDS_CONTENT_TYPES = ["INT", "FPI"];
+const COVERAGE_NEEDS_CACHE_TTL_MS = 60_000;
+let poetryPleaseCoverageCache = null;
 const COVERAGE_NEEDS_EXCLUDED_BOOK_KEYS = new Set([
   "short form contest may 2026",
   "smoke test ledger 1778781334"
@@ -4506,7 +4746,7 @@ function parseOptionalRating(value) {
 function getCoveragePriority(record = {}, bookSummary = {}) {
   const excerptRating = parseOptionalRating(record.excerptRating);
   const poemRating = parseOptionalRating(record.poemRating);
-  if (cleanSheetWhitespace(record.source).toLowerCase() === "weaver_qc_rework") {
+  if (isCoverageReworkRecord(record)) {
     return {
       priorityTier: 0,
       priorityScore: 100000 + Number(bookSummary.remainingActionableNeeded || 0)
@@ -4530,6 +4770,12 @@ function getCoveragePriority(record = {}, bookSummary = {}) {
   };
 }
 
+function isCoverageReworkRecord(record = {}) {
+  return cleanSheetWhitespace(record.queueView).toLowerCase() === "rework"
+    || cleanSheetWhitespace(record.nextAction).toLowerCase() === "rework"
+    || cleanSheetWhitespace(record.source || record.sourceSystem).toLowerCase() === "weaver_qc_rework";
+}
+
 function getCoverageRequestId(record = {}) {
   return cleanSheetWhitespace(record.graphicsRequestId)
     || buildWeaverGraphicsRequestId({
@@ -4543,7 +4789,7 @@ function getCoverageRequestId(record = {}) {
 
 function buildCoverageQueueRecord(record = {}, bookSummary = {}) {
   const priority = getCoveragePriority(record, bookSummary);
-  const isRework = cleanSheetWhitespace(record.source).toLowerCase() === "weaver_qc_rework";
+  const isRework = isCoverageReworkRecord(record);
   return {
     queueView: "coverage_needs",
     isActionable: true,
@@ -4557,12 +4803,28 @@ function buildCoverageQueueRecord(record = {}, bookSummary = {}) {
     text: String(record.quoteText || record.text || ""),
     author: String(record.author || ""),
     poemTitle: String(record.poemTitle || ""),
+    bookKey: bookSummary.bookKey || normalizeBookKey(record.bookTitle),
     approvedCount: bookSummary.approvedCount || 0,
-    poetryPleaseQiCount: bookSummary.poetryPleaseQiCount ?? null,
+    intCount: bookSummary.intCount ?? null,
+    fpiCount: bookSummary.fpiCount ?? null,
+    combinedCount: bookSummary.combinedCount ?? null,
+    coverageCountSource: bookSummary.coverageCountSource || "weaver_fallback",
+    coverageCountsAuthoritative: Boolean(bookSummary.coverageCountsAuthoritative),
+    coverageFallbackReason: bookSummary.coverageFallbackReason || "",
     weaverCompletedQiCount: bookSummary.weaverCompletedQiCount || 0,
     pendingQcCount: bookSummary.pendingQcCount || 0,
-    targetCount: COVERAGE_NEEDS_TARGET_COUNT,
+    inProgressCount: bookSummary.inProgressCount || 0,
+    reworkCount: bookSummary.reworkCount || 0,
+    target: bookSummary.targetCount || COVERAGE_NEEDS_DEFAULT_TARGET_COUNT,
+    targetCount: bookSummary.targetCount || COVERAGE_NEEDS_DEFAULT_TARGET_COUNT,
+    remaining: bookSummary.remainingApprovedNeeded || 0,
+    complete: Boolean(bookSummary.complete),
     remainingActionableNeeded: bookSummary.remainingActionableNeeded || 0,
+    remainingGenerationNeeded: bookSummary.remainingGenerationNeeded || 0,
+    actionableReworkCount: bookSummary.actionableReworkCount || 0,
+    acceptableContentTypes: [...COVERAGE_NEEDS_CONTENT_TYPES],
+    coverageLabel: "INT / FPI coverage",
+    queueLabel: "INT / FPI coverage",
     priorityTier: priority.priorityTier,
     priorityScore: priority.priorityScore,
     excerptRating: parseOptionalRating(record.excerptRating),
@@ -4595,18 +4857,40 @@ function isCoverageInProgressLedgerState(record = {}) {
     || ["claimed"].includes(handoffStatus);
 }
 
-async function fetchPoetryPleaseQiCoverageCounts() {
+function normalizeCoverageBookKey(value) {
+  return cleanSheetWhitespace(value).toLowerCase();
+}
+
+function getCoverageRecordBookKey(record = {}) {
+  return normalizeCoverageBookKey(record.bookKey) || normalizeBookKey(record.bookTitle);
+}
+
+async function fetchPoetryPleaseIntFpiCoverageCounts() {
+  if (poetryPleaseCoverageCache?.expiresAt > Date.now()) {
+    return {
+      ...poetryPleaseCoverageCache.value,
+      source: "poetry_please_cache",
+      cached: true
+    };
+  }
   if (!poetryPleaseApiKey) {
-    return { countsByBookKey: new Map(), ok: false, error: "missing_poetry_please_api_key" };
+    return {
+      countsByBookKey: new Map(),
+      ok: false,
+      lane: "INT_FPI",
+      defaultTarget: COVERAGE_NEEDS_DEFAULT_TARGET_COUNT,
+      error: "missing_poetry_please_api_key"
+    };
   }
   try {
     const url = new URL(`${poetryPleaseApiUrl.replace(/\/$/, "")}/internal/coverageCounts`);
-    url.searchParams.set("type", "QI");
+    url.searchParams.set("lane", "INT_FPI");
     const response = await fetch(url, {
       headers: {
         Accept: "application/json",
         "x-api-key": poetryPleaseApiKey
-      }
+      },
+      signal: AbortSignal.timeout(12000)
     });
     const result = await response.json().catch(() => ({}));
     if (!response.ok || !result.ok) {
@@ -4614,42 +4898,61 @@ async function fetchPoetryPleaseQiCoverageCounts() {
     }
     const countsByBookKey = new Map();
     (Array.isArray(result.counts) ? result.counts : []).forEach(entry => {
-      const count = Number(entry.count || 0);
-      const keys = [
-        normalizeBookKey(entry.bookKey),
-        normalizeBookKey(entry.bookTitle),
-        cleanSheetWhitespace(entry.bookTitle).includes(":")
-          ? normalizeBookKey(cleanSheetWhitespace(entry.bookTitle).split(/\s*:\s*/, 1)[0])
-          : ""
-      ].filter(Boolean);
-      keys.forEach(bookKey => {
-        countsByBookKey.set(bookKey, Math.max(Number(countsByBookKey.get(bookKey) || 0), count));
+      const bookKey = normalizeCoverageBookKey(entry.bookKey);
+      if (!bookKey) return;
+      const intCount = Math.max(0, Number(entry.intCount || 0));
+      const fpiCount = Math.max(0, Number(entry.fpiCount || 0));
+      const combinedCount = Math.max(0, Number(entry.combinedCount ?? (intCount + fpiCount)));
+      const target = Math.max(0, Number(entry.target ?? result.target ?? COVERAGE_NEEDS_DEFAULT_TARGET_COUNT));
+      countsByBookKey.set(bookKey, {
+        bookKey: cleanSheetWhitespace(entry.bookKey),
+        bookTitle: cleanSheetWhitespace(entry.bookTitle),
+        intCount,
+        fpiCount,
+        combinedCount,
+        target,
+        remaining: Math.max(0, Number(entry.remaining ?? (target - combinedCount))),
+        complete: entry.complete === true || combinedCount >= target
       });
     });
-    return {
+    const coverage = {
       countsByBookKey,
       ok: true,
       source: "poetry_please",
+      lane: "INT_FPI",
+      defaultTarget: Math.max(0, Number(result.target ?? COVERAGE_NEEDS_DEFAULT_TARGET_COUNT)),
+      entryCount: countsByBookKey.size,
       snapshotMeta: result.snapshotMeta || null
     };
+    poetryPleaseCoverageCache = {
+      expiresAt: Date.now() + COVERAGE_NEEDS_CACHE_TTL_MS,
+      value: coverage
+    };
+    return coverage;
   } catch (error) {
-    console.warn("[coverage_needs] Poetry Please QI count fallback:", error.message);
-    return { countsByBookKey: new Map(), ok: false, error: error.message };
+    console.warn("[coverage_needs] Poetry Please INT/FPI count fallback:", error.message);
+    return {
+      countsByBookKey: new Map(),
+      ok: false,
+      lane: "INT_FPI",
+      defaultTarget: COVERAGE_NEEDS_DEFAULT_TARGET_COUNT,
+      error: error.message
+    };
   }
 }
 
-function buildCoverageBookSummaries({ openRecords = [], pendingQcRecords = [], completedRecords = [], reworkRecords = [], ledgerByRequestId = {}, poetryPleaseQiCountsByBookKey = new Map() } = {}) {
+function buildCoverageBookSummaries({ openRecords = [], pendingQcRecords = [], completedRecords = [], reworkRecords = [], ledgerByRequestId = {}, poetryPleaseCoverage = {} } = {}) {
   const byKey = new Map();
-  const ensure = bookTitle => {
-    const title = cleanSheetWhitespace(bookTitle);
-    const key = normalizeBookKey(title);
+  const ensure = record => {
+    const title = cleanSheetWhitespace(record?.bookTitle || record);
+    const key = typeof record === "string" ? normalizeBookKey(title) : getCoverageRecordBookKey(record);
     if (!key) return null;
     if (isExcludedCoverageNeedsBook(title)) return null;
     if (!byKey.has(key)) {
       byKey.set(key, {
         bookTitle: title,
         bookKey: key,
-        targetCount: COVERAGE_NEEDS_TARGET_COUNT,
+        targetCount: poetryPleaseCoverage.defaultTarget || COVERAGE_NEEDS_DEFAULT_TARGET_COUNT,
         approvedCount: 0,
         weaverCompletedQiCount: 0,
         pendingQcCount: 0,
@@ -4663,86 +4966,133 @@ function buildCoverageBookSummaries({ openRecords = [], pendingQcRecords = [], c
     return summary;
   };
 
+  const completedRequestIds = new Set();
   completedRecords.forEach(record => {
     if (!isApprovedCoverageGraphic(record)) return;
-    const summary = ensure(record.bookTitle);
+    const requestId = getCoverageRequestId(record);
+    if (completedRequestIds.has(requestId)) return;
+    completedRequestIds.add(requestId);
+    const summary = ensure(record);
     if (summary) summary.weaverCompletedQiCount += 1;
   });
-  pendingQcRecords.forEach(record => {
-    if (!isPendingCoverageQcGraphic(record)) return;
-    const summary = ensure(record.bookTitle);
-    if (summary) summary.pendingQcCount += 1;
-  });
-  reworkRecords.forEach(record => {
-    const summary = ensure(record.bookTitle);
-    if (summary) summary.reworkCount += 1;
-  });
-  openRecords.forEach(record => {
-    const summary = ensure(record.bookTitle);
-    if (!summary) return;
-    const ledger = ledgerByRequestId[getCoverageRequestId(record)] || {};
-    if (isCoverageInProgressLedgerState(ledger)) {
-      summary.inProgressCount += 1;
-    } else {
-      summary.candidateCount += 1;
+
+  const activeByRequestId = new Map();
+  const setActiveState = (record, state, priority) => {
+    const requestId = getCoverageRequestId(record);
+    const existing = activeByRequestId.get(requestId);
+    if (!existing || priority > existing.priority) {
+      activeByRequestId.set(requestId, { record, state, priority });
     }
+  };
+  openRecords.forEach(record => {
+    const ledger = ledgerByRequestId[getCoverageRequestId(record)] || {};
+    setActiveState(record, isCoverageInProgressLedgerState(ledger) ? "in_progress" : "candidate", 1);
+  });
+  pendingQcRecords.forEach(record => {
+    if (isPendingCoverageQcGraphic(record)) setActiveState(record, "pending_qc", 2);
+  });
+  reworkRecords.forEach(record => setActiveState(record, "rework", 3));
+  activeByRequestId.forEach(({ record, state }) => {
+    const summary = ensure(record);
+    if (!summary) return;
+    if (state === "pending_qc") summary.pendingQcCount += 1;
+    else if (state === "in_progress") summary.inProgressCount += 1;
+    else if (state === "rework") summary.reworkCount += 1;
+    else summary.candidateCount += 1;
   });
 
   return Array.from(byKey.values()).map(summary => {
-    const poetryPleaseQiCount = poetryPleaseQiCountsByBookKey.get(summary.bookKey);
-    summary.approvedCount = Number.isFinite(poetryPleaseQiCount)
-      ? poetryPleaseQiCount
+    const coverageEntry = poetryPleaseCoverage.countsByBookKey?.get(summary.bookKey);
+    const endpointSucceeded = Boolean(poetryPleaseCoverage.ok);
+    const hasCanonicalMatch = Boolean(coverageEntry);
+    const coverageCountsAuthoritative = endpointSucceeded && hasCanonicalMatch;
+    summary.targetCount = coverageEntry?.target || poetryPleaseCoverage.defaultTarget || COVERAGE_NEEDS_DEFAULT_TARGET_COUNT;
+    summary.intCount = coverageCountsAuthoritative ? coverageEntry.intCount : null;
+    summary.fpiCount = coverageCountsAuthoritative ? coverageEntry.fpiCount : null;
+    summary.combinedCount = coverageCountsAuthoritative ? coverageEntry.combinedCount : null;
+    summary.approvedCount = coverageCountsAuthoritative
+      ? summary.combinedCount
       : summary.weaverCompletedQiCount;
-    const remainingApprovedNeeded = Math.max(0, COVERAGE_NEEDS_TARGET_COUNT - summary.approvedCount);
-    const remainingActionableNeeded = Math.max(
-      0,
-      COVERAGE_NEEDS_TARGET_COUNT - summary.approvedCount - summary.pendingQcCount - summary.inProgressCount
-    );
-    const nextAction = summary.reworkCount > 0
+    const remainingApprovedNeeded = coverageCountsAuthoritative
+      ? coverageEntry.remaining
+      : Math.max(0, summary.targetCount - summary.approvedCount);
+    const remainingActionableNeeded = coverageCountsAuthoritative
+      ? Math.max(0, remainingApprovedNeeded - summary.pendingQcCount - summary.inProgressCount)
+      : 0;
+    const actionableReworkCount = Math.min(summary.reworkCount, remainingActionableNeeded);
+    const remainingGenerationNeeded = Math.max(0, remainingActionableNeeded - actionableReworkCount);
+    const nextAction = actionableReworkCount > 0
       ? "rework"
-      : (remainingActionableNeeded > 0 ? "generate" : "hold");
+      : (remainingGenerationNeeded > 0 ? "generate" : "hold");
     return {
       bookTitle: summary.bookTitle,
       bookKey: summary.bookKey,
-      targetCount: COVERAGE_NEEDS_TARGET_COUNT,
+      target: summary.targetCount,
+      targetCount: summary.targetCount,
       approvedCount: summary.approvedCount,
-      poetryPleaseQiCount: Number.isFinite(poetryPleaseQiCount) ? poetryPleaseQiCount : null,
+      intCount: summary.intCount,
+      fpiCount: summary.fpiCount,
+      combinedCount: summary.combinedCount,
+      complete: coverageCountsAuthoritative ? Boolean(coverageEntry.complete) : remainingApprovedNeeded === 0,
+      acceptableContentTypes: [...COVERAGE_NEEDS_CONTENT_TYPES],
+      coverageLabel: "INT / FPI coverage",
+      coverageCountSource: coverageCountsAuthoritative ? "poetry_please" : "weaver_completed_int_only_fallback",
+      coverageCountsAuthoritative,
+      coverageFallbackReason: coverageCountsAuthoritative
+        ? ""
+        : (endpointSucceeded ? "canonical_book_key_not_found" : (poetryPleaseCoverage.error || "coverage_endpoint_failed")),
       weaverCompletedQiCount: summary.weaverCompletedQiCount,
       pendingQcCount: summary.pendingQcCount,
       inProgressCount: summary.inProgressCount,
       reworkCount: summary.reworkCount,
+      actionableReworkCount,
+      remaining: remainingApprovedNeeded,
       remainingApprovedNeeded,
       remainingActionableNeeded,
-      statusLabel: `${summary.approvedCount} approved + ${summary.pendingQcCount} pending / ${COVERAGE_NEEDS_TARGET_COUNT}`,
+      remainingGenerationNeeded,
+      statusLabel: `${summary.approvedCount} approved + ${summary.pendingQcCount} pending / ${summary.targetCount}`,
       nextAction
     };
-  }).filter(summary => summary.remainingActionableNeeded > 0);
+  }).filter(summary => summary.remainingApprovedNeeded > 0);
+}
+
+async function getAllRuntimeHandoffQueueRecords(filter = "all") {
+  const records = [];
+  let cursor = 0;
+  for (let page = 0; page < 10; page += 1) {
+    const result = await syncWeaverRuntimeDb("get_handoff_queue", {
+      filter,
+      limit: 500,
+      cursor
+    });
+    const pageRecords = Array.isArray(result?.records) ? result.records : [];
+    records.push(...pageRecords);
+    const nextCursor = Number(result?.nextCursor);
+    if (!Number.isFinite(nextCursor) || nextCursor <= cursor || pageRecords.length === 0) break;
+    cursor = nextCursor;
+  }
+  return records;
 }
 
 async function getCoverageNeedsView(filterMode = "coverage_needs") {
-  const [allOpenRecords, pendingQcRecords, completedRows, reworkRecords] = await Promise.all([
-    getPigGraphicsRequests("all"),
-    getPendingGraphicsQcRecords({ includeCleanup: false }),
-    readPigCompletedGraphicsRows(),
-    getPigReworkRequests(filterMode)
+  const [handoffRecords, pendingQcResult, poetryPleaseCoverage] = await Promise.all([
+    getAllRuntimeHandoffQueueRecords("all"),
+    syncWeaverRuntimeDb("get_pending_graphics_qc", { includeCleanup: false }),
+    fetchPoetryPleaseIntFpiCoverageCounts()
   ]);
-  const completedRecords = completedRows
-    .map((row, index) => buildPigQcRecordFromSheetRow(row, index))
-    .filter(Boolean);
-  const openRecords = allOpenRecords.filter(record => cleanSheetWhitespace(record.source).toLowerCase() !== "weaver_qc_rework");
-  const requestIds = openRecords.map(getCoverageRequestId).filter(Boolean);
-  const [ledgerByRequestId, poetryPleaseCoverage] = await Promise.all([
-    getRuntimeGraphicsHandoffState(requestIds),
-    fetchPoetryPleaseQiCoverageCounts()
-  ]);
-  const poetryPleaseQiCountsByBookKey = poetryPleaseCoverage.countsByBookKey || new Map();
+  const pendingQcRecords = Array.isArray(pendingQcResult?.records) ? pendingQcResult.records : [];
+  const reworkRecords = handoffRecords.filter(isCoverageReworkRecord);
+  const openRecords = handoffRecords.filter(record => !isCoverageReworkRecord(record));
+  const ledgerByRequestId = Object.fromEntries(
+    handoffRecords.map(record => [getCoverageRequestId(record), record])
+  );
   const books = buildCoverageBookSummaries({
     openRecords,
     pendingQcRecords,
-    completedRecords,
+    completedRecords: [],
     reworkRecords,
     ledgerByRequestId,
-    poetryPleaseQiCountsByBookKey
+    poetryPleaseCoverage
   }).sort((left, right) => {
     if (left.nextAction === "rework" && right.nextAction !== "rework") return -1;
     if (left.nextAction !== "rework" && right.nextAction === "rework") return 1;
@@ -4750,17 +5100,37 @@ async function getCoverageNeedsView(filterMode = "coverage_needs") {
       || left.bookTitle.localeCompare(right.bookTitle);
   });
   const bookByKey = Object.fromEntries(books.map(book => [book.bookKey, book]));
-  const freshRecords = openRecords
+  const freshCandidates = openRecords
     .filter(record => {
-      const summary = bookByKey[normalizeBookKey(record.bookTitle)];
-      if (!summary || summary.remainingActionableNeeded <= 0) return false;
+      const summary = bookByKey[getCoverageRecordBookKey(record)];
+      if (!summary || summary.remainingGenerationNeeded <= 0) return false;
       const ledger = ledgerByRequestId[getCoverageRequestId(record)] || {};
       return !isCoverageInProgressLedgerState(ledger);
     })
-    .map(record => buildCoverageQueueRecord(record, bookByKey[normalizeBookKey(record.bookTitle)]));
+    .map(record => buildCoverageQueueRecord(record, bookByKey[getCoverageRecordBookKey(record)]))
+    .sort((left, right) => left.priorityTier - right.priorityTier
+      || right.priorityScore - left.priorityScore
+      || Number(left.queueSheetRow || left.sourceSheetRow || 0) - Number(right.queueSheetRow || right.sourceSheetRow || 0));
+  const freshSlotsByBookKey = new Map(books.map(book => [book.bookKey, book.remainingGenerationNeeded]));
+  const freshRecords = freshCandidates.filter(record => {
+    const slots = Number(freshSlotsByBookKey.get(record.bookKey) || 0);
+    if (slots <= 0) return false;
+    freshSlotsByBookKey.set(record.bookKey, slots - 1);
+    return true;
+  });
+  const reworkSlotsByBookKey = new Map(books.map(book => [book.bookKey, book.actionableReworkCount]));
   const reworkQueueRecords = reworkRecords
-    .filter(record => bookByKey[normalizeBookKey(record.bookTitle)])
-    .map(record => buildCoverageQueueRecord(record, bookByKey[normalizeBookKey(record.bookTitle)]));
+    .filter(record => bookByKey[getCoverageRecordBookKey(record)])
+    .map(record => buildCoverageQueueRecord(record, bookByKey[getCoverageRecordBookKey(record)]))
+    .sort((left, right) => left.priorityTier - right.priorityTier
+      || right.priorityScore - left.priorityScore
+      || Number(left.queueSheetRow || left.sourceSheetRow || 0) - Number(right.queueSheetRow || right.sourceSheetRow || 0))
+    .filter(record => {
+      const slots = Number(reworkSlotsByBookKey.get(record.bookKey) || 0);
+      if (slots <= 0) return false;
+      reworkSlotsByBookKey.set(record.bookKey, slots - 1);
+      return true;
+    });
   const records = [...reworkQueueRecords, ...freshRecords]
     .sort((left, right) => left.priorityTier - right.priorityTier
       || right.priorityScore - left.priorityScore
@@ -4774,6 +5144,13 @@ async function getCoverageNeedsView(filterMode = "coverage_needs") {
     poetryPleaseCoverage: {
       ok: Boolean(poetryPleaseCoverage.ok),
       source: poetryPleaseCoverage.source || "weaver_fallback",
+      lane: "INT_FPI",
+      label: "INT / FPI coverage",
+      target: poetryPleaseCoverage.defaultTarget || COVERAGE_NEEDS_DEFAULT_TARGET_COUNT,
+      entryCount: poetryPleaseCoverage.entryCount || 0,
+      cached: Boolean(poetryPleaseCoverage.cached),
+      fallbackActive: !poetryPleaseCoverage.ok || books.some(book => !book.coverageCountsAuthoritative),
+      fallbackBookCount: books.filter(book => !book.coverageCountsAuthoritative).length,
       error: poetryPleaseCoverage.error || "",
       snapshotMeta: poetryPleaseCoverage.snapshotMeta || null
     },
@@ -5190,6 +5567,37 @@ async function upsertPigCompletedGraphics(completions) {
     return { ok: false, error: "No completed graphics provided." };
   }
 
+  const validatedCompletions = [];
+  const editableProjectValidationWarnings = [];
+  for (const completion of completions) {
+    try {
+      validatedCompletions.push(await validateCompletionEditableProjectIdentity(completion));
+    } catch (error) {
+      const hasPngCompletion = Boolean(
+        cleanSheetWhitespace(completion.assetUrl || completion.assetFileId || completion.driveFileId)
+      );
+      if (!hasPngCompletion) {
+        throw error;
+      }
+      const warning = editableProjectValidationWarning(error, completion);
+      editableProjectValidationWarnings.push(warning);
+      validatedCompletions.push({
+        ...completion,
+        candidatePigProjectId: cleanSheetWhitespace(completion.pigProjectId),
+        candidateEditableProjectFileId: cleanSheetWhitespace(
+          completion.editableProjectFileId || completion.projectFileId
+        ),
+        candidateEditableProjectUrl: cleanSheetWhitespace(completion.editableProjectUrl),
+        pigProjectId: "",
+        editableProjectFileId: "",
+        editableProjectUrl: "",
+        editableProjectAvailable: false,
+        editableProjectValidationStatus: warning.httpStatus ? "drive_inaccessible" : "identity_conflict",
+        editableProjectValidationError: warning
+      });
+    }
+  }
+
   const rows = await readPigCompletedGraphicsRows();
   const existingById = new Map();
   rows.forEach((row, index) => {
@@ -5201,7 +5609,7 @@ async function upsertPigCompletedGraphics(completions) {
   const updates = [];
   const appendRows = [];
 
-  completions.forEach(completion => {
+  validatedCompletions.forEach(completion => {
     const completionId = buildPigCompletionId(completion);
     const existing = existingById.get(completionId);
     const rowValues = buildPigCompletionRowValues({ ...completion, completionId }, existing?.row || []);
@@ -5217,7 +5625,7 @@ async function upsertPigCompletedGraphics(completions) {
 
   let runtimeDb = { ok: false, skipped: true };
   try {
-    runtimeDb = await syncWeaverRuntimeDb("upsert_completions", { completions });
+    runtimeDb = await syncWeaverRuntimeDb("upsert_completions", { completions: validatedCompletions });
   } catch (error) {
     runtimeDb = { ok: false, error: error.message };
   }
@@ -5238,12 +5646,28 @@ async function upsertPigCompletedGraphics(completions) {
     sheetSync.error = error.message;
   }
 
+  const repairStatusSync = [];
+  for (const repairReturn of (runtimeDb.repairReturns || [])) {
+    try {
+      repairStatusSync.push(await returnRepairToPoetryPlease(repairReturn));
+    } catch (error) {
+      repairStatusSync.push({
+        repairRequestId: cleanSheetWhitespace(repairReturn.repairRequestId),
+        ok: false,
+        httpStatus: Number(error?.responseStatus || 0),
+        error: error.message
+      });
+    }
+  }
+
   return {
     ok: true,
     version: `${appVersion}-service-account`,
     savedCount: completions.length,
+    editableProjectValidationWarnings,
     runtimeDb,
-    sheetSync
+    sheetSync,
+    repairStatusSync
   };
 }
 
@@ -5301,11 +5725,16 @@ async function saveReviewsToSheets(updates) {
   }
 
   await batchUpdateSheetValuesServer(requests);
+  const enrichedUpdates = await Promise.all(validUpdates.map(enrichAcceptedExcerptUpdate));
+  const runtimeDb = await shadowExcerptRecordsToRuntime(
+    enrichedUpdates.map(update => buildExcerptRuntimeRecord(update, { sourceRow: update.sourceRow }))
+  );
   const excerptHandoffs = await syncAcceptedExcerptHandoffs(validUpdates);
   return {
     ok: true,
     version: `${appVersion}-service-account`,
     savedCount: validUpdates.length,
+    runtimeDb,
     excerptHandoffs
   };
 }
@@ -5317,12 +5746,17 @@ async function saveSingleReviewToSheets(update) {
   }
 
   await batchUpdateSheetValuesServer(requests);
+  const enrichedUpdate = await enrichAcceptedExcerptUpdate(update);
+  const runtimeDb = await shadowExcerptRecordsToRuntime([
+    buildExcerptRuntimeRecord(enrichedUpdate, { sourceRow: enrichedUpdate.sourceRow })
+  ]);
   const excerptHandoffs = await syncAcceptedExcerptHandoffs([update]);
   return {
     ok: true,
     version: `${appVersion}-service-account`,
     sourceRow: parseInt(update.sourceRow, 10) || 0,
     recordId: String(update.recordId || ""),
+    runtimeDb,
     excerptHandoffs
   };
 }
@@ -5644,6 +6078,227 @@ function getGraphicsQcRejectReason(record = {}) {
   return normalizeGraphicsQcRejectReason(record.rejectReason || record.graphicsQcDecision || "");
 }
 
+function normalizeEditableIdentityText(value) {
+  return String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function editableIdentityTextHash(value) {
+  return createHash("sha256").update(normalizeEditableIdentityText(value)).digest("hex");
+}
+
+function getEditableIdentityValues(record = {}) {
+  const payload = record.sourcePayload && typeof record.sourcePayload === "object"
+    ? record.sourcePayload
+    : {};
+  const sourceIdentity = record.sourceIdentity && typeof record.sourceIdentity === "object"
+    ? record.sourceIdentity
+    : (payload.sourceIdentity && typeof payload.sourceIdentity === "object" ? payload.sourceIdentity : {});
+  const contentId = cleanSheetWhitespace(
+    sourceIdentity.contentId
+      || sourceIdentity.imageId
+      || record.contentId
+      || record.imageId
+      || record.sourceRecordId
+      || payload.contentId
+      || payload.imageId
+      || payload.sourceRecordId
+  );
+  const quoteText = String(payload.quoteText || record.quoteText || "");
+  return {
+    graphicsRequestId: cleanSheetWhitespace(
+      sourceIdentity.graphicsRequestId
+        || record.graphicsRequestId
+        || payload.graphicsRequestId
+        || payload.requestId
+    ),
+    contentId,
+    imageId: cleanSheetWhitespace(sourceIdentity.imageId || record.imageId || payload.imageId || contentId),
+    quoteText,
+    textHash: cleanSheetWhitespace(sourceIdentity.textHash || record.textHash || payload.textHash)
+      || (quoteText ? editableIdentityTextHash(quoteText) : "")
+  };
+}
+
+function editableProjectValidationWarning(error, completion = {}) {
+  const details = error?.details && typeof error.details === "object" ? error.details : {};
+  return {
+    failingService: cleanSheetWhitespace(details.failingService || "weaver_editable_project_validation"),
+    operation: cleanSheetWhitespace(details.operation || "validate_editable_project_identity"),
+    fileId: cleanSheetWhitespace(
+      details.fileId || completion.editableProjectFileId || completion.projectFileId
+    ),
+    httpStatus: Number(details.httpStatus || 0),
+    message: String(error?.message || "Editable project validation failed.").slice(0, 500)
+  };
+}
+
+async function driveAccessFailure(response, fileId, operation) {
+  const body = await response.text().catch(() => "");
+  const error = new Error(`Editable project ${fileId} could not be opened (${response.status}).`);
+  error.details = {
+    failingService: "google_drive",
+    operation,
+    fileId,
+    httpStatus: response.status,
+    responseBody: body.slice(0, 500)
+  };
+  return error;
+}
+
+async function validateCompletionEditableProjectIdentity(completion = {}) {
+  const pigProjectId = cleanSheetWhitespace(completion.pigProjectId);
+  const editableProjectFileId = cleanSheetWhitespace(
+    completion.editableProjectFileId || completion.projectFileId
+  );
+  const editableProjectUrl = cleanSheetWhitespace(completion.editableProjectUrl);
+  const suppliedIdentityCount = [pigProjectId, editableProjectFileId, editableProjectUrl].filter(Boolean).length;
+  if (!suppliedIdentityCount) {
+    return completion;
+  }
+  if (suppliedIdentityCount !== 3) {
+    throw new Error("Editable completion identity requires pigProjectId, editableProjectFileId, and editableProjectUrl.");
+  }
+
+  const response = await fetchDriveFileResponse(editableProjectFileId);
+  if (!response.ok) {
+    throw await driveAccessFailure(
+      response,
+      editableProjectFileId,
+      "drive.files.get?alt=media&supportsAllDrives=true"
+    );
+  }
+  const project = await response.json().catch(() => null);
+  if (!project || typeof project !== "object") {
+    throw new Error(`Editable project ${editableProjectFileId} is not valid JSON.`);
+  }
+  const projectIds = [project.pigProjectId, project.id]
+    .map(cleanSheetWhitespace)
+    .filter(Boolean);
+  if (!projectIds.length || projectIds.some(projectId => projectId !== pigProjectId)) {
+    throw new Error(`Editable project ${editableProjectFileId} project ID conflicts with completion ${completion.completionId || ""}.`);
+  }
+
+  const expected = getEditableIdentityValues(completion);
+  const selectedRecord = project.selectedRecord && typeof project.selectedRecord === "object"
+    ? project.selectedRecord
+    : {};
+  const projectIdentity = getEditableIdentityValues({
+    ...selectedRecord,
+    sourceIdentity: project.sourceIdentity,
+    graphicsRequestId: project.sourceIdentity?.graphicsRequestId || selectedRecord.graphicsRequestId,
+    contentId: selectedRecord.contentId || selectedRecord.sourceRecordId || selectedRecord.recordId,
+    imageId: selectedRecord.imageId,
+    quoteText: project.sourceIdentity?.normalizedText || selectedRecord.quoteText || selectedRecord.text
+  });
+  const expectedRequestId = expected.graphicsRequestId;
+  const projectRequestIds = [
+    project.sourceIdentity?.graphicsRequestId,
+    selectedRecord.graphicsRequestId
+  ].map(cleanSheetWhitespace).filter(Boolean);
+  if (expectedRequestId && projectRequestIds.some(requestId => requestId !== expectedRequestId)) {
+    throw new Error(`Editable project ${editableProjectFileId} request identity conflicts with ${expectedRequestId}.`);
+  }
+
+  const expectedContentIds = new Set([expected.contentId, expected.imageId].filter(Boolean));
+  const projectContentIds = [projectIdentity.contentId, projectIdentity.imageId].filter(Boolean);
+  if (expectedContentIds.size && projectContentIds.length
+      && !projectContentIds.some(value => expectedContentIds.has(value))) {
+    throw new Error(`Editable project ${editableProjectFileId} content identity conflicts with completion ${completion.completionId || ""}.`);
+  }
+  if (expected.quoteText && projectIdentity.quoteText
+      && normalizeEditableIdentityText(expected.quoteText) !== normalizeEditableIdentityText(projectIdentity.quoteText)) {
+    throw new Error(`Editable project ${editableProjectFileId} text conflicts with completion ${completion.completionId || ""}.`);
+  }
+
+  const requestMatches = Boolean(
+    expectedRequestId && projectRequestIds.length && projectRequestIds.every(value => value === expectedRequestId)
+  );
+  const contentMatches = projectContentIds.some(value => expectedContentIds.has(value));
+  const textMatches = Boolean(
+    expected.quoteText
+      && projectIdentity.quoteText
+      && normalizeEditableIdentityText(expected.quoteText) === normalizeEditableIdentityText(projectIdentity.quoteText)
+  );
+  if (!requestMatches && !contentMatches && !textMatches) {
+    throw new Error(`Editable project ${editableProjectFileId} has no verified identity match for this completion.`);
+  }
+
+  return {
+    ...completion,
+    editableProjectAvailable: true,
+    sourceIdentity: {
+      graphicsRequestId: expected.graphicsRequestId,
+      contentId: expected.contentId,
+      imageId: expected.imageId,
+      textHash: expected.textHash
+    },
+    textHash: expected.textHash,
+    editableProjectValidationStatus: "verified"
+  };
+}
+
+async function validateEditableProjectForRework(update = {}) {
+  const completionId = cleanSheetWhitespace(update.pigCompletionId || update.graphicsCompletionId);
+  const graphicsRequestId = cleanSheetWhitespace(update.graphicsRequestId);
+  if (!completionId || !graphicsRequestId) {
+    throw new Error("Rework validation requires graphicsRequestId and pigCompletionId.");
+  }
+  const result = await syncWeaverRuntimeDb("get_graphics_completion", { completionId });
+  const completion = result?.record && typeof result.record === "object" ? result.record : {};
+  if (!cleanSheetWhitespace(completion.id)) {
+    throw new Error(`Completion ${completionId} was not found in Firestore.`);
+  }
+  if (cleanSheetWhitespace(completion.graphicsRequestId) !== graphicsRequestId) {
+    throw new Error(`Completion ${completionId} belongs to a different graphicsRequestId.`);
+  }
+
+  const payload = completion.sourcePayload && typeof completion.sourcePayload === "object"
+    ? completion.sourcePayload
+    : {};
+  const pigProjectId = cleanSheetWhitespace(completion.pigProjectId || payload.pigProjectId);
+  const editableProjectFileId = cleanSheetWhitespace(
+    completion.editableProjectFileId || payload.editableProjectFileId || payload.projectFileId
+  );
+  const editableProjectUrl = cleanSheetWhitespace(completion.editableProjectUrl || payload.editableProjectUrl);
+  const lifecycleIdentity = getEditableIdentityValues(completion);
+  if (!pigProjectId || !editableProjectFileId || !editableProjectUrl) {
+    return {
+      ...update,
+      pigProjectId: "",
+      editableProjectFileId: "",
+      editableProjectUrl: "",
+      editableProjectAvailable: false,
+      contentId: lifecycleIdentity.contentId,
+      imageId: lifecycleIdentity.imageId,
+      sourceIdentity: lifecycleIdentity,
+      textHash: lifecycleIdentity.textHash
+    };
+  }
+
+  await validateCompletionEditableProjectIdentity({
+    ...completion,
+    completionId,
+    graphicsRequestId,
+    requestId: graphicsRequestId,
+    pigProjectId,
+    editableProjectFileId,
+    editableProjectUrl
+  });
+
+  return {
+    ...update,
+    pigProjectId,
+    editableProjectFileId,
+    editableProjectUrl,
+    editableProjectAvailable: true,
+    contentId: lifecycleIdentity.contentId,
+    imageId: lifecycleIdentity.imageId,
+    sourceIdentity: lifecycleIdentity,
+    textHash: lifecycleIdentity.textHash,
+    editableProjectValidationStatus: "verified"
+  };
+}
+
 async function saveGraphicsQcToSheets(updates) {
   if (!Array.isArray(updates) || !updates.length) {
     return { ok: false, error: "No graphics QC updates provided." };
@@ -5678,12 +6333,15 @@ async function saveGraphicsQcToSheets(updates) {
 
     if (storageTarget === "firestore") {
       if (!completionId || !decision) continue;
-      const normalizedUpdate = {
+      let normalizedUpdate = {
         ...update,
         graphicsQcDecision: decision,
         graphicsQcNote: note,
         graphicsQcUpdatedAt: updatedAt
       };
+      if (decision === "REJECT" && getGraphicsQcRejectReason(normalizedUpdate) === "correct_and_recreate") {
+        normalizedUpdate = await validateEditableProjectForRework(normalizedUpdate);
+      }
       matchedUpdates.push(normalizedUpdate);
       firestoreMatchedCount++;
       if (decision === "APPROVE") {
@@ -6075,8 +6733,13 @@ const server = http.createServer(async (req, res) => {
       authorities: {
         excerptContent: "excerpt_database",
         graphicsLifecycle: "firestore",
-        sourceIntake: "weaver_and_google_sheets",
+        sourceIntake: excerptStorageMode === "sheet" ? "google_sheets" : "weaver_firestore_with_sheet_compatibility",
         downstreamContent: "poetry_please"
+      },
+      excerptStorage: {
+        mode: excerptStorageMode,
+        firestoreCollection: "excerptRecords",
+        sheetCompatibilityEnabled: true
       },
       firestore: {
         backend: process.env.WEAVER_LEDGER_BACKEND || "sqlite_local",
@@ -6098,7 +6761,10 @@ const server = http.createServer(async (req, res) => {
         graphicsQueue: "GET /graphics-handoff/queue",
         graphicsCompletion: "POST /api/pig/completed-graphics",
         graphicsQcDecision: "POST /api/save-graphics-qc",
-        graphicsHandoffRetry: "POST /api/graphics/handoffs/retry"
+        graphicsHandoffRetry: "POST /api/graphics/handoffs/retry",
+        stalledPigRecovery: "GET|POST /api/graphics/stalled-pig-recovery",
+        repairQueue: "GET /api/repair-requests",
+        repairSync: "POST /api/repair-requests/sync"
       }
     });
   }
@@ -6447,20 +7113,26 @@ const server = http.createServer(async (req, res) => {
     const cursor = Math.max(0, parseInt(url.searchParams.get("cursor") || "0", 10) || 0);
       const filterMode = url.searchParams.get("filter") || "all";
       const normalizedFilterMode = cleanSheetWhitespace(filterMode).toLowerCase() || "all";
+      const contentTypeFilter = cleanSheetWhitespace(url.searchParams.get("contentType")).toUpperCase();
       try {
+      if (contentTypeFilter && !["QI", "FPI"].includes(contentTypeFilter)) {
+        throw new Error("contentType must be QI or FPI");
+      }
       const refreshSource = ["1", "true", "yes"].includes(cleanSheetWhitespace(url.searchParams.get("refresh")).toLowerCase());
-      if (!refreshSource) {
+      if (!refreshSource && normalizedFilterMode !== "coverage_needs") {
         const ledgerStartedAt = performance.now();
         const ledgerResult = await syncWeaverRuntimeDb("get_handoff_queue", {
           limit,
           cursor,
-          filter: normalizedFilterMode
+          filter: normalizedFilterMode,
+          contentType: contentTypeFilter
         });
         const dbElapsedMs = performance.now() - ledgerStartedAt;
         const records = Array.isArray(ledgerResult?.records) ? ledgerResult.records : [];
         const result = {
           ok: Boolean(ledgerResult?.ok),
           filter: normalizedFilterMode,
+          contentType: contentTypeFilter,
           source: "firestore",
           nextCursor: cleanSheetWhitespace(ledgerResult?.nextCursor),
           records
@@ -6506,7 +7178,10 @@ const server = http.createServer(async (req, res) => {
           ? await getPigReworkRequests(filterMode)
           : await getPigGraphicsRequests(filterMode));
       const queueBuildElapsedMs = performance.now() - queueBuildStartedAt;
-      const selectedRecords = actionableRecords.slice(0, limit);
+      const laneRecords = contentTypeFilter
+        ? actionableRecords.filter(record => cleanSheetWhitespace(record.contentType || record.imageType).toUpperCase() === contentTypeFilter)
+        : actionableRecords;
+      const selectedRecords = laneRecords.slice(0, limit);
       const queueLedgerRequests = selectedRecords
         .map(buildGraphicsHandoffLedgerRequest)
         .filter(request => cleanSheetWhitespace(request.graphicsRequestId));
@@ -6556,6 +7231,8 @@ const server = http.createServer(async (req, res) => {
       const result = {
         ok: true,
         filter: normalizedFilterMode,
+        contentType: contentTypeFilter,
+        poetryPleaseCoverage: coverageNeeds?.poetryPleaseCoverage || null,
         records
       };
       const serializeStartedAt = performance.now();
@@ -6612,7 +7289,7 @@ const server = http.createServer(async (req, res) => {
       const normalizedFilterMode = cleanSheetWhitespace(filterMode).toLowerCase() || "all";
       try {
       const refreshSource = ["1", "true", "yes"].includes(cleanSheetWhitespace(url.searchParams.get("refresh")).toLowerCase());
-      if (!refreshSource) {
+      if (!refreshSource && normalizedFilterMode !== "coverage_needs") {
         const ledgerStartedAt = performance.now();
         const ledgerResult = await syncWeaverRuntimeDb("get_handoff_queue", {
           limit: 500,
@@ -6863,6 +7540,118 @@ const server = http.createServer(async (req, res) => {
         ok: false,
         error: error.message
       });
+    }
+  }
+
+  if (url.pathname === "/api/graphics/stalled-pig-recovery" && ["GET", "POST"].includes(req.method)) {
+    try {
+      const parsed = req.method === "POST"
+        ? JSON.parse(await readRequestBody(req) || "{}")
+        : {};
+      const startAt = cleanSheetWhitespace(parsed.startAt || url.searchParams.get("startAt"));
+      const endBefore = cleanSheetWhitespace(parsed.endBefore || url.searchParams.get("endBefore"));
+      const graphicsRequestIds = Array.isArray(parsed.graphicsRequestIds)
+        ? parsed.graphicsRequestIds
+        : [];
+      const result = await syncWeaverRuntimeDb("recover_stalled_pig_requests", {
+        startAt,
+        endBefore,
+        graphicsRequestIds,
+        apply: req.method === "POST" && parsed.apply === true
+      });
+      return sendJson(res, result.ok ? 200 : 400, {
+        version: `${appVersion}-service-account`,
+        ...result
+      });
+    } catch (error) {
+      return sendJson(res, 500, {
+        ok: false,
+        error: error.message
+      });
+    }
+  }
+
+  if (url.pathname === "/api/repair-requests" && req.method === "GET") {
+    try {
+      const statuses = cleanSheetWhitespace(url.searchParams.get("status"))
+        .split(",")
+        .map(value => value.trim())
+        .filter(Boolean);
+      const result = await syncWeaverRuntimeDb("list_repair_requests", {
+        statuses,
+        limit: Math.max(1, Math.min(parseInt(url.searchParams.get("limit") || "200", 10) || 200, 500))
+      });
+      return sendJson(res, result.ok ? 200 : 500, {
+        version: `${appVersion}-service-account`,
+        ...result
+      });
+    } catch (error) {
+      return sendJson(res, 500, { ok: false, error: error.message });
+    }
+  }
+
+  if (url.pathname === "/api/repair-requests/sync" && req.method === "POST") {
+    try {
+      const body = await readRequestBody(req);
+      const parsed = JSON.parse(body || "{}");
+      const result = await syncPoetryPleaseRepairRequests({
+        limit: parsed.limit || 1,
+        allowBulk: parsed.allowBulk === true
+      });
+      return sendJson(res, result.ok ? 200 : 502, {
+        version: `${appVersion}-service-account`,
+        ...result
+      });
+    } catch (error) {
+      return sendJson(res, 500, { ok: false, error: error.message });
+    }
+  }
+
+  const repairStatusRetryMatch = url.pathname.match(/^\/api\/repair-requests\/([^/]+)\/retry-status$/);
+  if (repairStatusRetryMatch && req.method === "POST") {
+    try {
+      const repairRequestId = decodeURIComponent(repairStatusRetryMatch[1]);
+      const listed = await syncWeaverRuntimeDb("list_repair_requests", { limit: 500 });
+      const record = (listed.records || []).find(item => (
+        cleanSheetWhitespace(item.poetryPleaseRepairRequestId) === repairRequestId
+      ));
+      if (!record) {
+        return sendJson(res, 404, { ok: false, error: "repair_request_not_found" });
+      }
+      if (cleanSheetWhitespace(record.weaverRepairStatus).toLowerCase() === "blocked") {
+        return sendJson(res, 409, { ok: false, error: record.blockedReason || "repair_request_blocked" });
+      }
+      const hasReplacement = Boolean(cleanSheetWhitespace(record.replacementAssetLink));
+      const status = hasReplacement ? "returned" : "in_progress";
+      const note = hasReplacement
+        ? [
+            `Replacement ${cleanSheetWhitespace(record.replacementAssetId) || "asset"}`,
+            cleanSheetWhitespace(record.replacementAssetLink),
+            `Weaver/P.I.G. job ${cleanSheetWhitespace(record.pigJobId)}`
+          ].filter(Boolean).join(" | ")
+        : `Accepted by Weaver; ${record.repairDestination === "pig" ? `waiting on P.I.G. job ${record.pigJobId}` : "routed to manual review"}.`;
+      const response = await updatePoetryPleaseRepairStatus(repairRequestId, status, note);
+      await persistRepairStatusResponse(repairRequestId, status, response, note);
+      if (response.ok && status === "returned") {
+        await syncWeaverRuntimeDb("update_repair_request", {
+          repairRequestId,
+          update: {
+            weaverRepairStatus: "returned",
+            returnedAt: new Date().toISOString(),
+            retryable: false,
+            historyEvent: "replacement_returned_to_poetry_please",
+            historyNote: note
+          }
+        });
+      }
+      return sendJson(res, response.ok ? 200 : 502, {
+        ok: Boolean(response.ok),
+        repairRequestId,
+        status,
+        poetryPleaseResponse: response
+      });
+    } catch (error) {
+      return sendJson(res, 500, { ok: false, error: error.message });
     }
   }
 
