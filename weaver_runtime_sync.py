@@ -57,6 +57,7 @@ FIRESTORE_HANDOFF_ACTIONS = {
     "upsert_repair_requests",
     "list_repair_requests",
     "update_repair_request",
+    "reconcile_repair_request",
     "upsert_excerpt_records",
     "get_excerpt_records",
 }
@@ -272,7 +273,12 @@ def sync_completions(connection, payload: dict[str, Any]) -> dict[str, Any]:
                     "repairRequestId": repair_request_id,
                     "replacementAssetId": replacement_asset_id,
                     "replacementAssetLink": replacement_asset_link,
-                    "pigJobId": request_id,
+                    "weaverJobId": request_id,
+                    "pigJobId": normalize_text(
+                        completion.get("pigJobId")
+                        or completion.get("completionId")
+                        or completion.get("id")
+                    ),
                     "pigCompletionId": normalize_text(completion.get("completionId") or completion.get("id")),
                 })
 
@@ -947,6 +953,7 @@ def upsert_repair_requests(connection, payload: dict[str, Any]) -> dict[str, Any
                     else f"unsupported_graphics_content_type:{content_type or 'missing'}"
                 ),
                 "pigJobId": pig_job_id,
+                "weaverJobId": normalize_text(existing.get("weaverJobId")) or pig_job_id,
                 "blockedReason": blocked_reason,
                 "retryable": bool(blocked_reason),
                 "createdAt": existing.get("createdAt") or now,
@@ -1050,6 +1057,163 @@ def update_repair_request(connection, payload: dict[str, Any]) -> dict[str, Any]
     }
     written = connection.write_raw_document(FIRESTORE_REPAIR_REQUESTS_COLLECTION, document_id, record)
     return {"ok": True, "record": written}
+
+
+def reconcile_repair_request(connection, payload: dict[str, Any]) -> dict[str, Any]:
+    repair_request_id = normalize_text(payload.get("repairRequestId"))
+    poetry_please_request = (
+        payload.get("poetryPleaseRequest")
+        if isinstance(payload.get("poetryPleaseRequest"), dict)
+        else {}
+    )
+    if not repair_request_id:
+        return {"ok": False, "error": "repairRequestId is required"}
+    document_id = repair_document_id(repair_request_id)
+    existing = connection.get_raw_document(FIRESTORE_REPAIR_REQUESTS_COLLECTION, document_id)
+    if not existing:
+        return {"ok": False, "error": "repair_request_not_found"}
+
+    now = utc_now_iso()
+    local_status = normalize_text(existing.get("weaverRepairStatus")).lower()
+    poetry_please_status = normalize_text(poetry_please_request.get("status")).lower()
+    review_status = normalize_text(poetry_please_request.get("returnReviewStatus")).lower()
+    review_note = normalize_text(poetry_please_request.get("returnReviewNote"))
+    review_at = poetry_please_request.get("returnReviewedAt") or ""
+    review_by = normalize_text(poetry_please_request.get("returnReviewedBy"))
+    replacement_asset_id = normalize_text(
+        poetry_please_request.get("replacementAssetId") or existing.get("replacementAssetId")
+    )
+    replacement_asset_link = normalize_text(
+        poetry_please_request.get("replacementAssetLink") or existing.get("replacementAssetLink")
+    )
+    accepted = review_status == "accepted" or poetry_please_status == "resolved"
+    rejected = review_status == "rejected"
+    returned = poetry_please_status == "returned" or local_status in {"returned", "returned_pending_sync"}
+    report = {
+        "returnedMissingReplacementMetadata": bool(
+            returned and not (replacement_asset_id and replacement_asset_link)
+        ),
+        "poetryPleaseAcceptedWeaverNotResolved": bool(accepted and local_status != "resolved"),
+        "weaverResolvedPoetryPleasePending": bool(
+            local_status == "resolved" and not accepted
+        ),
+        "replacementAssetUnavailable": payload.get("replacementAssetAvailable") is False,
+    }
+
+    transition = "none"
+    if accepted and local_status != "resolved":
+        result = update_repair_request(connection, {
+            "repairRequestId": repair_request_id,
+            "update": {
+                "weaverRepairStatus": "resolved",
+                "poetryPleaseStatus": poetry_please_status or "resolved",
+                "returnReviewStatus": review_status or "accepted",
+                "returnReviewNote": review_note,
+                "returnReviewedAt": review_at,
+                "returnReviewedBy": review_by,
+                "replacementAssetId": replacement_asset_id,
+                "replacementAssetLink": replacement_asset_link,
+                "resolvedAt": review_at or now,
+                "retryable": False,
+                "lastError": "",
+                "latestPoetryPleaseResponse": poetry_please_request,
+                "historyEvent": "poetry_please_repair_accepted",
+                "historyNote": review_note or review_by,
+            },
+        })
+        transition = "resolved"
+    elif rejected and not (
+        local_status == "waiting_on_pig"
+        and normalize_text(existing.get("returnReviewStatus")).lower() == "rejected"
+        and normalize_text(existing.get("returnReviewNote")) == review_note
+    ):
+        pig_job_id = normalize_text(existing.get("pigJobId") or existing.get("weaverJobId"))
+        if not pig_job_id:
+            return {
+                "ok": False,
+                "error": "repair_pig_job_id_missing",
+                "report": report,
+            }
+        prior_replacements = [
+            item for item in (existing.get("replacementHistory") or [])
+            if isinstance(item, dict)
+        ]
+        prior_replacement = {
+            "assetId": normalize_text(existing.get("replacementAssetId")),
+            "assetLink": normalize_text(existing.get("replacementAssetLink")),
+            "pigCompletionId": normalize_text(existing.get("replacementPigCompletionId")),
+            "returnedAt": existing.get("returnedAt") or "",
+            "reviewNote": review_note,
+        }
+        if prior_replacement["assetId"] or prior_replacement["assetLink"]:
+            if not prior_replacements or prior_replacements[-1] != prior_replacement:
+                prior_replacements.append(prior_replacement)
+        update_graphics_handoff(connection, pig_job_id, {
+            "handoffStatus": "requested",
+            "pigStatus": "not_started",
+            "qcStatus": "needs_revision",
+            "queueView": "rework",
+            "nextAction": "rework",
+            "reworkReason": "poetry_please_return_rejected",
+            "requestedChanges": review_note or "Poetry Please rejected the returned repair.",
+            "repairRequestId": repair_request_id,
+        })
+        result = update_repair_request(connection, {
+            "repairRequestId": repair_request_id,
+            "update": {
+                "weaverRepairStatus": "waiting_on_pig",
+                "poetryPleaseStatus": poetry_please_status or "returned",
+                "returnReviewStatus": "rejected",
+                "returnReviewNote": review_note,
+                "returnReviewedAt": review_at,
+                "returnReviewedBy": review_by,
+                "replacementHistory": prior_replacements[-25:],
+                "replacementAssetId": "",
+                "replacementAssetLink": "",
+                "replacementPigCompletionId": "",
+                "returnedAt": "",
+                "retryable": False,
+                "lastError": "",
+                "latestPoetryPleaseResponse": poetry_please_request,
+                "historyEvent": "poetry_please_repair_rejected",
+                "historyNote": review_note,
+            },
+        })
+        transition = "reopened"
+    else:
+        observed_update = {
+            "poetryPleaseStatus": poetry_please_status,
+            "returnReviewStatus": review_status,
+            "returnReviewNote": review_note,
+            "returnReviewedAt": review_at,
+            "returnReviewedBy": review_by,
+            "replacementAssetId": replacement_asset_id,
+            "replacementAssetLink": replacement_asset_link,
+        }
+        observed_changed = any(
+            normalize_text(existing.get(key)) != normalize_text(value)
+            for key, value in observed_update.items()
+        )
+        if observed_changed:
+            result = update_repair_request(connection, {
+                "repairRequestId": repair_request_id,
+                "update": {
+                    **observed_update,
+                    "latestPoetryPleaseResponse": poetry_please_request,
+                    "historyEvent": "poetry_please_repair_observed",
+                    "historyNote": review_status or poetry_please_status,
+                },
+            })
+            transition = "observed"
+        else:
+            result = {"ok": True, "record": existing}
+
+    return {
+        "ok": bool(result.get("ok")),
+        "transition": transition,
+        "record": result.get("record") or existing,
+        "report": report,
+    }
 
 
 def recover_stalled_pig_requests(connection, payload: dict[str, Any]) -> dict[str, Any]:
@@ -1270,6 +1434,8 @@ def main() -> int:
             result = list_repair_requests(connection, payload)
         elif action == "update_repair_request":
             result = update_repair_request(connection, payload)
+        elif action == "reconcile_repair_request":
+            result = reconcile_repair_request(connection, payload)
         elif action == "upsert_excerpt_records":
             result = upsert_excerpt_records(connection, payload)
         elif action == "get_excerpt_records":

@@ -155,6 +155,7 @@ const ADMIN_MUTATION_PATHS = new Set([
   "/api/graphics/handoffs/retry",
   "/api/graphics/links",
   "/api/graphics/rework-request",
+  "/api/repair-requests/reconcile",
   "/api/repair-requests/sync",
   "/api/save-graphics-qc",
   "/api/save-review-single",
@@ -3740,7 +3741,37 @@ async function fetchPoetryPleaseRepairRequests() {
   };
 }
 
-async function updatePoetryPleaseRepairStatus(repairRequestId, status, note = "") {
+async function fetchPoetryPleaseRepairRequest(repairRequestId) {
+  if (!poetryPleaseApiKey) {
+    return { ok: false, request: {}, error: "missing_poetry_please_api_key", httpStatus: 0 };
+  }
+  const response = await fetch(
+    `${poetryPleaseApiUrl.replace(/\/$/, "")}/internal/repairRequests/${encodeURIComponent(repairRequestId)}`,
+    {
+      headers: {
+        Accept: "application/json",
+        "x-api-key": poetryPleaseApiKey
+      },
+      signal: AbortSignal.timeout(15000)
+    }
+  );
+  const result = await response.json().catch(() => ({}));
+  const request = result.request && typeof result.request === "object"
+    ? result.request
+    : (result.id ? result : {});
+  const hasRequest = Boolean(Object.keys(request).length);
+  return {
+    ...result,
+    ok: response.ok && result.ok !== false && hasRequest,
+    request,
+    error: response.ok
+      ? (cleanSheetWhitespace(result.error) || (hasRequest ? "" : "repair_request_missing"))
+      : (result.error || `repair request failed with ${response.status}`),
+    httpStatus: response.status
+  };
+}
+
+async function updatePoetryPleaseRepairStatus(repairRequestId, status, note = "", structured = {}) {
   if (!poetryPleaseApiKey) {
     return { ok: false, error: "missing_poetry_please_api_key", httpStatus: 0 };
   }
@@ -3752,7 +3783,15 @@ async function updatePoetryPleaseRepairStatus(repairRequestId, status, note = ""
         "Content-Type": "application/json",
         "x-api-key": poetryPleaseApiKey
       },
-      body: JSON.stringify({ status, ...(note ? { note } : {}) }),
+      body: JSON.stringify({
+        status,
+        ...(note ? { note } : {}),
+        ...Object.fromEntries(
+          ["replacementAssetId", "replacementAssetLink", "weaverJobId", "pigJobId"]
+            .map(key => [key, cleanSheetWhitespace(structured[key])])
+            .filter(([, value]) => value)
+        )
+      }),
       signal: AbortSignal.timeout(15000)
     }
   );
@@ -3763,6 +3802,119 @@ async function updatePoetryPleaseRepairStatus(repairRequestId, status, note = ""
     error: response.ok ? cleanSheetWhitespace(result.error) : (result.error || `repair status failed with ${response.status}`),
     httpStatus: response.status
   };
+}
+
+function buildStructuredRepairReturn(record = {}) {
+  return {
+    replacementAssetId: cleanSheetWhitespace(record.replacementAssetId),
+    replacementAssetLink: cleanSheetWhitespace(record.replacementAssetLink),
+    weaverJobId: cleanSheetWhitespace(record.weaverJobId || record.pigJobId),
+    pigJobId: cleanSheetWhitespace(record.replacementPigCompletionId || record.pigCompletionId || record.pigJobId)
+  };
+}
+
+async function checkRepairReplacementAvailability(assetLink) {
+  const cleanedLink = cleanSheetWhitespace(assetLink);
+  if (!cleanedLink) return { available: false, reason: "missing_replacement_asset_link" };
+  try {
+    const driveFileId = extractGoogleDriveFileId(cleanedLink);
+    if (driveFileId) {
+      const metadata = await getDriveFileMetadata(driveFileId);
+      return { available: Boolean(metadata?.id), service: "google_drive", fileId: driveFileId };
+    }
+    const response = await fetch(cleanedLink, {
+      method: "HEAD",
+      redirect: "follow",
+      signal: AbortSignal.timeout(10000)
+    });
+    return {
+      available: response.ok,
+      service: "http",
+      httpStatus: response.status
+    };
+  } catch (error) {
+    return {
+      available: false,
+      reason: error.message
+    };
+  }
+}
+
+async function reconcilePoetryPleaseRepairRequests({ limit = 100 } = {}) {
+  const listed = await syncWeaverRuntimeDb("list_repair_requests", { limit: Math.min(Number(limit || 100), 500) });
+  const candidates = (listed.records || []).filter(record => [
+    "returned",
+    "returned_pending_sync",
+    "resolved"
+  ].includes(cleanSheetWhitespace(record.weaverRepairStatus).toLowerCase()));
+  const report = {
+    checkedCount: 0,
+    resolvedCount: 0,
+    reopenedCount: 0,
+    unchangedCount: 0,
+    errorCount: 0,
+    returnedMissingReplacementMetadata: [],
+    poetryPleaseAcceptedWeaverNotResolved: [],
+    weaverResolvedPoetryPleasePending: [],
+    replacementAssetUnavailable: [],
+    errors: []
+  };
+
+  for (const record of candidates) {
+    const repairRequestId = cleanSheetWhitespace(record.poetryPleaseRepairRequestId);
+    if (!repairRequestId) continue;
+    try {
+      let fetched = await fetchPoetryPleaseRepairRequest(repairRequestId);
+      if (!fetched.ok) throw new Error(fetched.error || "poetry_please_repair_read_failed");
+      let poetryPleaseRequest = fetched.request || {};
+      const structured = buildStructuredRepairReturn(record);
+      const poetryPleaseMissingReplacement = (
+        cleanSheetWhitespace(poetryPleaseRequest.status).toLowerCase() === "returned"
+        && !(cleanSheetWhitespace(poetryPleaseRequest.replacementAssetId)
+          && cleanSheetWhitespace(poetryPleaseRequest.replacementAssetLink))
+      );
+      if (poetryPleaseMissingReplacement && structured.replacementAssetId && structured.replacementAssetLink) {
+        const note = `Returned repair ${structured.replacementAssetId} from ${structured.weaverJobId}.`;
+        const returned = await updatePoetryPleaseRepairStatus(
+          repairRequestId,
+          "returned",
+          note,
+          structured
+        );
+        await persistRepairStatusResponse(repairRequestId, "returned", returned, note);
+        if (!returned.ok) throw new Error(returned.error || "structured_repair_return_failed");
+        fetched = await fetchPoetryPleaseRepairRequest(repairRequestId);
+        if (!fetched.ok) throw new Error(fetched.error || "poetry_please_repair_reread_failed");
+        poetryPleaseRequest = fetched.request || {};
+      }
+
+      const availability = await checkRepairReplacementAvailability(
+        poetryPleaseRequest.replacementAssetLink || record.replacementAssetLink
+      );
+      const reconciled = await syncWeaverRuntimeDb("reconcile_repair_request", {
+        repairRequestId,
+        poetryPleaseRequest,
+        replacementAssetAvailable: availability.available
+      });
+      if (!reconciled.ok) throw new Error(reconciled.error || "repair_reconciliation_failed");
+      report.checkedCount += 1;
+      if (reconciled.transition === "resolved") report.resolvedCount += 1;
+      else if (reconciled.transition === "reopened") report.reopenedCount += 1;
+      else report.unchangedCount += 1;
+      for (const key of [
+        "returnedMissingReplacementMetadata",
+        "poetryPleaseAcceptedWeaverNotResolved",
+        "weaverResolvedPoetryPleasePending",
+        "replacementAssetUnavailable"
+      ]) {
+        if (reconciled.report?.[key]) report[key].push(repairRequestId);
+      }
+    } catch (error) {
+      report.errorCount += 1;
+      report.errors.push({ repairRequestId, error: error.message });
+    }
+  }
+  return { ok: report.errorCount === 0, ...report };
 }
 
 async function persistRepairStatusResponse(repairRequestId, status, response, note = "") {
@@ -3785,6 +3937,7 @@ async function persistRepairStatusResponse(repairRequestId, status, response, no
 }
 
 async function syncPoetryPleaseRepairRequests({ limit = 1, allowBulk = false } = {}) {
+  const reconciliation = await reconcilePoetryPleaseRepairRequests();
   const fetched = await fetchPoetryPleaseRepairRequests();
   if (!fetched.ok) {
     return {
@@ -3796,7 +3949,8 @@ async function syncPoetryPleaseRepairRequests({ limit = 1, allowBulk = false } =
       blockedCount: 0,
       errorCount: 1,
       error: fetched.error,
-      poetryPleaseResponse: fetched
+      poetryPleaseResponse: fetched,
+      reconciliation
     };
   }
 
@@ -3839,21 +3993,36 @@ async function syncPoetryPleaseRepairRequests({ limit = 1, allowBulk = false } =
     errorCount: Number(runtime.errorCount || 0) + statusErrorCount,
     records: runtime.records || [],
     errors: runtime.errors || [],
-    statusResults
+    statusResults,
+    reconciliation
   };
 }
 
 async function returnRepairToPoetryPlease(repairReturn) {
+  const structured = {
+    replacementAssetId: cleanSheetWhitespace(repairReturn.replacementAssetId),
+    replacementAssetLink: cleanSheetWhitespace(repairReturn.replacementAssetLink),
+    weaverJobId: cleanSheetWhitespace(repairReturn.weaverJobId || repairReturn.pigJobId),
+    pigJobId: cleanSheetWhitespace(repairReturn.pigCompletionId || repairReturn.pigJobId)
+  };
+  if (!structured.replacementAssetId || !structured.replacementAssetLink) {
+    return {
+      repairRequestId: repairReturn.repairRequestId,
+      ok: false,
+      httpStatus: 0,
+      error: "replacement_asset_metadata_required"
+    };
+  }
   const note = [
-    `Replacement ${cleanSheetWhitespace(repairReturn.replacementAssetId) || "asset"}`,
-    cleanSheetWhitespace(repairReturn.replacementAssetLink),
-    `Weaver/P.I.G. job ${cleanSheetWhitespace(repairReturn.pigJobId)}`,
-    cleanSheetWhitespace(repairReturn.pigCompletionId)
+    `Replacement ${structured.replacementAssetId}`,
+    `returned by ${structured.weaverJobId}`,
+    `P.I.G. ${structured.pigJobId}`
   ].filter(Boolean).join(" | ");
   const response = await updatePoetryPleaseRepairStatus(
     repairReturn.repairRequestId,
     "returned",
-    note
+    note,
+    structured
   );
   await persistRepairStatusResponse(
     repairReturn.repairRequestId,
@@ -3867,6 +4036,8 @@ async function returnRepairToPoetryPlease(repairReturn) {
       update: {
         weaverRepairStatus: "returned",
         returnedAt: new Date().toISOString(),
+        weaverJobId: structured.weaverJobId,
+        returnedPigJobId: structured.pigJobId,
         retryable: false,
         historyEvent: "replacement_returned_to_poetry_please",
         historyNote: note
@@ -6893,7 +7064,8 @@ const server = http.createServer(async (req, res) => {
         graphicsHandoffRetry: "POST /api/graphics/handoffs/retry",
         stalledPigRecovery: "GET|POST /api/graphics/stalled-pig-recovery",
         repairQueue: "GET /api/repair-requests",
-        repairSync: "POST /api/repair-requests/sync"
+        repairSync: "POST /api/repair-requests/sync",
+        repairReconcile: "POST /api/repair-requests/reconcile"
       },
       administratorAuthentication: {
         provider: "google_oauth_access_token",
@@ -7742,6 +7914,18 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  if (url.pathname === "/api/repair-requests/reconcile" && req.method === "POST") {
+    try {
+      const result = await reconcilePoetryPleaseRepairRequests();
+      return sendJson(res, result.ok ? 200 : 502, {
+        version: `${appVersion}-service-account`,
+        ...result
+      });
+    } catch (error) {
+      return sendJson(res, 500, { ok: false, error: error.message });
+    }
+  }
+
   const repairStatusRetryMatch = url.pathname.match(/^\/api\/repair-requests\/([^/]+)\/retry-status$/);
   if (repairStatusRetryMatch && req.method === "POST") {
     try {
@@ -7765,7 +7949,8 @@ const server = http.createServer(async (req, res) => {
             `Weaver/P.I.G. job ${cleanSheetWhitespace(record.pigJobId)}`
           ].filter(Boolean).join(" | ")
         : `Accepted by Weaver; ${record.repairDestination === "pig" ? `waiting on P.I.G. job ${record.pigJobId}` : "routed to manual review"}.`;
-      const response = await updatePoetryPleaseRepairStatus(repairRequestId, status, note);
+      const structured = hasReplacement ? buildStructuredRepairReturn(record) : {};
+      const response = await updatePoetryPleaseRepairStatus(repairRequestId, status, note, structured);
       await persistRepairStatusResponse(repairRequestId, status, response, note);
       if (response.ok && status === "returned") {
         await syncWeaverRuntimeDb("update_repair_request", {

@@ -28,7 +28,14 @@ from weaver_runtime_db import (  # noqa: E402
     upsert_graphics_handoff_request,
     upsert_graphics_request,
 )
-from weaver_runtime_sync import sync_excerpt_handoffs, sync_qc_reviews, upsert_repair_requests  # noqa: E402
+from weaver_runtime_sync import (  # noqa: E402
+    reconcile_repair_request,
+    sync_completions,
+    sync_excerpt_handoffs,
+    sync_qc_reviews,
+    update_repair_request,
+    upsert_repair_requests,
+)
 
 
 def memory_db() -> sqlite3.Connection:
@@ -62,6 +69,7 @@ class MemoryFirestoreLedger(FirestoreLedgerClient):
         self.documents = {}
         self.handoffs = {}
         self.handoff_calls = []
+        self.handoff_update_calls = []
 
     def get_raw_document(self, collection, document_id):
         return self.documents.get((collection, document_id))
@@ -82,6 +90,21 @@ class MemoryFirestoreLedger(FirestoreLedgerClient):
         self.handoff_calls.append(request_id)
         self.handoffs[request_id] = dict(request)
         return dict(request)
+
+    def get_handoff(self, graphics_request_id):
+        return self.handoffs.get(graphics_request_id)
+
+    def update_handoff(self, graphics_request_id, update):
+        self.handoff_update_calls.append(graphics_request_id)
+        current = dict(self.handoffs[graphics_request_id])
+        current.update(update)
+        self.handoffs[graphics_request_id] = current
+        return dict(current)
+
+    def insert_graphics_completion(self, completion):
+        completion_id = completion["id"]
+        self.documents[("graphicsCompletions", completion_id)] = dict(completion)
+        return dict(completion)
 
 
 class RepairIdentityFirestoreLedger(FirestoreLedgerClient):
@@ -170,6 +193,184 @@ class GraphicsHandoffLedgerTest(unittest.TestCase):
         self.assertEqual(exc["createdCount"], 1)
         self.assertEqual(exc["records"][0]["repairDestination"], "weaver_review")
         self.assertFalse(exc["records"][0]["pigJobId"])
+
+    def test_repair_completion_returns_structured_replacement_identity(self):
+        connection = MemoryFirestoreLedger()
+        request = {
+            "id": "repair-return-1",
+            "status": "requested",
+            "action": "recreate",
+            "sourceFlagId": "flag-return-1",
+            "imageId": "original-return-1",
+            "contentType": "FPI",
+            "author": "Test Author",
+            "book": "Test Book",
+            "title": "Test Poem",
+            "originalContent": {"imageUrl": "https://example.com/original.png"},
+        }
+        imported = upsert_repair_requests(connection, {"requests": [request]})
+        weaver_job_id = imported["records"][0]["pigJobId"]
+
+        completed = sync_completions(connection, {"completions": [{
+            "completionId": "pig-repair-return-1",
+            "graphicsRequestId": weaver_job_id,
+            "repairRequestId": "repair-return-1",
+            "contentType": "FPI",
+            "assetFileId": "replacement-file-1",
+            "assetUrl": "https://example.com/replacement.png",
+        }]})
+
+        self.assertEqual(completed["repairReturns"][0]["replacementAssetId"], "replacement-file-1")
+        self.assertEqual(completed["repairReturns"][0]["replacementAssetLink"], "https://example.com/replacement.png")
+        self.assertEqual(completed["repairReturns"][0]["weaverJobId"], weaver_job_id)
+        self.assertEqual(completed["repairReturns"][0]["pigJobId"], "pig-repair-return-1")
+
+    def test_accepted_repair_resolves_once(self):
+        connection = MemoryFirestoreLedger()
+        request = {
+            "id": "repair-accepted-1",
+            "status": "requested",
+            "action": "recreate",
+            "sourceFlagId": "flag-accepted-1",
+            "imageId": "original-accepted-1",
+            "contentType": "QI",
+            "author": "Test Author",
+            "book": "Test Book",
+            "title": "Test Poem",
+            "originalContent": {"quoteText": "Canonical excerpt"},
+        }
+        upsert_repair_requests(connection, {"requests": [request]})
+        update_repair_request(connection, {
+            "repairRequestId": "repair-accepted-1",
+            "update": {
+                "weaverRepairStatus": "returned",
+                "replacementAssetId": "replacement-accepted-1",
+                "replacementAssetLink": "https://example.com/accepted.png",
+            },
+        })
+        poetry_please_request = {
+            "id": "repair-accepted-1",
+            "status": "resolved",
+            "returnReviewStatus": "accepted",
+            "returnReviewedAt": "2026-08-03T12:00:00Z",
+            "returnReviewedBy": "admin@buttonpoetry.com",
+            "replacementAssetId": "replacement-accepted-1",
+            "replacementAssetLink": "https://example.com/accepted.png",
+        }
+
+        first = reconcile_repair_request(connection, {
+            "repairRequestId": "repair-accepted-1",
+            "poetryPleaseRequest": poetry_please_request,
+            "replacementAssetAvailable": True,
+        })
+        second = reconcile_repair_request(connection, {
+            "repairRequestId": "repair-accepted-1",
+            "poetryPleaseRequest": poetry_please_request,
+            "replacementAssetAvailable": True,
+        })
+
+        self.assertEqual(first["transition"], "resolved")
+        self.assertEqual(first["record"]["weaverRepairStatus"], "resolved")
+        self.assertEqual(first["record"]["resolvedAt"], "2026-08-03T12:00:00Z")
+        self.assertEqual(second["transition"], "none")
+
+    def test_returned_repair_records_pending_review_once(self):
+        connection = MemoryFirestoreLedger()
+        request = {
+            "id": "repair-pending-1",
+            "status": "requested",
+            "action": "recreate",
+            "sourceFlagId": "flag-pending-1",
+            "imageId": "original-pending-1",
+            "contentType": "QI",
+            "author": "Test Author",
+            "book": "Test Book",
+            "title": "Test Poem",
+            "originalContent": {"quoteText": "Canonical excerpt"},
+        }
+        upsert_repair_requests(connection, {"requests": [request]})
+        update_repair_request(connection, {
+            "repairRequestId": "repair-pending-1",
+            "update": {
+                "weaverRepairStatus": "returned",
+                "replacementAssetId": "replacement-pending-1",
+                "replacementAssetLink": "https://example.com/pending.png",
+            },
+        })
+        poetry_please_request = {
+            "id": "repair-pending-1",
+            "status": "returned",
+            "returnReviewStatus": "pending",
+            "replacementAssetId": "replacement-pending-1",
+            "replacementAssetLink": "https://example.com/pending.png",
+        }
+
+        first = reconcile_repair_request(connection, {
+            "repairRequestId": "repair-pending-1",
+            "poetryPleaseRequest": poetry_please_request,
+            "replacementAssetAvailable": True,
+        })
+        second = reconcile_repair_request(connection, {
+            "repairRequestId": "repair-pending-1",
+            "poetryPleaseRequest": poetry_please_request,
+            "replacementAssetAvailable": True,
+        })
+
+        self.assertEqual(first["transition"], "observed")
+        self.assertEqual(first["record"]["weaverRepairStatus"], "returned")
+        self.assertEqual(first["record"]["returnReviewStatus"], "pending")
+        self.assertEqual(second["transition"], "none")
+
+    def test_rejected_repair_reopens_same_pig_job_once(self):
+        connection = MemoryFirestoreLedger()
+        request = {
+            "id": "repair-rejected-1",
+            "status": "requested",
+            "action": "recreate",
+            "sourceFlagId": "flag-rejected-1",
+            "imageId": "original-rejected-1",
+            "contentType": "FPI",
+            "author": "Test Author",
+            "book": "Test Book",
+            "title": "Test Poem",
+            "originalContent": {"imageUrl": "https://example.com/original.png"},
+        }
+        imported = upsert_repair_requests(connection, {"requests": [request]})
+        pig_job_id = imported["records"][0]["pigJobId"]
+        update_repair_request(connection, {
+            "repairRequestId": "repair-rejected-1",
+            "update": {
+                "weaverRepairStatus": "returned",
+                "replacementAssetId": "replacement-rejected-1",
+                "replacementAssetLink": "https://example.com/rejected.png",
+            },
+        })
+        poetry_please_request = {
+            "id": "repair-rejected-1",
+            "status": "returned",
+            "returnReviewStatus": "rejected",
+            "returnReviewNote": "Attribution still needs correction.",
+        }
+
+        first = reconcile_repair_request(connection, {
+            "repairRequestId": "repair-rejected-1",
+            "poetryPleaseRequest": poetry_please_request,
+            "replacementAssetAvailable": True,
+        })
+        second = reconcile_repair_request(connection, {
+            "repairRequestId": "repair-rejected-1",
+            "poetryPleaseRequest": poetry_please_request,
+            "replacementAssetAvailable": True,
+        })
+
+        self.assertEqual(first["transition"], "reopened")
+        self.assertEqual(first["record"]["weaverRepairStatus"], "waiting_on_pig")
+        self.assertEqual(first["record"]["returnReviewNote"], "Attribution still needs correction.")
+        self.assertEqual(connection.handoffs[pig_job_id]["handoffStatus"], "requested")
+        self.assertEqual(connection.handoffs[pig_job_id]["pigStatus"], "not_started")
+        self.assertEqual(connection.handoff_update_calls, [pig_job_id])
+        self.assertEqual(second["transition"], "none")
+        self.assertEqual(connection.handoff_calls.count(pig_job_id), 1)
 
     def test_qc_card_preserves_structured_drive_validation_error(self):
         error = {

@@ -3917,7 +3917,7 @@ function buildPoetryPleaseRepairPanel(records) {
       <span class="badge badge--warn">Blocked / failed ${Number(counts.blocked || 0) + Number(counts.failed || 0)}</span>
       <span class="badge badge--muted">Resolved ${Number(counts.resolved || 0)}</span>
     </div>
-    <button id="sync-poetry-please-repairs" class="button" type="button">Sync one canary</button>
+    <button id="sync-poetry-please-repairs" class="button" type="button">Sync and reconcile</button>
   `;
   panel.querySelector("#sync-poetry-please-repairs")?.addEventListener("click", syncPoetryPleaseRepairCanary);
   return panel;
@@ -3939,6 +3939,7 @@ function buildPoetryPleaseRepairCard(record) {
     <div class="excerpt-card__meta">
       <span class="badge badge--signal">${escapeHtml(record.contentType || "Unknown")}</span>
       <span class="badge badge--muted">${escapeHtml(record.weaverRepairStatus || "requested")}</span>
+      ${record.returnReviewStatus ? `<span class="badge badge--muted">PP review: ${escapeHtml(record.returnReviewStatus)}</span>` : ""}
       <span class="badge badge--muted">${escapeHtml(destination)}</span>
       <span class="excerpt-card__title">${escapeHtml(record.poemTitle || "Untitled item")}</span>
       <span class="excerpt-card__author">${escapeHtml(record.author || "Unknown author")}</span>
@@ -3953,6 +3954,7 @@ function buildPoetryPleaseRepairCard(record) {
     </div>
     <p class="hint"><strong>Issue:</strong> ${escapeHtml(record.issueReason || "(none supplied)")}</p>
     <p class="hint"><strong>Instructions:</strong> ${escapeHtml(record.repairInstructions || "(none supplied)")}</p>
+    ${record.returnReviewNote ? `<p class="hint"><strong>Poetry Please review:</strong> ${escapeHtml(record.returnReviewNote)}</p>` : ""}
     ${record.blockedReason ? `<p class="hint"><strong>Blocked:</strong> ${escapeHtml(record.blockedReason)}</p>` : ""}
     ${relatedLinks ? `<p class="hint">${relatedLinks}</p>` : ""}
     ${record.retryable ? `<button class="button button--secondary retry-repair-status" type="button">Retry Poetry Please status</button>` : ""}
@@ -3976,8 +3978,15 @@ async function syncPoetryPleaseRepairCanary() {
       throw new Error(result.error || result.errors?.[0]?.error || `/api/repair-requests/sync returned ${response.status}`);
     }
     await loadGraphicsRecords();
+    const reconciliation = result.reconciliation || {};
+    const reconciliationIssueCount = [
+      "returnedMissingReplacementMetadata",
+      "poetryPleaseAcceptedWeaverNotResolved",
+      "weaverResolvedPoetryPleasePending",
+      "replacementAssetUnavailable"
+    ].reduce((count, key) => count + (Array.isArray(reconciliation[key]) ? reconciliation[key].length : 0), 0);
     setStatus(
-      `Repair sync: created ${Number(result.createdCount || 0)}, updated ${Number(result.updatedCount || 0)}, duplicate ${Number(result.duplicateCount || 0)}, blocked ${Number(result.blockedCount || 0)}, errors ${Number(result.errorCount || 0)}.`
+      `Repair sync: created ${Number(result.createdCount || 0)}, updated ${Number(result.updatedCount || 0)}, duplicate ${Number(result.duplicateCount || 0)}, blocked ${Number(result.blockedCount || 0)}, errors ${Number(result.errorCount || 0)}. Reconciliation: checked ${Number(reconciliation.checkedCount || 0)}, resolved ${Number(reconciliation.resolvedCount || 0)}, reopened ${Number(reconciliation.reopenedCount || 0)}, issues ${reconciliationIssueCount}, errors ${Number(reconciliation.errorCount || 0)}.`
     );
   } catch (error) {
     setStatus(`Poetry Please repair sync failed: ${error.message}`);
