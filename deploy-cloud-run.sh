@@ -12,3 +12,10 @@ gcloud run deploy "${SERVICE}" \
   --region "${REGION}" \
   --project "${PROJECT_ID}" \
   --account "${DEPLOY_ACCOUNT}"
+
+# A service pinned to a named revision does not automatically route source deploys.
+gcloud run services update-traffic "${SERVICE}" \
+  --to-latest \
+  --region "${REGION}" \
+  --project "${PROJECT_ID}" \
+  --account "${DEPLOY_ACCOUNT}"
