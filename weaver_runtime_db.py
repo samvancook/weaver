@@ -44,6 +44,21 @@ def normalize_key(value: str) -> str:
     return " ".join((value or "").strip().lower().split())
 
 
+def clean_durable_value(value: Any) -> str:
+    if value is None:
+        return ""
+    cleaned = str(value).strip()
+    return "" if cleaned.lower() in {"none", "null", "undefined"} else cleaned
+
+
+def first_durable_value(*values: Any) -> str:
+    for value in values:
+        cleaned = clean_durable_value(value)
+        if cleaned:
+            return cleaned
+    return ""
+
+
 def count_words(text: str) -> int:
     return len([part for part in (text or "").split() if part.strip()])
 
@@ -732,6 +747,7 @@ def default_handoff_record(graphics_request_id: str) -> dict[str, Any]:
         "qcStatus": "",
         "assetUrl": "",
         "assetPreviewUrl": "",
+        "assetFileId": "",
         "driveFileId": "",
         "driveFileName": "",
         "mimeType": "",
@@ -741,6 +757,8 @@ def default_handoff_record(graphics_request_id: str) -> dict[str, Any]:
         "pigProjectId": "",
         "editableProjectFileId": "",
         "editableProjectUrl": "",
+        "editableProjectKind": "",
+        "editableProjectSchemaVersion": "",
         "editableProjectAvailable": False,
         "reworkReason": "",
         "metadataIssue": "",
@@ -826,9 +844,15 @@ def normalize_handoff_record(record: dict[str, Any]) -> dict[str, Any]:
     normalized["bookTitle"] = str(normalized.get("bookTitle") or source_payload.get("bookTitle") or source_payload.get("book_title") or nested_source.get("bookTitle") or nested_source.get("book_title") or "")
     normalized["bookKey"] = str(normalized.get("bookKey") or source_payload.get("bookKey") or source_payload.get("book_key") or nested_source.get("bookKey") or nested_source.get("book_key") or "")
     payload_fields = {
+        "assetFileId": ("assetFileId", "driveFileId", "fileId"),
+        "driveFileId": ("driveFileId", "assetFileId", "fileId"),
+        "assetUrl": ("assetUrl", "assetLinkUrl", "driveUrl"),
+        "assetPreviewUrl": ("assetPreviewUrl", "previewUrl", "thumbnailUrl"),
         "pigProjectId": ("pigProjectId", "pig_project_id"),
         "editableProjectFileId": ("editableProjectFileId", "projectFileId", "editable_project_file_id"),
         "editableProjectUrl": ("editableProjectUrl", "editable_project_url"),
+        "editableProjectKind": ("editableProjectKind", "editable_project_kind"),
+        "editableProjectSchemaVersion": ("editableProjectSchemaVersion", "editable_project_schema_version"),
         "originalGraphicsRequestId": ("originalGraphicsRequestId", "original_graphics_request_id"),
         "revisionOf": ("revisionOf", "revision_of"),
         "version": ("version",),
@@ -840,16 +864,22 @@ def normalize_handoff_record(record: dict[str, Any]) -> dict[str, Any]:
         "requestedChanges": ("requestedChanges", "requested_changes", "qcNote", "graphicsQcNote", "qc_note"),
     }
     for field, aliases in payload_fields.items():
-        if normalized.get(field) not in {None, ""}:
+        if clean_durable_value(normalized.get(field)):
             continue
         for alias in aliases:
             for payload_source in payload_sources:
                 value = payload_source.get(alias)
-                if value not in {None, ""}:
-                    normalized[field] = value
+                if clean_durable_value(value):
+                    normalized[field] = clean_durable_value(value)
                     break
-            if normalized.get(field) not in {None, ""}:
+            if clean_durable_value(normalized.get(field)):
                 break
+    for field in (
+        "assetFileId", "driveFileId", "assetUrl", "assetPreviewUrl", "pigProjectId",
+        "editableProjectFileId", "editableProjectUrl", "editableProjectKind",
+        "editableProjectSchemaVersion",
+    ):
+        normalized[field] = clean_durable_value(normalized.get(field))
     normalized["editableProjectAvailable"] = bool(
         str(normalized.get("pigProjectId") or "").strip()
         and str(normalized.get("editableProjectFileId") or "").strip()
@@ -1495,9 +1525,15 @@ class FirestoreLedgerClient:
             "reviewStatus": str(request.get("reviewStatus") or extract_handoff_value(source_payload, "reviewStatus") or ""),
             "ocrText": str(request.get("ocrText") or extract_handoff_value(source_payload, "ocrText") or ""),
             "version": str(request.get("version") or extract_handoff_value(source_payload, "version") or existing.get("version") or ""),
-            "pigProjectId": str(request.get("pigProjectId") or extract_handoff_value(source_payload, "pigProjectId", "pig_project_id") or existing.get("pigProjectId") or ""),
-            "editableProjectFileId": str(request.get("editableProjectFileId") or request.get("projectFileId") or extract_handoff_value(source_payload, "editableProjectFileId", "projectFileId", "editable_project_file_id") or existing.get("editableProjectFileId") or ""),
-            "editableProjectUrl": str(request.get("editableProjectUrl") or extract_handoff_value(source_payload, "editableProjectUrl", "editable_project_url") or existing.get("editableProjectUrl") or ""),
+            "assetFileId": first_durable_value(request.get("assetFileId"), request.get("driveFileId"), request.get("fileId"), extract_handoff_value(source_payload, "assetFileId", "driveFileId", "fileId"), existing.get("assetFileId"), existing.get("driveFileId")),
+            "driveFileId": first_durable_value(request.get("driveFileId"), request.get("assetFileId"), request.get("fileId"), extract_handoff_value(source_payload, "driveFileId", "assetFileId", "fileId"), existing.get("driveFileId"), existing.get("assetFileId")),
+            "assetUrl": first_durable_value(request.get("assetUrl"), request.get("assetLinkUrl"), request.get("driveUrl"), extract_handoff_value(source_payload, "assetUrl", "assetLinkUrl", "driveUrl"), existing.get("assetUrl")),
+            "assetPreviewUrl": first_durable_value(request.get("assetPreviewUrl"), request.get("previewUrl"), request.get("thumbnailUrl"), extract_handoff_value(source_payload, "assetPreviewUrl", "previewUrl", "thumbnailUrl"), existing.get("assetPreviewUrl")),
+            "pigProjectId": first_durable_value(request.get("pigProjectId"), extract_handoff_value(source_payload, "pigProjectId", "pig_project_id"), existing.get("pigProjectId")),
+            "editableProjectFileId": first_durable_value(request.get("editableProjectFileId"), request.get("projectFileId"), extract_handoff_value(source_payload, "editableProjectFileId", "projectFileId", "editable_project_file_id"), existing.get("editableProjectFileId")),
+            "editableProjectUrl": first_durable_value(request.get("editableProjectUrl"), extract_handoff_value(source_payload, "editableProjectUrl", "editable_project_url"), existing.get("editableProjectUrl")),
+            "editableProjectKind": first_durable_value(request.get("editableProjectKind"), extract_handoff_value(source_payload, "editableProjectKind", "editable_project_kind"), existing.get("editableProjectKind")),
+            "editableProjectSchemaVersion": first_durable_value(request.get("editableProjectSchemaVersion"), extract_handoff_value(source_payload, "editableProjectSchemaVersion", "editable_project_schema_version"), existing.get("editableProjectSchemaVersion")),
             "reworkReason": str(request.get("reworkReason") or extract_handoff_value(source_payload, "reworkReason", "rejectReason", "rejectedReason") or existing.get("reworkReason") or ""),
             "metadataIssue": str(request.get("metadataIssue") or extract_handoff_value(source_payload, "metadataIssue", "metadata_issue") or existing.get("metadataIssue") or ""),
             "aestheticIssue": str(request.get("aestheticIssue") or extract_handoff_value(source_payload, "aestheticIssue", "aesthetic_issue") or existing.get("aestheticIssue") or ""),
@@ -1566,7 +1602,7 @@ class FirestoreLedgerClient:
             content_type = "FPI"
         if image_type == "FP":
             image_type = "FPI"
-        asset_url = str(update.get("assetUrl") or update.get("assetLinkUrl") or update.get("driveUrl") or existing["assetUrl"] or "")
+        asset_url = first_durable_value(update.get("assetUrl"), update.get("assetLinkUrl"), update.get("driveUrl"), existing.get("assetUrl"))
         uploaded = handoff_status in {"uploaded", "sent_to_weaver_qc", "approved"} or pig_status == "uploaded"
         generated = uploaded or handoff_status in {"generated", "exported", "sent_to_weaver_qc", "approved"} or pig_status in {"generated", "exported", "uploaded"}
         sent_to_qc = handoff_status in {"sent_to_weaver_qc", "approved", "rejected"} or qc_status in {"pending", "approved", "rejected", "needs_revision"}
@@ -1586,31 +1622,19 @@ class FirestoreLedgerClient:
             "handoffStatus": handoff_status,
             "qcStatus": qc_status,
             "assetUrl": asset_url,
-            "assetPreviewUrl": str(update.get("assetPreviewUrl") or update.get("previewUrl") or update.get("thumbnailUrl") or existing["assetPreviewUrl"] or ""),
-            "driveFileId": str(update.get("driveFileId") or update.get("fileId") or existing["driveFileId"] or ""),
+            "assetPreviewUrl": first_durable_value(update.get("assetPreviewUrl"), update.get("previewUrl"), update.get("thumbnailUrl"), existing.get("assetPreviewUrl")),
+            "assetFileId": first_durable_value(update.get("assetFileId"), update.get("driveFileId"), update.get("fileId"), existing.get("assetFileId"), existing.get("driveFileId")),
+            "driveFileId": first_durable_value(update.get("driveFileId"), update.get("assetFileId"), update.get("fileId"), existing.get("driveFileId"), existing.get("assetFileId")),
             "driveFileName": str(update.get("driveFileName") or update.get("fileName") or existing["driveFileName"] or ""),
             "mimeType": str(update.get("mimeType") or existing["mimeType"] or ""),
             "exportType": str(update.get("exportType") or existing["exportType"] or ""),
             "variant": str(update.get("variant") or existing["variant"] or ""),
             "version": str(update.get("version") or existing["version"] or ""),
-            "pigProjectId": str(
-                update.get("pigProjectId") if "pigProjectId" in update else existing.get("pigProjectId") or ""
-            ),
-            "editableProjectFileId": str(
-                update.get("editableProjectFileId")
-                if "editableProjectFileId" in update
-                else update.get("projectFileId")
-                if "projectFileId" in update
-                else existing.get("editableProjectFileId") or ""
-            ),
-            "editableProjectUrl": str(
-                update.get("editableProjectUrl")
-                if "editableProjectUrl" in update
-                else existing.get("editableProjectUrl") or ""
-            ),
-            "editableProjectAvailable": bool(update.get("editableProjectAvailable"))
-            if "editableProjectAvailable" in update
-            else bool(existing.get("editableProjectAvailable")),
+            "pigProjectId": first_durable_value(update.get("pigProjectId"), existing.get("pigProjectId")),
+            "editableProjectFileId": first_durable_value(update.get("editableProjectFileId"), update.get("projectFileId"), existing.get("editableProjectFileId")),
+            "editableProjectUrl": first_durable_value(update.get("editableProjectUrl"), existing.get("editableProjectUrl")),
+            "editableProjectKind": first_durable_value(update.get("editableProjectKind"), existing.get("editableProjectKind")),
+            "editableProjectSchemaVersion": first_durable_value(update.get("editableProjectSchemaVersion"), existing.get("editableProjectSchemaVersion")),
             "candidatePigProjectId": str(
                 update.get("candidatePigProjectId") or existing.get("candidatePigProjectId") or ""
             ),
@@ -1657,6 +1681,11 @@ class FirestoreLedgerClient:
                 "qcStatus": qc_status,
             }),
         })
+        existing["editableProjectAvailable"] = bool(
+            existing.get("pigProjectId")
+            and existing.get("editableProjectFileId")
+            and existing.get("editableProjectUrl")
+        )
         return self.write_record(existing)
 
     def get_handoff_queue(
@@ -1779,6 +1808,19 @@ class FirestoreLedgerClient:
             or extract_handoff_value(source_payload, "editableProjectUrl", "editable_project_url")
             or ""
         ).strip()
+        asset_file_id = first_durable_value(
+            completion.get("asset_file_id"), completion.get("assetFileId"),
+            completion.get("drive_file_id"), completion.get("driveFileId"), completion.get("fileId"),
+            extract_handoff_value(source_payload, "assetFileId", "driveFileId", "fileId"),
+        )
+        editable_project_kind = first_durable_value(
+            completion.get("editable_project_kind"), completion.get("editableProjectKind"),
+            extract_handoff_value(source_payload, "editableProjectKind", "editable_project_kind"),
+        )
+        editable_project_schema_version = first_durable_value(
+            completion.get("editable_project_schema_version"), completion.get("editableProjectSchemaVersion"),
+            extract_handoff_value(source_payload, "editableProjectSchemaVersion", "editable_project_schema_version"),
+        )
         content_id = str(
             completion.get("content_id")
             or completion.get("contentId")
@@ -1813,9 +1855,13 @@ class FirestoreLedgerClient:
             "imageType": image_type,
             "assetUrl": str(completion.get("asset_url") or completion.get("assetUrl") or ""),
             "assetPreviewUrl": str(completion.get("asset_preview_url") or completion.get("assetPreviewUrl") or ""),
+            "assetFileId": asset_file_id,
+            "driveFileId": asset_file_id,
             "pigProjectId": pig_project_id,
             "editableProjectFileId": editable_project_file_id,
             "editableProjectUrl": editable_project_url,
+            "editableProjectKind": editable_project_kind,
+            "editableProjectSchemaVersion": editable_project_schema_version,
             "editableProjectAvailable": bool(
                 pig_project_id and editable_project_file_id and editable_project_url
             ),
