@@ -6363,6 +6363,11 @@ function normalizeEditableIdentityText(value) {
   return String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
 }
 
+function cleanEditableIdentityValue(value) {
+  const cleaned = cleanSheetWhitespace(value);
+  return /^(none|null|undefined)$/i.test(cleaned) ? "" : cleaned;
+}
+
 function editableIdentityTextHash(value) {
   return createHash("sha256").update(normalizeEditableIdentityText(value)).digest("hex");
 }
@@ -6374,7 +6379,7 @@ function getEditableIdentityValues(record = {}) {
   const sourceIdentity = record.sourceIdentity && typeof record.sourceIdentity === "object"
     ? record.sourceIdentity
     : (payload.sourceIdentity && typeof payload.sourceIdentity === "object" ? payload.sourceIdentity : {});
-  const contentId = cleanSheetWhitespace(
+  const contentId = cleanEditableIdentityValue(
     sourceIdentity.contentId
       || sourceIdentity.imageId
       || record.contentId
@@ -6386,16 +6391,16 @@ function getEditableIdentityValues(record = {}) {
   );
   const quoteText = String(payload.quoteText || record.quoteText || "");
   return {
-    graphicsRequestId: cleanSheetWhitespace(
+    graphicsRequestId: cleanEditableIdentityValue(
       sourceIdentity.graphicsRequestId
         || record.graphicsRequestId
         || payload.graphicsRequestId
         || payload.requestId
     ),
     contentId,
-    imageId: cleanSheetWhitespace(sourceIdentity.imageId || record.imageId || payload.imageId || contentId),
+    imageId: cleanEditableIdentityValue(sourceIdentity.imageId || record.imageId || payload.imageId || contentId),
     quoteText,
-    textHash: cleanSheetWhitespace(sourceIdentity.textHash || record.textHash || payload.textHash)
+    textHash: cleanEditableIdentityValue(sourceIdentity.textHash || record.textHash || payload.textHash)
       || (quoteText ? editableIdentityTextHash(quoteText) : "")
   };
 }
@@ -6427,11 +6432,11 @@ async function driveAccessFailure(response, fileId, operation) {
 }
 
 async function validateCompletionEditableProjectIdentity(completion = {}) {
-  const pigProjectId = cleanSheetWhitespace(completion.pigProjectId);
-  const editableProjectFileId = cleanSheetWhitespace(
+  const pigProjectId = cleanEditableIdentityValue(completion.pigProjectId);
+  const editableProjectFileId = cleanEditableIdentityValue(
     completion.editableProjectFileId || completion.projectFileId
   );
-  const editableProjectUrl = cleanSheetWhitespace(completion.editableProjectUrl);
+  const editableProjectUrl = cleanEditableIdentityValue(completion.editableProjectUrl);
   const suppliedIdentityCount = [pigProjectId, editableProjectFileId, editableProjectUrl].filter(Boolean).length;
   if (!suppliedIdentityCount) {
     return completion;
@@ -6453,7 +6458,7 @@ async function validateCompletionEditableProjectIdentity(completion = {}) {
     throw new Error(`Editable project ${editableProjectFileId} is not valid JSON.`);
   }
   const projectIds = [project.pigProjectId, project.id]
-    .map(cleanSheetWhitespace)
+    .map(cleanEditableIdentityValue)
     .filter(Boolean);
   if (!projectIds.length || projectIds.some(projectId => projectId !== pigProjectId)) {
     throw new Error(`Editable project ${editableProjectFileId} project ID conflicts with completion ${completion.completionId || ""}.`);
@@ -6463,19 +6468,34 @@ async function validateCompletionEditableProjectIdentity(completion = {}) {
   const selectedRecord = project.selectedRecord && typeof project.selectedRecord === "object"
     ? project.selectedRecord
     : {};
+  const sourceRecord = project.sourceRecord && typeof project.sourceRecord === "object"
+    ? project.sourceRecord
+    : {};
   const projectIdentity = getEditableIdentityValues({
+    ...sourceRecord,
     ...selectedRecord,
     sourceIdentity: project.sourceIdentity,
-    graphicsRequestId: project.sourceIdentity?.graphicsRequestId || selectedRecord.graphicsRequestId,
-    contentId: selectedRecord.contentId || selectedRecord.sourceRecordId || selectedRecord.recordId,
-    imageId: selectedRecord.imageId,
-    quoteText: project.sourceIdentity?.normalizedText || selectedRecord.quoteText || selectedRecord.text
+    graphicsRequestId: project.sourceIdentity?.graphicsRequestId
+      || selectedRecord.graphicsRequestId
+      || sourceRecord.graphicsRequestId,
+    contentId: selectedRecord.contentId
+      || selectedRecord.sourceRecordId
+      || selectedRecord.recordId
+      || sourceRecord.contentId
+      || sourceRecord.imageId,
+    imageId: selectedRecord.imageId || sourceRecord.imageId,
+    quoteText: project.sourceIdentity?.normalizedText
+      || selectedRecord.quoteText
+      || selectedRecord.text
+      || sourceRecord.quoteText
+      || project.poemText
   });
   const expectedRequestId = expected.graphicsRequestId;
   const projectRequestIds = [
     project.sourceIdentity?.graphicsRequestId,
-    selectedRecord.graphicsRequestId
-  ].map(cleanSheetWhitespace).filter(Boolean);
+    selectedRecord.graphicsRequestId,
+    sourceRecord.graphicsRequestId
+  ].map(cleanEditableIdentityValue).filter(Boolean);
   if (expectedRequestId && projectRequestIds.some(requestId => requestId !== expectedRequestId)) {
     throw new Error(`Editable project ${editableProjectFileId} request identity conflicts with ${expectedRequestId}.`);
   }

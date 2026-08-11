@@ -128,6 +128,80 @@ class RepairIdentityFirestoreLedger(FirestoreLedgerClient):
 
 
 class GraphicsHandoffLedgerTest(unittest.TestCase):
+    def test_firestore_status_patch_preserves_durable_asset_and_project_identity(self):
+        connection = RepairIdentityFirestoreLedger()
+        request_id = "weaver:qi:durable-identity"
+        connection.records[request_id] = normalize_handoff_record({
+            "graphicsRequestId": request_id,
+            "contentType": "QI",
+            "imageType": "QI",
+            "handoffStatus": "uploaded",
+            "pigStatus": "uploaded",
+            "qcStatus": "not_sent",
+            "assetFileId": "asset-file-1",
+            "driveFileId": "asset-file-1",
+            "assetUrl": "https://example.com/asset",
+            "assetPreviewUrl": "https://example.com/preview",
+            "pigProjectId": "project-1",
+            "editableProjectFileId": "editable-file-1",
+            "editableProjectUrl": "https://example.com/editable",
+            "editableProjectKind": "pig.editableProject",
+            "editableProjectSchemaVersion": "3",
+        })
+
+        updated = connection.update_handoff(request_id, {
+            "handoffStatus": "sent_to_weaver_qc",
+            "qcStatus": "pending",
+            "assetFileId": None,
+            "driveFileId": "",
+            "assetUrl": "None",
+            "assetPreviewUrl": "undefined",
+            "pigProjectId": "",
+            "editableProjectFileId": None,
+            "editableProjectUrl": "None",
+            "editableProjectKind": "null",
+            "editableProjectSchemaVersion": "",
+        })
+
+        self.assertEqual(updated["assetFileId"], "asset-file-1")
+        self.assertEqual(updated["driveFileId"], "asset-file-1")
+        self.assertEqual(updated["assetUrl"], "https://example.com/asset")
+        self.assertEqual(updated["assetPreviewUrl"], "https://example.com/preview")
+        self.assertEqual(updated["pigProjectId"], "project-1")
+        self.assertEqual(updated["editableProjectFileId"], "editable-file-1")
+        self.assertEqual(updated["editableProjectUrl"], "https://example.com/editable")
+        self.assertEqual(updated["editableProjectKind"], "pig.editableProject")
+        self.assertEqual(updated["editableProjectSchemaVersion"], "3")
+        self.assertTrue(updated["editableProjectAvailable"])
+
+    def test_completion_carries_complete_durable_identity_to_handoff(self):
+        connection = MemoryFirestoreLedger()
+        request_id = "weaver:qi:complete-identity"
+        connection.handoffs[request_id] = {"graphicsRequestId": request_id}
+
+        sync_completions(connection, {"completions": [{
+            "completionId": "completion-complete-identity",
+            "graphicsRequestId": request_id,
+            "contentType": "QI",
+            "quoteText": "Test quote",
+            "assetFileId": "asset-file-2",
+            "assetUrl": "https://example.com/asset-2",
+            "assetPreviewUrl": "https://example.com/preview-2",
+            "pigProjectId": "project-2",
+            "editableProjectFileId": "editable-file-2",
+            "editableProjectUrl": "https://example.com/editable-2",
+            "editableProjectKind": "pig.editableProject",
+            "editableProjectSchemaVersion": 3,
+        }]})
+
+        handoff = connection.handoffs[request_id]
+        self.assertEqual(handoff["assetFileId"], "asset-file-2")
+        self.assertEqual(handoff["driveFileId"], "asset-file-2")
+        self.assertEqual(handoff["pigProjectId"], "project-2")
+        self.assertEqual(handoff["editableProjectFileId"], "editable-file-2")
+        self.assertEqual(handoff["editableProjectKind"], "pig.editableProject")
+        self.assertEqual(handoff["editableProjectSchemaVersion"], 3)
+
     def test_external_repair_preserves_stable_job_id_without_canonical_collapse(self):
         connection = RepairIdentityFirestoreLedger()
         repair_job_id = "weaver:repair:stable-canary"
