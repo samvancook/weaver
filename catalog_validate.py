@@ -13,17 +13,20 @@ from excerpt_library import find_library_excerpt_match
 
 DEFAULT_DB_PATH = Path(__file__).resolve().parent / "data" / "formal_catalog.db"
 LEGACY_DB_PATH = Path("/Users/buttonpublishingone/Desktop/CODEX/Social Media Dev/poetry_catalog/formal_catalog.db")
-DB_PATH = DEFAULT_DB_PATH if DEFAULT_DB_PATH.exists() else LEGACY_DB_PATH
+DB_PATH = LEGACY_DB_PATH if LEGACY_DB_PATH.exists() else DEFAULT_DB_PATH
 
 
 def normalize(text: str | None) -> str:
     if not text:
         return ""
+    text = re.sub(r"\*([^*\n]+)\*", r"\1", text)
+    text = text.replace("*", "")
     text = text.lower()
     text = text.replace("—", " ").replace("–", " ")
     text = text.replace("&", " and ")
     text = text.replace("’", "'").replace("‘", "'")
     text = re.sub(r'[\"“”`]', "", text)
+    text = re.sub(r"(?<![a-z0-9])'|'(?![a-z0-9])", "", text)
     text = re.sub(r"\s+", " ", text)
     return text.strip()
 
@@ -73,13 +76,72 @@ def candidate_snippets(text: str | None) -> list[str]:
 
 
 def preserve_excerpt_text(text: str | None) -> str:
-    raw = (text or "").replace("\r\n", "\n").replace("\r", "\n")
+    raw = re.sub(r"\*([^*\n]+)\*", r"\1", text or "")
+    raw = raw.replace("*", "")
+    raw = re.sub(r"(?<![a-z0-9])'|'(?![a-z0-9])", "", raw, flags=re.IGNORECASE)
+    raw = raw.replace("\r\n", "\n").replace("\r", "\n")
     lines = [re.sub(r"[ \t]+", " ", line).strip() for line in raw.split("\n")]
     while lines and not lines[0]:
         lines.pop(0)
     while lines and not lines[-1]:
         lines.pop()
     return "\n".join(lines).strip()
+
+
+def collapse_blank_lines(text: str | None) -> str:
+    raw = preserve_excerpt_text(text)
+    if not raw:
+        return ""
+    lines = [line for line in raw.split("\n") if line.strip()]
+    return "\n".join(lines).strip()
+
+
+def strip_wrapping_quotes(text: str | None) -> str:
+    raw = (text or "").strip()
+    if len(raw) >= 2 and raw[0] in {'"', "“", "”", "'"} and raw[-1] in {'"', "“", "”", "'"}:
+        return raw[1:-1].strip()
+    return raw
+
+
+def extract_effective_poem_title_and_text(title: str | None, text: str | None) -> tuple[str, str]:
+    raw_title = clean_title = (title or "").strip()
+    raw_text = preserve_excerpt_text(text)
+    raw_text_for_match = raw_text if len(raw_text) > 60 else ""
+
+    if len(clean_title) > 120:
+        tokens = clean_title.split()
+        for index, token in enumerate(tokens):
+            if index == 0:
+                continue
+            if re.search(r"[a-z]", token):
+                effective_title = " ".join(tokens[:index]).strip()
+                effective_text = " ".join(tokens[index:]).strip()
+                if effective_title and effective_text:
+                    return effective_title, effective_text
+
+    return clean_title, raw_text_for_match
+
+
+def titles_loosely_match(left: str | None, right: str | None) -> bool:
+    normalized_left = normalize_title(left)
+    normalized_right = normalize_title(right)
+    if not normalized_left or not normalized_right:
+        return False
+    left_words = normalized_left.split()
+    right_words = normalized_right.split()
+    return (
+        normalized_left == normalized_right
+        or (
+            len(normalized_left) >= 8
+            and len(normalized_right) >= 8
+            and len(left_words) >= 2
+            and len(right_words) >= 2
+            and (
+                normalized_left.startswith(normalized_right)
+                or normalized_right.startswith(normalized_left)
+            )
+        )
+    )
 
 
 @lru_cache(maxsize=1)
@@ -241,19 +303,40 @@ def validate_record(
         result["status"] = "epub_not_present"
         return result
 
+    if book_status["effective_status"] != "catalog_ok":
+        result["status"] = "catalog_unavailable"
+        return result
+
     poems = fetch_poems_for_book(cursor, int(book_status["canonical_book_id"]))
+    if not poems:
+        result["status"] = "catalog_unavailable"
+        return result
+
     normalized_poem_title = normalize_title(poem_title)
     query_excerpt_raw = preserve_excerpt_text(record.get("excerptText"))
 
     for poem in poems:
-        poem_text = normalize(poem["text"])
-        if normalize_title(poem["title"]) == normalized_poem_title:
-            result["poemTitleMatchesInBook"] = True
+        effective_poem_title, effective_poem_text = extract_effective_poem_title_and_text(poem["title"], poem["text"])
+        poem_text = normalize(effective_poem_text)
+        if titles_loosely_match(effective_poem_title, poem_title):
+            if preserve_excerpt_text(effective_poem_text):
+                result["poemTitleMatchesInBook"] = True
         if any(snippet and snippet in poem_text for snippet in snippets):
             result["excerptMatchesInBook"] = True
-            result["matchedPoemTitle"] = poem["title"]
-            matched_raw_text = preserve_excerpt_text(poem["text"])
-            result["catalogFormattingMatch"] = bool(query_excerpt_raw and query_excerpt_raw in matched_raw_text)
+            result["matchedPoemTitle"] = effective_poem_title or poem["title"]
+            matched_raw_text = preserve_excerpt_text(effective_poem_text)
+            matched_raw_text_collapsed = collapse_blank_lines(effective_poem_text)
+            query_excerpt_unquoted = strip_wrapping_quotes(query_excerpt_raw)
+            query_excerpt_collapsed = collapse_blank_lines(query_excerpt_raw)
+            query_excerpt_unquoted_collapsed = collapse_blank_lines(query_excerpt_unquoted)
+            result["catalogFormattingMatch"] = bool(
+                (matched_raw_text or matched_raw_text_collapsed) and (
+                    (query_excerpt_raw and query_excerpt_raw in matched_raw_text)
+                    or (query_excerpt_unquoted and query_excerpt_unquoted in matched_raw_text)
+                    or (query_excerpt_collapsed and query_excerpt_collapsed in matched_raw_text_collapsed)
+                    or (query_excerpt_unquoted_collapsed and query_excerpt_unquoted_collapsed in matched_raw_text_collapsed)
+                )
+            )
             result["catalogLineBreaksMatch"] = result["catalogFormattingMatch"]
             break
 
