@@ -78,6 +78,12 @@ const fallbackReviewQueueIncludeTitles = [
   "good luck in the real world",
   "without the frills"
 ];
+const PRIORITY_VIDEO_SETS = new Map([
+  ["bpl-charm-city-2026", { id: "bpl-charm-city-2026", label: "BPL Charm City 2026", folderId: "1dj6yrZTR8YUMjqw-QPoEMLCgmgjGCBit" }],
+  ["mn-writers-respond-loft", { id: "mn-writers-respond-loft", label: "MN Writers Respond @ The Loft", folderId: "1eKj0DFq1Qflks0LDtqhZX7iCinl9O0ib" }],
+  ["mpmu-2026-finals", { id: "mpmu-2026-finals", label: "MPMU 2026 Finals", folderId: "1zaFfA8AodYcvzg1fB32g7vBvjzUvN2vk" }],
+  ["ollie-schminkey-action-cam", { id: "ollie-schminkey-action-cam", label: "Ollie Schminkey - Action Cam", folderId: "1ATxYkZP4tlgoaXzbbrSJsC_XeU0pGIJ_" }]
+]);
 
 const contentTypes = {
   ".html": "text/html; charset=utf-8",
@@ -357,6 +363,17 @@ function normalizeExcerptContentType(value) {
   return "EXC";
 }
 
+function normalizeCurationRating(value) {
+  const normalized = cleanSheetWhitespace(value).toLowerCase().replace(/[\s-]+/g, "_");
+  return ["dislike", "meh", "like", "moved_me"].includes(normalized) ? normalized : "";
+}
+
+function normalizeOptionalCurationScore(value) {
+  if (value === null || value === undefined || String(value).trim() === "") return null;
+  const score = Number(value);
+  return Number.isFinite(score) && score >= 0 && score <= 10 ? score : null;
+}
+
 function normalizePoetryPleaseContentType(value, fallback = "EXC") {
   const cleaned = cleanSheetWhitespace(value).toUpperCase();
   if (cleaned === "QI" || cleaned === "QUOTE IMAGE") return "QI";
@@ -391,7 +408,11 @@ function parseIntakeMetadataFromNotes(text) {
     bookShortener: "",
     contentType: "",
     socialMediaHandle: "",
-    sourceEvent: ""
+    sourceEvent: "",
+    curationRating: "",
+    curationLegacyScore: null,
+    curationNotes: "",
+    sourceVideoUrl: ""
   };
   noteText.split(/\r?\n/).forEach(line => {
     const match = line.match(/^\s*([^:]+):\s*(.+?)\s*$/);
@@ -407,6 +428,14 @@ function parseIntakeMetadataFromNotes(text) {
       result.contentType = normalizeExcerptContentType(value);
     } else if (label === "project/event" || label === "source event" || label === "event") {
       result.sourceEvent = value;
+    } else if (label === "curation rating") {
+      result.curationRating = normalizeCurationRating(value);
+    } else if (label === "curation legacy score" || label === "curation score") {
+      result.curationLegacyScore = normalizeOptionalCurationScore(value);
+    } else if (label === "curation notes") {
+      result.curationNotes = value;
+    } else if (label === "source video url") {
+      result.sourceVideoUrl = value;
     } else if (
       label === "instagram handle"
       || label === "ig handle"
@@ -1398,6 +1427,11 @@ function buildGraphicsRequestRecordFromQueueRow(row, index, canonicalBookAuthorM
     quoteText,
     notes,
     socialMediaHandle: noteMeta.socialMediaHandle || "",
+    sourceEvent: cleanSheetWhitespace(row[17]) || noteMeta.sourceEvent || "",
+    sourceVideoUrl: noteMeta.sourceVideoUrl || "",
+    curationRating: isVideoIntake ? noteMeta.curationRating : "",
+    curationLegacyScore: isVideoIntake ? noteMeta.curationLegacyScore : null,
+    curationNotes: isVideoIntake ? noteMeta.curationNotes : "",
     instagramHandle: noteMeta.socialMediaHandle || "",
     igHandle: noteMeta.socialMediaHandle || "",
     approved,
@@ -2065,7 +2099,7 @@ async function getDriveFolderMetadata(folderId) {
 
 async function getDriveFileMetadata(fileId) {
   const url = new URL(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}`);
-  url.searchParams.set("fields", "id,name,mimeType,thumbnailLink,webViewLink,createdTime");
+  url.searchParams.set("fields", "id,name,mimeType,parents,thumbnailLink,webViewLink,createdTime");
   url.searchParams.set("supportsAllDrives", "true");
   return fetchDriveJson(url);
 }
@@ -2092,6 +2126,106 @@ async function listDriveFolderImageFiles(folderId) {
   } while (pageToken);
 
   return files;
+}
+
+async function listDriveFolderVideoFiles(folderId) {
+  let pageToken = "";
+  const files = [];
+  do {
+    const url = new URL("https://www.googleapis.com/drive/v3/files");
+    url.searchParams.set("q", `'${folderId}' in parents and trashed=false and mimeType contains 'video/'`);
+    url.searchParams.set("fields", "nextPageToken,files(id,name,mimeType,parents,webViewLink,createdTime)");
+    url.searchParams.set("orderBy", "name_natural");
+    url.searchParams.set("pageSize", "1000");
+    url.searchParams.set("supportsAllDrives", "true");
+    url.searchParams.set("includeItemsFromAllDrives", "true");
+    if (pageToken) url.searchParams.set("pageToken", pageToken);
+    const data = await fetchDriveJson(url);
+    files.push(...(Array.isArray(data.files) ? data.files : []));
+    pageToken = cleanSheetWhitespace(data.nextPageToken);
+  } while (pageToken);
+  return files;
+}
+
+function parsePriorityVideoFileName(fileName) {
+  const baseName = cleanSheetWhitespace(String(fileName || "").replace(/\.[^.]+$/, ""));
+  const label = cleanSheetWhitespace(baseName.replace(/^\[Vertical Version(?:\s+[A-Z])?\]\s*/i, ""));
+  const separatorIndex = label.indexOf(" - ");
+  if (separatorIndex < 0) return { author: "", poemTitle: label };
+  return {
+    author: cleanSheetWhitespace(label.slice(0, separatorIndex)),
+    poemTitle: cleanSheetWhitespace(label.slice(separatorIndex + 3))
+  };
+}
+
+async function loadPriorityVideoSet(prioritySetId, reviewerEmail = "") {
+  const set = PRIORITY_VIDEO_SETS.get(cleanSheetWhitespace(prioritySetId));
+  if (!set) throw new Error("Unknown priority video set.");
+  const files = await listDriveFolderVideoFiles(set.folderId);
+  let reviewsByFileId = new Map();
+  const normalizedReviewerEmail = cleanSheetWhitespace(reviewerEmail).toLowerCase();
+  if (normalizedReviewerEmail) {
+    const reviewResult = await syncWeaverRuntimeDb("get_curation_reviews", {
+      prioritySetId: set.id,
+      reviewerEmail: normalizedReviewerEmail
+    });
+    reviewsByFileId = new Map(
+      (Array.isArray(reviewResult?.records) ? reviewResult.records : [])
+        .map(record => [cleanSheetWhitespace(record.sourceFileId), {
+          rating: cleanSheetWhitespace(record.rating),
+          notes: String(record.notes || ""),
+          status: cleanSheetWhitespace(record.status),
+          updatedAt: cleanSheetWhitespace(record.updatedAt),
+          excerptRecordIds: Array.isArray(record.excerptRecordIds) ? record.excerptRecordIds : []
+        }])
+        .filter(([fileId]) => fileId)
+    );
+  }
+  const items = files.map(file => ({
+    ...parsePriorityVideoFileName(file.name),
+    videoUrl: cleanSheetWhitespace(file.webViewLink) || `https://drive.google.com/file/d/${encodeURIComponent(file.id)}/view`,
+    eventName: set.label,
+    prioritySetId: set.id,
+    sourceFolderId: set.folderId,
+    sourceFileId: cleanSheetWhitespace(file.id),
+    sourceFileName: cleanSheetWhitespace(file.name),
+    review: reviewsByFileId.get(cleanSheetWhitespace(file.id)) || null
+  }));
+  return {
+    ok: true,
+    prioritySetId: set.id,
+    formTitle: set.label,
+    eventName: set.label,
+    sourceFolderId: set.folderId,
+    count: items.length,
+    reviewedCount: items.filter(item => item.review?.rating).length,
+    items
+  };
+}
+
+async function savePriorityVideoReview(payload = {}) {
+  const set = PRIORITY_VIDEO_SETS.get(cleanSheetWhitespace(payload.prioritySetId));
+  if (!set) throw new Error("Unknown priority video set.");
+  const sourceFileId = cleanSheetWhitespace(payload.sourceFileId);
+  const reviewerEmail = cleanSheetWhitespace(payload.email || payload.reviewerEmail).toLowerCase();
+  if (!sourceFileId || !reviewerEmail) throw new Error("Video review requires a source file and reviewer email.");
+  const file = await getDriveFileMetadata(sourceFileId);
+  if (!Array.isArray(file.parents) || !file.parents.includes(set.folderId)) {
+    throw new Error("The selected video is not in the requested priority set.");
+  }
+  const result = await syncWeaverRuntimeDb("upsert_curation_review", {
+    review: {
+      ...payload,
+      reviewerEmail,
+      prioritySetId: set.id,
+      sourceFolderId: set.folderId,
+      sourceFileId,
+      sourceFileName: cleanSheetWhitespace(file.name),
+      sourceVideoUrl: cleanSheetWhitespace(file.webViewLink) || `https://drive.google.com/file/d/${encodeURIComponent(sourceFileId)}/view`
+    }
+  });
+  if (!result?.ok) throw new Error(result?.error || "Video review could not be saved.");
+  return result;
 }
 
 function chooseBestDriveFolderImageFile(files = []) {
@@ -2675,6 +2809,9 @@ function buildApprovedExcerptExportRecordFromSheetRow(row, index, canonicalBookA
   );
   const poemTitle = (isVideoIntake ? rawVideoTitle : row[config.title - 1] || "").toString();
   const sourceEvent = cleanSheetWhitespace(row[17]) || noteMeta.sourceEvent || null;
+  const curationRating = isVideoIntake ? (noteMeta.curationRating || null) : null;
+  const curationLegacyScore = isVideoIntake ? noteMeta.curationLegacyScore : null;
+  const curationNotes = isVideoIntake ? (noteMeta.curationNotes || null) : null;
   const validationStatus = cleanSheetWhitespace(row[config.validationStatus - 1]);
   const canonicalAuthor = cleanSheetWhitespace(row[config.validationCanonicalAuthor - 1]) || author;
   const canonicalPoemTitle = cleanSheetWhitespace(row[config.validationMatchedPoemTitle - 1]) || poemTitle;
@@ -2704,6 +2841,15 @@ function buildApprovedExcerptExportRecordFromSheetRow(row, index, canonicalBookA
     sourceUpdatedAt: normalizedTimestamp,
     sourceEvent,
     sourceEventLabel: sourceEvent,
+    sourceVideoUrl: isVideoIntake ? (noteMeta.sourceVideoUrl || null) : null,
+    curationRating,
+    curationLegacyScore,
+    curationNotes,
+    curation: isVideoIntake ? {
+      rating: curationRating,
+      legacyScore: curationLegacyScore,
+      notes: curationNotes
+    } : null,
     author,
     poemTitle,
     bookTitle,
@@ -2733,7 +2879,9 @@ function buildApprovedExcerptExportRecordFromSheetRow(row, index, canonicalBookA
       lineCount,
       updatedAt: normalizedTimestamp,
       sourceEvent,
-      sourceEventLabel: sourceEvent
+      sourceEventLabel: sourceEvent,
+      curationRating,
+      curationLegacyScore
     },
     contentType: noteMeta.contentType || "EXC",
     socialMediaHandle: noteMeta.socialMediaHandle || "",
@@ -3184,8 +3332,12 @@ function buildExcerptGatheringAppendRow(payload = {}) {
   if (mode === "video") {
     const author = cleanSheetWhitespace(payload.author);
     const quote = String(payload.quote || "").trim();
+    const curationRating = normalizeCurationRating(payload.curationRating || payload.rating);
     if (!author || !quote) {
       throw new Error("Video intake requires author and quote.");
+    }
+    if (!curationRating) {
+      throw new Error("Video intake requires a curation rating: dislike, meh, like, or moved_me.");
     }
     row[2] = "Add a quote from a video";
     row[9] = author;
@@ -3193,6 +3345,18 @@ function buildExcerptGatheringAppendRow(payload = {}) {
     row[12] = quote;
     row[13] = cleanSheetWhitespace(payload.bookTitle);
     row[17] = cleanSheetWhitespace(payload.eventName);
+    row[8] = [
+      `Curation rating: ${curationRating}`,
+      normalizeOptionalCurationScore(payload.curationLegacyScore) !== null
+        ? `Curation legacy score: ${normalizeOptionalCurationScore(payload.curationLegacyScore)}`
+        : "",
+      cleanSheetWhitespace(payload.curationNotes)
+        ? `Curation notes: ${cleanSheetWhitespace(payload.curationNotes)}`
+        : "",
+      cleanSheetWhitespace(payload.sourceVideoUrl)
+        ? `Source video URL: ${cleanSheetWhitespace(payload.sourceVideoUrl)}`
+        : ""
+    ].filter(Boolean).join("\n");
     return row;
   }
 
@@ -3218,6 +3382,14 @@ function buildExcerptRuntimeRecord(payload = {}, { sourceRow = 0, createdAt = ""
     bookTitle: cleanSheetWhitespace(payload.bookTitle),
     excerptText: String(payload.quote || payload.excerptText || "").trim(),
     sourceEvent: cleanSheetWhitespace(payload.eventName || payload.sourceEvent),
+    sourceVideoUrl: cleanSheetWhitespace(payload.sourceVideoUrl),
+    sourceVideoSetId: cleanSheetWhitespace(payload.prioritySetId || payload.sourceVideoSetId),
+    sourceVideoFolderId: cleanSheetWhitespace(payload.sourceFolderId || payload.sourceVideoFolderId),
+    sourceVideoFileId: cleanSheetWhitespace(payload.sourceFileId || payload.sourceVideoFileId),
+    sourceVideoFileName: cleanSheetWhitespace(payload.sourceFileName || payload.sourceVideoFileName),
+    curationRating: normalizeCurationRating(payload.curationRating || payload.rating),
+    curationLegacyScore: normalizeOptionalCurationScore(payload.curationLegacyScore),
+    curationNotes: String(payload.curationNotes || "").trim(),
     notes: String(payload.notes || "").trim(),
     contentType: normalizeExcerptContentType(payload.contentType || "EXC"),
     releaseCatalog: cleanSheetWhitespace(payload.releaseCatalog),
@@ -4253,6 +4425,7 @@ async function retryFailedGraphicsHandoffs(records = []) {
 
 function buildPoetryPleaseExcerptRecord(record) {
   if (!record) return null;
+  const handoffPayload = record.payload && typeof record.payload === "object" ? record.payload : {};
   const excerpt = normalizeExcerptTransferText(record.excerpt || record.quoteText || "");
   const recordId = cleanSheetWhitespace(record.recordId);
   const bookShortener = cleanSheetWhitespace(record.bookShortener);
@@ -4297,7 +4470,17 @@ function buildPoetryPleaseExcerptRecord(record) {
     igHandle: cleanSheetWhitespace(record.socialMediaHandle || record.instagramHandle || record.igHandle),
     driveLink: String(record.driveLink || ""),
     sourceUrl: String(record.sourceUrl || ""),
-    pageNumber: String(record.pageNumber || "")
+    pageNumber: String(record.pageNumber || ""),
+    sourceEvent: cleanSheetWhitespace(record.sourceEvent || handoffPayload.sourceEvent) || null,
+    sourceEventLabel: cleanSheetWhitespace(record.sourceEventLabel || record.sourceEvent || handoffPayload.sourceEvent) || null,
+    curationRating: normalizeCurationRating(record.curationRating || handoffPayload.curationRating) || null,
+    curationLegacyScore: normalizeOptionalCurationScore(record.curationLegacyScore ?? handoffPayload.curationLegacyScore),
+    curationNotes: String(record.curationNotes || handoffPayload.curationNotes || "") || null,
+    curation: {
+      rating: normalizeCurationRating(record.curationRating || handoffPayload.curationRating) || null,
+      legacyScore: normalizeOptionalCurationScore(record.curationLegacyScore ?? handoffPayload.curationLegacyScore),
+      notes: String(record.curationNotes || handoffPayload.curationNotes || "") || null
+    }
   };
 }
 
@@ -6091,6 +6274,13 @@ async function enrichAcceptedExcerptUpdate(update) {
     || noteMeta.socialMediaHandle
     || cleanSheetWhitespace(record.socialMediaHandle)
     || "";
+  normalized.sourceEvent = cleanSheetWhitespace(normalized.sourceEvent) || noteMeta.sourceEvent || cleanSheetWhitespace(record.sourceEvent);
+  normalized.sourceVideoUrl = cleanSheetWhitespace(normalized.sourceVideoUrl) || noteMeta.sourceVideoUrl || cleanSheetWhitespace(record.sourceVideoUrl);
+  normalized.curationRating = normalizeCurationRating(normalized.curationRating || noteMeta.curationRating || record.curationRating);
+  normalized.curationLegacyScore = normalizeOptionalCurationScore(
+    normalized.curationLegacyScore ?? noteMeta.curationLegacyScore ?? record.curationLegacyScore
+  );
+  normalized.curationNotes = String(normalized.curationNotes || noteMeta.curationNotes || record.curationNotes || "");
   return normalized;
 }
 
@@ -6134,7 +6324,12 @@ function buildAcceptedExcerptHandoff(update) {
     payload: {
       sourceRow: sourceRow || 0,
       sourceRecordId,
-      reviewDecision: normalizeDecision(update?.reviewDecision || update?.approval) || "accept"
+      reviewDecision: normalizeDecision(update?.reviewDecision || update?.approval) || "accept",
+      sourceEvent: cleanSheetWhitespace(update?.sourceEvent),
+      sourceVideoUrl: cleanSheetWhitespace(update?.sourceVideoUrl),
+      curationRating: normalizeCurationRating(update?.curationRating),
+      curationLegacyScore: normalizeOptionalCurationScore(update?.curationLegacyScore),
+      curationNotes: String(update?.curationNotes || "")
     }
   };
 }
@@ -6185,7 +6380,12 @@ function buildExcerptHandoffFromApprovedExportRecord(record) {
     payload: {
       sourceRow: parseInt(record?.sourceRow, 10) || 0,
       sourceRecordId,
-      reviewDecision: "accept"
+      reviewDecision: "accept",
+      sourceEvent: cleanSheetWhitespace(record?.sourceEvent),
+      sourceVideoUrl: cleanSheetWhitespace(record?.sourceVideoUrl),
+      curationRating: normalizeCurationRating(record?.curationRating || record?.curation?.rating),
+      curationLegacyScore: normalizeOptionalCurationScore(record?.curationLegacyScore ?? record?.curation?.legacyScore),
+      curationNotes: String(record?.curationNotes || record?.curation?.notes || "")
     }
   };
 }
@@ -7166,13 +7366,27 @@ const server = http.createServer(async (req, res) => {
 
   if (url.pathname === "/api/intake/video-playlist" && req.method === "GET") {
     try {
-      const result = await loadVideoPlaylistFromFormUrl(url.searchParams.get("formUrl") || "");
+      const prioritySetId = url.searchParams.get("prioritySetId") || "";
+      const result = prioritySetId
+        ? await loadPriorityVideoSet(prioritySetId, url.searchParams.get("reviewerEmail") || "")
+        : await loadVideoPlaylistFromFormUrl(url.searchParams.get("formUrl") || "");
       return sendJson(res, 200, result);
     } catch (error) {
       return sendJson(res, 500, {
         ok: false,
         error: error.message
       });
+    }
+  }
+
+  if (url.pathname === "/api/intake/video-review" && req.method === "POST") {
+    try {
+      const body = await readRequestBody(req);
+      const parsed = JSON.parse(body || "{}");
+      const result = await savePriorityVideoReview(parsed);
+      return sendJson(res, 200, result);
+    } catch (error) {
+      return sendJson(res, 500, { ok: false, error: error.message });
     }
   }
 

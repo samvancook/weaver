@@ -60,11 +60,14 @@ FIRESTORE_HANDOFF_ACTIONS = {
     "reconcile_repair_request",
     "upsert_excerpt_records",
     "get_excerpt_records",
+    "upsert_curation_review",
+    "get_curation_reviews",
 }
 
 EXPECTED_FIRESTORE_PROJECT_ID = "button-weaver-internal"
 EXPECTED_FIRESTORE_DATABASE_ID = "weaverledger"
 FIRESTORE_REPAIR_REQUESTS_COLLECTION = "poetryPleaseRepairRequests"
+FIRESTORE_CURATION_REVIEWS_COLLECTION = "curationReviews"
 PIG_REPAIR_CONTENT_TYPES = {"QI", "FPI"}
 
 
@@ -571,6 +574,14 @@ def normalize_excerpt_record(record: dict[str, Any]) -> dict[str, Any]:
         "bookTitle": normalize_text(record.get("bookTitle")),
         "excerptText": str(record.get("excerptText") or record.get("quote") or ""),
         "sourceEvent": normalize_text(record.get("sourceEvent") or record.get("eventName")),
+        "sourceVideoUrl": normalize_text(record.get("sourceVideoUrl")),
+        "sourceVideoSetId": normalize_text(record.get("sourceVideoSetId") or record.get("prioritySetId")),
+        "sourceVideoFolderId": normalize_text(record.get("sourceVideoFolderId") or record.get("sourceFolderId")),
+        "sourceVideoFileId": normalize_text(record.get("sourceVideoFileId") or record.get("sourceFileId")),
+        "sourceVideoFileName": normalize_text(record.get("sourceVideoFileName") or record.get("sourceFileName")),
+        "curationRating": normalize_text(record.get("curationRating") or record.get("rating")),
+        "curationLegacyScore": record.get("curationLegacyScore"),
+        "curationNotes": str(record.get("curationNotes") or ""),
         "notes": str(record.get("notes") or ""),
         "contentType": normalize_text(record.get("contentType")) or "EXC",
         "releaseCatalog": normalize_text(record.get("releaseCatalog")),
@@ -630,6 +641,65 @@ def fetch_excerpt_records(connection, payload: dict[str, Any]) -> dict[str, Any]
     if record_ids:
         records = [record for record in records if normalize_text(record.get("sourceRecordId")) in record_ids]
     records.sort(key=lambda record: normalize_text(record.get("createdAt")))
+    return {"ok": True, "records": records, "count": len(records)}
+
+
+def upsert_curation_review(connection, payload: dict[str, Any]) -> dict[str, Any]:
+    source = payload.get("review") or payload
+    priority_set_id = normalize_text(source.get("prioritySetId"))
+    source_file_id = normalize_text(source.get("sourceFileId"))
+    reviewer_email = normalize_text(source.get("reviewerEmail") or source.get("email")).lower()
+    rating = normalize_text(source.get("rating")).lower()
+    if not priority_set_id or not source_file_id or not reviewer_email:
+        raise ValueError("prioritySetId, sourceFileId, and reviewerEmail are required")
+    if rating not in {"dislike", "meh", "like", "moved_me"}:
+        raise ValueError("rating must be dislike, meh, like, or moved_me")
+    review_id = hashlib.sha256(
+        f"{priority_set_id}|{source_file_id}|{reviewer_email}".encode("utf-8")
+    ).hexdigest()[:32]
+    now = utc_now_iso()
+    existing = connection.get_raw_document(FIRESTORE_CURATION_REVIEWS_COLLECTION, review_id) or {}
+    excerpt_record_ids = {
+        normalize_text(value)
+        for value in (existing.get("excerptRecordIds") or [])
+        if normalize_text(value)
+    }
+    if normalize_text(source.get("excerptRecordId")):
+        excerpt_record_ids.add(normalize_text(source.get("excerptRecordId")))
+    record = {
+        **existing,
+        "reviewId": review_id,
+        "prioritySetId": priority_set_id,
+        "sourceFolderId": normalize_text(source.get("sourceFolderId")),
+        "sourceFileId": source_file_id,
+        "sourceFileName": normalize_text(source.get("sourceFileName")),
+        "sourceVideoUrl": normalize_text(source.get("sourceVideoUrl")),
+        "eventName": normalize_text(source.get("eventName")),
+        "author": normalize_text(source.get("author")),
+        "poemTitle": normalize_text(source.get("poemTitle")),
+        "bookTitle": normalize_text(source.get("bookTitle")),
+        "reviewerEmail": reviewer_email,
+        "rating": rating,
+        "notes": str(source.get("notes") or ""),
+        "excerptRecordIds": sorted(excerpt_record_ids),
+        "status": "reviewed",
+        "createdAt": normalize_text(existing.get("createdAt")) or now,
+        "updatedAt": now,
+    }
+    return {
+        "ok": True,
+        "record": connection.write_raw_document(FIRESTORE_CURATION_REVIEWS_COLLECTION, review_id, record),
+    }
+
+
+def fetch_curation_reviews(connection, payload: dict[str, Any]) -> dict[str, Any]:
+    priority_set_id = normalize_text(payload.get("prioritySetId"))
+    reviewer_email = normalize_text(payload.get("reviewerEmail") or payload.get("email")).lower()
+    records = connection.list_raw_documents(FIRESTORE_CURATION_REVIEWS_COLLECTION)
+    if priority_set_id:
+        records = [record for record in records if normalize_text(record.get("prioritySetId")) == priority_set_id]
+    if reviewer_email:
+        records = [record for record in records if normalize_text(record.get("reviewerEmail")).lower() == reviewer_email]
     return {"ok": True, "records": records, "count": len(records)}
 
 
@@ -1450,6 +1520,10 @@ def main() -> int:
             result = upsert_excerpt_records(connection, payload)
         elif action == "get_excerpt_records":
             result = fetch_excerpt_records(connection, payload)
+        elif action == "upsert_curation_review":
+            result = upsert_curation_review(connection, payload)
+        elif action == "get_curation_reviews":
+            result = fetch_curation_reviews(connection, payload)
         else:
             result = {
                 "ok": False,

@@ -113,6 +113,16 @@
 
           <div class="gathering-fields gathering-fields--video" id="gathering-video-fields" hidden>
             <label class="field field--full">
+              <span>Priority Video Set</span>
+              <select id="gathering-video-priority-set">
+                <option value="">Choose a priority set</option>
+                <option value="bpl-charm-city-2026">BPL Charm City 2026</option>
+                <option value="mn-writers-respond-loft">MN Writers Respond @ The Loft</option>
+                <option value="mpmu-2026-finals">MPMU 2026 Finals</option>
+                <option value="ollie-schminkey-action-cam">Ollie Schminkey - Action Cam</option>
+              </select>
+            </label>
+            <label class="field field--full">
               <span>Playlist / Curation Form</span>
               <input id="gathering-video-playlist-url" type="url" placeholder="Paste a Google Form or playlist URL to prefill the event queue" />
             </label>
@@ -121,6 +131,7 @@
               <button id="gathering-video-prev-item" class="button button--secondary" type="button" disabled>Previous Item</button>
               <button id="gathering-video-next-item" class="button button--secondary" type="button" disabled>Next Item</button>
               <button id="gathering-video-open-item" class="button button--secondary" type="button" disabled>Open Video</button>
+              <button id="gathering-video-save-rating" class="button" type="button" disabled>Save Rating &amp; Next</button>
               <p class="hint gathering-source-hint" id="gathering-video-playlist-status">Load a curation form to prefill the event name, author, and poem title, then advance through the playlist as you submit.</p>
             </div>
             <label class="field field--span-3">
@@ -138,6 +149,20 @@
             <label class="field field--span-3">
               <span>Event / Video Source</span>
               <input id="gathering-video-event" type="text" placeholder="Paste the event name as it appears in curation" />
+            </label>
+            <label class="field field--span-3">
+              <span>Curation Rating</span>
+              <select id="gathering-video-score" required>
+                <option value="">Choose one</option>
+                <option value="dislike">Dislike</option>
+                <option value="meh">Meh</option>
+                <option value="like">Like</option>
+                <option value="moved_me">Moved me</option>
+              </select>
+            </label>
+            <label class="field field--span-3">
+              <span>Curation Notes</span>
+              <textarea id="gathering-video-score-notes" rows="2" placeholder="Optional context for this rating"></textarea>
             </label>
             <label class="field field--full">
               <span>Quote</span>

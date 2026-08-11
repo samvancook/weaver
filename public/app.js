@@ -93,10 +93,14 @@ const elements = {
   gatheringVideoTitle: document.getElementById("gathering-video-title"),
   gatheringVideoBook: document.getElementById("gathering-video-book"),
   gatheringVideoEvent: document.getElementById("gathering-video-event"),
+  gatheringVideoScore: document.getElementById("gathering-video-score"),
+  gatheringVideoScoreNotes: document.getElementById("gathering-video-score-notes"),
   gatheringVideoQuote: document.getElementById("gathering-video-quote"),
   gatheringVideoQuoteMeta: document.getElementById("gathering-video-quote-meta"),
+  gatheringVideoPrioritySet: document.getElementById("gathering-video-priority-set"),
   gatheringVideoPlaylistUrl: document.getElementById("gathering-video-playlist-url"),
   gatheringVideoLoadPlaylist: document.getElementById("gathering-video-load-playlist"),
+  gatheringVideoSaveRating: document.getElementById("gathering-video-save-rating"),
   gatheringVideoPrevItem: document.getElementById("gathering-video-prev-item"),
   gatheringVideoNextItem: document.getElementById("gathering-video-next-item"),
   gatheringVideoOpenItem: document.getElementById("gathering-video-open-item"),
@@ -1312,8 +1316,12 @@ function updateGatheringVideoPlaylistUi() {
   if (elements.gatheringVideoOpenItem) {
     elements.gatheringVideoOpenItem.disabled = !cleanSheetWhitespace(currentItem?.videoUrl);
   }
+  if (elements.gatheringVideoSaveRating) {
+    elements.gatheringVideoSaveRating.disabled = !hasPlaylist || !playlist?.prioritySetId;
+  }
   if (hasPlaylist) {
-    const label = `${playlist.eventName || "Playlist"}: item ${playlist.index + 1} of ${playlist.items.length}${currentItem?.author ? ` · ${currentItem.author}` : ""}${currentItem?.poemTitle ? ` · ${currentItem.poemTitle}` : ""}`;
+    const reviewedCount = playlist.items.filter(item => item.review?.rating).length;
+    const label = `${playlist.eventName || "Playlist"}: item ${playlist.index + 1} of ${playlist.items.length} · ${reviewedCount} reviewed${currentItem?.author ? ` · ${currentItem.author}` : ""}${currentItem?.poemTitle ? ` · ${currentItem.poemTitle}` : ""}`;
     setGatheringVideoPlaylistStatus(label);
   } else {
     setGatheringVideoPlaylistStatus("");
@@ -1334,6 +1342,12 @@ function applyGatheringVideoPlaylistItem(item, { preserveQuote = false } = {}) {
   if (!preserveQuote && elements.gatheringVideoQuote) {
     elements.gatheringVideoQuote.value = "";
   }
+  if (!preserveQuote && elements.gatheringVideoScore) {
+    elements.gatheringVideoScore.value = item.review?.rating || "";
+  }
+  if (!preserveQuote && elements.gatheringVideoScoreNotes) {
+    elements.gatheringVideoScoreNotes.value = item.review?.notes || "";
+  }
   updateGatheringVideoPlaylistUi();
   updateGatheringQuoteMeta();
 }
@@ -1346,7 +1360,12 @@ function normalizeVideoPlaylistItem(rawItem, eventName) {
     eventName: cleanSheetWhitespace(rawItem?.eventName || eventName),
     formResponseUrl: String(rawItem?.formResponseUrl || "").trim(),
     scoreEntryId: cleanSheetWhitespace(rawItem?.scoreEntryId),
-    notesEntryId: cleanSheetWhitespace(rawItem?.notesEntryId)
+    notesEntryId: cleanSheetWhitespace(rawItem?.notesEntryId),
+    prioritySetId: cleanSheetWhitespace(rawItem?.prioritySetId),
+    sourceFolderId: cleanSheetWhitespace(rawItem?.sourceFolderId),
+    sourceFileId: cleanSheetWhitespace(rawItem?.sourceFileId),
+    sourceFileName: cleanSheetWhitespace(rawItem?.sourceFileName),
+    review: rawItem?.review && typeof rawItem.review === "object" ? rawItem.review : null
   };
 }
 
@@ -1357,13 +1376,18 @@ function getCurrentGatheringVideoPlaylistItem() {
 async function loadGatheringVideoPlaylist({ auto = false } = {}) {
   try {
     const formUrl = elements.gatheringVideoPlaylistUrl?.value.trim() || "";
-    if (!formUrl) {
-      throw new Error("Add a curation form URL first.");
+    const prioritySetId = elements.gatheringVideoPrioritySet?.value.trim() || "";
+    if (!formUrl && !prioritySetId) {
+      throw new Error("Choose a priority set or add a curation form URL first.");
     }
     if (!auto) {
       setStatus("Loading video playlist...");
     }
-    const result = await requestReviewApi("/api/intake/video-playlist", { formUrl });
+    const result = await requestReviewApi("/api/intake/video-playlist", {
+      formUrl,
+      prioritySetId,
+      reviewerEmail: elements.gatheringEmail?.value.trim() || ""
+    });
     const items = Array.isArray(result.items)
       ? result.items.map(item => normalizeVideoPlaylistItem(item, result.eventName)).filter(item => item.author || item.poemTitle)
       : [];
@@ -1372,12 +1396,13 @@ async function loadGatheringVideoPlaylist({ auto = false } = {}) {
     }
     currentGatheringVideoPlaylist = {
       formUrl,
+      prioritySetId: cleanSheetWhitespace(result.prioritySetId || prioritySetId),
       eventName: cleanSheetWhitespace(result.eventName),
       formTitle: cleanSheetWhitespace(result.formTitle),
       items,
-      index: 0
+      index: Math.max(0, items.findIndex(item => !item.review?.rating))
     };
-    applyGatheringVideoPlaylistItem(items[0]);
+    applyGatheringVideoPlaylistItem(items[currentGatheringVideoPlaylist.index]);
     if (getSelectedGatheringMode() !== "video") {
       setGatheringMode("video");
     }
@@ -1386,6 +1411,52 @@ async function loadGatheringVideoPlaylist({ auto = false } = {}) {
     currentGatheringVideoPlaylist = null;
     updateGatheringVideoPlaylistUi();
     setStatus(`Video playlist load failed: ${error.message}`);
+  }
+}
+
+function buildGatheringVideoReviewPayload({ excerptRecordId = "" } = {}) {
+  const item = getCurrentGatheringVideoPlaylistItem();
+  const email = elements.gatheringEmail?.value.trim() || "";
+  const rating = elements.gatheringVideoScore?.value.trim() || "";
+  if (!email) throw new Error("Add your email before saving a video rating.");
+  if (!item?.sourceFileId || !currentGatheringVideoPlaylist?.prioritySetId) {
+    throw new Error("Durable ratings are available for the four priority video sets.");
+  }
+  if (!rating) throw new Error("Choose a curation rating before continuing.");
+  return {
+    mode: "video",
+    email,
+    rating,
+    notes: elements.gatheringVideoScoreNotes?.value.trim() || "",
+    prioritySetId: currentGatheringVideoPlaylist.prioritySetId,
+    sourceFolderId: item.sourceFolderId,
+    sourceFileId: item.sourceFileId,
+    sourceFileName: item.sourceFileName,
+    sourceVideoUrl: item.videoUrl,
+    eventName: elements.gatheringVideoEvent?.value.trim() || item.eventName,
+    author: elements.gatheringVideoAuthor?.value.trim() || item.author,
+    poemTitle: elements.gatheringVideoTitle?.value.trim() || item.poemTitle,
+    bookTitle: elements.gatheringVideoBook?.value.trim() || "",
+    excerptRecordId
+  };
+}
+
+async function persistGatheringVideoReview(options = {}) {
+  const payload = buildGatheringVideoReviewPayload(options);
+  const result = await postReviewApi("/api/intake/video-review", payload);
+  const item = getCurrentGatheringVideoPlaylistItem();
+  if (item) item.review = result.record || { rating: payload.rating, notes: payload.notes };
+  return result;
+}
+
+async function saveGatheringVideoRatingAndNext() {
+  try {
+    setStatus("Saving video rating...");
+    const result = await persistGatheringVideoReview();
+    resetGatheringAfterSubmit("video");
+    setStatus("Saved video rating.", result);
+  } catch (error) {
+    setStatus(`Video rating save failed: ${error.message}`);
   }
 }
 
@@ -2238,8 +2309,16 @@ function buildGatheringPayload() {
     const quote = elements.gatheringVideoQuote?.value.trim() || "";
     const bookTitle = elements.gatheringVideoBook?.value.trim() || "";
     const eventName = elements.gatheringVideoEvent?.value.trim() || "";
+    const curationRating = elements.gatheringVideoScore?.value.trim() || "";
+    const curationNotes = elements.gatheringVideoScoreNotes?.value.trim() || "";
+    const sourceVideoUrl = currentGatheringVideoPlaylist?.items?.[
+      currentGatheringVideoPlaylist.index
+    ]?.videoUrl || "";
     if (!author || !quote) {
       throw new Error("Video intake needs an author and quote.");
+    }
+    if (!curationRating) {
+      throw new Error("Choose a curation rating before submitting this video excerpt.");
     }
     return {
       mode,
@@ -2248,7 +2327,14 @@ function buildGatheringPayload() {
       title,
       quote,
       bookTitle,
-      eventName
+      eventName,
+      curationRating,
+      curationNotes,
+      sourceVideoUrl,
+      prioritySetId: currentGatheringVideoPlaylist?.prioritySetId || "",
+      sourceFolderId: getCurrentGatheringVideoPlaylistItem()?.sourceFolderId || "",
+      sourceFileId: getCurrentGatheringVideoPlaylistItem()?.sourceFileId || "",
+      sourceFileName: getCurrentGatheringVideoPlaylistItem()?.sourceFileName || ""
     };
   }
 
@@ -2279,8 +2365,15 @@ async function submitGathering() {
         return;
       }
     }
+    if (payload.mode === "video" && payload.prioritySetId) {
+      setStatus("Saving video rating...");
+      await persistGatheringVideoReview();
+    }
     setStatus(`Submitting ${INTAKE_MODE_LABELS[payload.mode] || "excerpt gathering"} row...`);
     const result = await postReviewApi("/api/intake/submit", payload);
+    if (payload.mode === "video" && payload.prioritySetId) {
+      await persistGatheringVideoReview({ excerptRecordId: result.recordId || "" });
+    }
     resetGatheringAfterSubmit(payload.mode);
     setGatheringEmailWarning("");
     setStatus(`Saved excerpt gathering row ${result.rowNumber}.`, result);
@@ -6269,6 +6362,12 @@ elements.gatheringViewCatalogPoem?.addEventListener("click", openGatheringCatalo
 elements.gatheringBookQuote?.addEventListener("input", updateGatheringQuoteMeta);
 elements.gatheringVideoQuote?.addEventListener("input", updateGatheringQuoteMeta);
 elements.gatheringVideoLoadPlaylist?.addEventListener("click", () => loadGatheringVideoPlaylist());
+elements.gatheringVideoPrioritySet?.addEventListener("change", () => {
+  if (elements.gatheringVideoPrioritySet?.value && elements.gatheringVideoPlaylistUrl) {
+    elements.gatheringVideoPlaylistUrl.value = "";
+  }
+});
+elements.gatheringVideoSaveRating?.addEventListener("click", saveGatheringVideoRatingAndNext);
 elements.gatheringVideoPrevItem?.addEventListener("click", () => navigateGatheringVideoPlaylist(-1));
 elements.gatheringVideoNextItem?.addEventListener("click", () => navigateGatheringVideoPlaylist(1));
 elements.gatheringVideoOpenItem?.addEventListener("click", openGatheringVideoPlaylistItem);
