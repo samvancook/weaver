@@ -96,7 +96,11 @@ const elements = {
   gatheringVideoScore: document.getElementById("gathering-video-score"),
   gatheringVideoScoreNotes: document.getElementById("gathering-video-score-notes"),
   gatheringVideoQuote: document.getElementById("gathering-video-quote"),
+  gatheringVideoQuote2: document.getElementById("gathering-video-quote-2"),
+  gatheringVideoQuote3: document.getElementById("gathering-video-quote-3"),
   gatheringVideoQuoteMeta: document.getElementById("gathering-video-quote-meta"),
+  gatheringVideoQuoteMeta2: document.getElementById("gathering-video-quote-meta-2"),
+  gatheringVideoQuoteMeta3: document.getElementById("gathering-video-quote-meta-3"),
   gatheringVideoPrioritySet: document.getElementById("gathering-video-priority-set"),
   gatheringVideoPlaylistUrl: document.getElementById("gathering-video-playlist-url"),
   gatheringVideoLoadPlaylist: document.getElementById("gathering-video-load-playlist"),
@@ -1284,6 +1288,9 @@ function updateGatheringModeUi() {
   elements.gatheringTabVideo?.setAttribute("aria-pressed", mode === "video" ? "true" : "false");
   elements.gatheringTabBatch?.setAttribute("aria-pressed", mode === "batch" ? "true" : "false");
   elements.submitGathering?.toggleAttribute("hidden", mode === "batch");
+  if (elements.submitGathering) {
+    elements.submitGathering.textContent = mode === "video" ? "Save Rating & Excerpts" : "Submit Intake Row";
+  }
   elements.previewGatheringBatch?.toggleAttribute("hidden", mode !== "batch");
   elements.submitGatheringBatch?.toggleAttribute("hidden", mode !== "batch");
   if (elements.gatheringModeBadge) {
@@ -1341,6 +1348,12 @@ function applyGatheringVideoPlaylistItem(item, { preserveQuote = false } = {}) {
   }
   if (!preserveQuote && elements.gatheringVideoQuote) {
     elements.gatheringVideoQuote.value = "";
+  }
+  if (!preserveQuote && elements.gatheringVideoQuote2) {
+    elements.gatheringVideoQuote2.value = "";
+  }
+  if (!preserveQuote && elements.gatheringVideoQuote3) {
+    elements.gatheringVideoQuote3.value = "";
   }
   if (!preserveQuote && elements.gatheringVideoScore) {
     elements.gatheringVideoScore.value = item.review?.rating || "";
@@ -1846,6 +1859,8 @@ function resetGatheringAfterSubmit(mode) {
 
   if (mode === "video") {
     if (elements.gatheringVideoQuote) elements.gatheringVideoQuote.value = "";
+    if (elements.gatheringVideoQuote2) elements.gatheringVideoQuote2.value = "";
+    if (elements.gatheringVideoQuote3) elements.gatheringVideoQuote3.value = "";
     if (elements.gatheringVideoScore) elements.gatheringVideoScore.value = "";
     if (elements.gatheringVideoScoreNotes) elements.gatheringVideoScoreNotes.value = "";
     if (currentGatheringVideoPlaylist?.items?.length) {
@@ -1902,6 +1917,16 @@ function updateGatheringQuoteMeta() {
   if (elements.gatheringVideoQuoteMeta) {
     elements.gatheringVideoQuoteMeta.textContent = describeGatheringQuoteRange(
       countWordsFromText(elements.gatheringVideoQuote?.value || "")
+    );
+  }
+  if (elements.gatheringVideoQuoteMeta2) {
+    elements.gatheringVideoQuoteMeta2.textContent = describeGatheringQuoteRange(
+      countWordsFromText(elements.gatheringVideoQuote2?.value || "")
+    );
+  }
+  if (elements.gatheringVideoQuoteMeta3) {
+    elements.gatheringVideoQuoteMeta3.textContent = describeGatheringQuoteRange(
+      countWordsFromText(elements.gatheringVideoQuote3?.value || "")
     );
   }
 }
@@ -2306,7 +2331,11 @@ function buildGatheringPayload() {
   if (mode === "video") {
     const author = elements.gatheringVideoAuthor?.value.trim() || "";
     const title = elements.gatheringVideoTitle?.value.trim() || "";
-    const quote = elements.gatheringVideoQuote?.value.trim() || "";
+    const quotes = [
+      elements.gatheringVideoQuote?.value.trim() || "",
+      elements.gatheringVideoQuote2?.value.trim() || "",
+      elements.gatheringVideoQuote3?.value.trim() || ""
+    ].filter(Boolean);
     const bookTitle = elements.gatheringVideoBook?.value.trim() || "";
     const eventName = elements.gatheringVideoEvent?.value.trim() || "";
     const curationRating = elements.gatheringVideoScore?.value.trim() || "";
@@ -2314,8 +2343,8 @@ function buildGatheringPayload() {
     const sourceVideoUrl = currentGatheringVideoPlaylist?.items?.[
       currentGatheringVideoPlaylist.index
     ]?.videoUrl || "";
-    if (!author || !quote) {
-      throw new Error("Video intake needs an author and quote.");
+    if (!author) {
+      throw new Error("Video intake needs an author.");
     }
     if (!curationRating) {
       throw new Error("Choose a curation rating before submitting this video excerpt.");
@@ -2325,7 +2354,8 @@ function buildGatheringPayload() {
       email,
       author,
       title,
-      quote,
+      quote: quotes[0] || "",
+      quotes,
       bookTitle,
       eventName,
       curationRating,
@@ -2369,11 +2399,35 @@ async function submitGathering() {
       setStatus("Saving video rating...");
       await persistGatheringVideoReview();
     }
+    if (payload.mode === "video") {
+      const quotes = Array.isArray(payload.quotes) ? payload.quotes : [];
+      if (!quotes.length) {
+        if (!payload.prioritySetId) {
+          throw new Error("Add at least one excerpt before submitting this legacy video intake.");
+        }
+        resetGatheringAfterSubmit("video");
+        setGatheringEmailWarning("");
+        setStatus("Saved video rating with no excerpts.");
+        return;
+      }
+
+      const { quotes: ignoredQuotes, ...videoPayload } = payload;
+      const results = [];
+      setStatus(`Submitting ${quotes.length} video excerpt${quotes.length === 1 ? "" : "s"}...`);
+      for (const quote of quotes) {
+        results.push(await postReviewApi("/api/intake/submit", { ...videoPayload, quote }));
+      }
+      if (payload.prioritySetId) {
+        await persistGatheringVideoReview({ excerptRecordId: results[0]?.recordId || "" });
+      }
+      resetGatheringAfterSubmit("video");
+      setGatheringEmailWarning("");
+      setStatus(`Saved video rating and ${results.length} excerpt${results.length === 1 ? "" : "s"}.`, { results });
+      return;
+    }
+
     setStatus(`Submitting ${INTAKE_MODE_LABELS[payload.mode] || "excerpt gathering"} row...`);
     const result = await postReviewApi("/api/intake/submit", payload);
-    if (payload.mode === "video" && payload.prioritySetId) {
-      await persistGatheringVideoReview({ excerptRecordId: result.recordId || "" });
-    }
     resetGatheringAfterSubmit(payload.mode);
     setGatheringEmailWarning("");
     setStatus(`Saved excerpt gathering row ${result.rowNumber}.`, result);
@@ -6361,6 +6415,8 @@ elements.gatheringBookAuthor?.addEventListener("input", () => {
 elements.gatheringViewCatalogPoem?.addEventListener("click", openGatheringCatalogPoem);
 elements.gatheringBookQuote?.addEventListener("input", updateGatheringQuoteMeta);
 elements.gatheringVideoQuote?.addEventListener("input", updateGatheringQuoteMeta);
+elements.gatheringVideoQuote2?.addEventListener("input", updateGatheringQuoteMeta);
+elements.gatheringVideoQuote3?.addEventListener("input", updateGatheringQuoteMeta);
 elements.gatheringVideoLoadPlaylist?.addEventListener("click", () => loadGatheringVideoPlaylist());
 elements.gatheringVideoPrioritySet?.addEventListener("change", () => {
   if (elements.gatheringVideoPrioritySet?.value && elements.gatheringVideoPlaylistUrl) {
@@ -6377,6 +6433,8 @@ elements.gatheringVideoOpenItem?.addEventListener("click", openGatheringVideoPla
     elements.gatheringBookItalics,
     elements.gatheringBookReaction,
     elements.gatheringVideoQuote,
+    elements.gatheringVideoQuote2,
+    elements.gatheringVideoQuote3,
   elements.gatheringFixIncorrect,
   elements.gatheringFixCorrect
 ].forEach(field => field?.addEventListener("keydown", handleGatheringQuickSubmit));
