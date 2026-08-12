@@ -1487,7 +1487,10 @@ function openGatheringVideoPlaylistItem() {
   const item = currentGatheringVideoPlaylist?.items?.[currentGatheringVideoPlaylist.index];
   const videoUrl = item?.videoUrl || "";
   if (!videoUrl) return;
-  window.open(videoUrl, "_blank", "noopener,noreferrer");
+  const playbackUrl = item?.sourceFileId
+    ? `https://drive.google.com/file/d/${encodeURIComponent(item.sourceFileId)}/preview`
+    : videoUrl;
+  window.open(playbackUrl, "_blank", "noopener,noreferrer");
 }
 
 function setGatheringMode(mode) {
