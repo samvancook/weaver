@@ -2209,8 +2209,9 @@ async function savePriorityVideoReview(payload = {}) {
   const sourceFileId = cleanSheetWhitespace(payload.sourceFileId);
   const reviewerEmail = cleanSheetWhitespace(payload.email || payload.reviewerEmail).toLowerCase();
   if (!sourceFileId || !reviewerEmail) throw new Error("Video review requires a source file and reviewer email.");
-  const file = await getDriveFileMetadata(sourceFileId);
-  if (!Array.isArray(file.parents) || !file.parents.includes(set.folderId)) {
+  const folderFiles = await listDriveFolderVideoFiles(set.folderId);
+  const file = folderFiles.find(candidate => cleanSheetWhitespace(candidate.id) === sourceFileId);
+  if (!file) {
     throw new Error("The selected video is not in the requested priority set.");
   }
   const result = await syncWeaverRuntimeDb("upsert_curation_review", {
