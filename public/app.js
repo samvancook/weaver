@@ -1487,10 +1487,15 @@ function openGatheringVideoPlaylistItem() {
   const item = currentGatheringVideoPlaylist?.items?.[currentGatheringVideoPlaylist.index];
   const videoUrl = item?.videoUrl || "";
   if (!videoUrl) return;
-  const playbackUrl = item?.sourceFileId
-    ? `https://drive.google.com/file/d/${encodeURIComponent(item.sourceFileId)}/preview`
-    : videoUrl;
-  window.open(playbackUrl, "_blank", "noopener,noreferrer");
+  const playbackUrl = new URL(
+    item?.sourceFileId
+      ? `https://drive.google.com/file/d/${encodeURIComponent(item.sourceFileId)}/preview`
+      : videoUrl
+  );
+  const reviewerEmail = elements.gatheringEmail?.value.trim() || "";
+  if (reviewerEmail) playbackUrl.searchParams.set("authuser", reviewerEmail);
+  window.open(playbackUrl.toString(), "_blank", "noopener,noreferrer");
+  setStatus("Opened the Drive player. If Drive shows Sign in, sign in with the Button account entered above.");
 }
 
 function setGatheringMode(mode) {
