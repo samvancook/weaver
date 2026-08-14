@@ -109,6 +109,7 @@ const elements = {
   gatheringVideoNextItem: document.getElementById("gathering-video-next-item"),
   gatheringVideoOpenItem: document.getElementById("gathering-video-open-item"),
   gatheringVideoPlaylistStatus: document.getElementById("gathering-video-playlist-status"),
+  gatheringVideoReleaseWarning: document.getElementById("gathering-video-release-warning"),
   gatheringFixFields: document.getElementById("gathering-fix-fields"),
   gatheringBatchFields: document.getElementById("gathering-batch-fields"),
   gatheringFixPart: document.getElementById("gathering-fix-part"),
@@ -1346,6 +1347,12 @@ function applyGatheringVideoPlaylistItem(item, { preserveQuote = false } = {}) {
   if (elements.gatheringVideoTitle) {
     elements.gatheringVideoTitle.value = item.poemTitle || "";
   }
+  if (elements.gatheringVideoReleaseWarning) {
+    elements.gatheringVideoReleaseWarning.hidden = !item.publicationRestricted;
+    elements.gatheringVideoReleaseWarning.textContent = item.publicationRestricted
+      ? `Internal review only: ${item.videoReleaseStatus === "opted_out" ? "the performer opted out" : "no video release is on file"}. Do not publish or distribute this footage.`
+      : "";
+  }
   if (!preserveQuote && elements.gatheringVideoQuote) {
     elements.gatheringVideoQuote.value = "";
   }
@@ -1378,6 +1385,8 @@ function normalizeVideoPlaylistItem(rawItem, eventName) {
     sourceFolderId: cleanSheetWhitespace(rawItem?.sourceFolderId),
     sourceFileId: cleanSheetWhitespace(rawItem?.sourceFileId),
     sourceFileName: cleanSheetWhitespace(rawItem?.sourceFileName),
+    videoReleaseStatus: cleanSheetWhitespace(rawItem?.videoReleaseStatus),
+    publicationRestricted: Boolean(rawItem?.publicationRestricted),
     review: rawItem?.review && typeof rawItem.review === "object" ? rawItem.review : null
   };
 }
@@ -1446,6 +1455,8 @@ function buildGatheringVideoReviewPayload({ excerptRecordId = "" } = {}) {
     sourceFileId: item.sourceFileId,
     sourceFileName: item.sourceFileName,
     sourceVideoUrl: item.videoUrl,
+    videoReleaseStatus: item.videoReleaseStatus,
+    publicationRestricted: item.publicationRestricted,
     eventName: elements.gatheringVideoEvent?.value.trim() || item.eventName,
     author: elements.gatheringVideoAuthor?.value.trim() || item.author,
     poemTitle: elements.gatheringVideoTitle?.value.trim() || item.poemTitle,
@@ -2348,9 +2359,8 @@ function buildGatheringPayload() {
     const eventName = elements.gatheringVideoEvent?.value.trim() || "";
     const curationRating = elements.gatheringVideoScore?.value.trim() || "";
     const curationNotes = elements.gatheringVideoScoreNotes?.value.trim() || "";
-    const sourceVideoUrl = currentGatheringVideoPlaylist?.items?.[
-      currentGatheringVideoPlaylist.index
-    ]?.videoUrl || "";
+    const currentVideoItem = getCurrentGatheringVideoPlaylistItem();
+    const sourceVideoUrl = currentVideoItem?.videoUrl || "";
     if (!author) {
       throw new Error("Video intake needs an author.");
     }
@@ -2372,7 +2382,9 @@ function buildGatheringPayload() {
       prioritySetId: currentGatheringVideoPlaylist?.prioritySetId || "",
       sourceFolderId: getCurrentGatheringVideoPlaylistItem()?.sourceFolderId || "",
       sourceFileId: getCurrentGatheringVideoPlaylistItem()?.sourceFileId || "",
-      sourceFileName: getCurrentGatheringVideoPlaylistItem()?.sourceFileName || ""
+      sourceFileName: currentVideoItem?.sourceFileName || "",
+      videoReleaseStatus: currentVideoItem?.videoReleaseStatus || "",
+      publicationRestricted: Boolean(currentVideoItem?.publicationRestricted)
     };
   }
 

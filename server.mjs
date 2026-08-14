@@ -88,11 +88,18 @@ const PRIORITY_VIDEO_SETS = new Map([
     label: "Publisher's Poetry Slam 2026 - Camera Y",
     eventName: "Publisher's Poetry Slam 2026",
     folderId: "1D5gKXfvHPIOdyQCaV6yOoA4K8_IClzFs",
-    excludeMarkedUnavailable: true
+    excludeNoPoem: true
   }]
 ]);
 
-const PRIORITY_VIDEO_UNAVAILABLE_PATTERN = /\bno\s+poem\b|\bno\s+video\s+release\b|\bopt\s*out\b/i;
+const PRIORITY_VIDEO_NO_POEM_PATTERN = /\bno\s+poem\b/i;
+
+function getPriorityVideoReleaseStatus(fileName) {
+  const name = cleanSheetWhitespace(fileName);
+  if (/\bno\s+video\s+release\b/i.test(name)) return "no_video_release";
+  if (/\bopt\s*out\b/i.test(name)) return "opted_out";
+  return "";
+}
 
 const contentTypes = {
   ".html": "text/html; charset=utf-8",
@@ -2162,9 +2169,17 @@ function parsePriorityVideoFileName(fileName) {
   const baseName = cleanSheetWhitespace(
     embeddedExtensionMatch?.[1] || rawName.replace(/\.[^.]+$/, "")
   );
-  const label = cleanSheetWhitespace(baseName.replace(/^\[Vertical Version(?:\s+[A-Z])?\]\s*/i, ""));
+  const label = cleanSheetWhitespace(
+    baseName
+      .replace(/^\[Vertical Version(?:\s+[A-Z])?\]\s*/i, "")
+      .replace(/\s*\[(?:no\s+video\s+release|opt\s*out)\]\s*$/i, "")
+  );
   const separatorIndex = label.indexOf(" - ");
-  if (separatorIndex < 0) return { author: "", poemTitle: label };
+  if (separatorIndex < 0) {
+    return getPriorityVideoReleaseStatus(rawName)
+      ? { author: label, poemTitle: "" }
+      : { author: "", poemTitle: label };
+  }
   return {
     author: cleanSheetWhitespace(label.slice(0, separatorIndex)),
     poemTitle: cleanSheetWhitespace(label.slice(separatorIndex + 3))
@@ -2175,7 +2190,7 @@ async function loadPriorityVideoSet(prioritySetId, reviewerEmail = "") {
   const set = PRIORITY_VIDEO_SETS.get(cleanSheetWhitespace(prioritySetId));
   if (!set) throw new Error("Unknown priority video set.");
   const files = (await listDriveFolderVideoFiles(set.folderId)).filter(file => (
-    !set.excludeMarkedUnavailable || !PRIORITY_VIDEO_UNAVAILABLE_PATTERN.test(cleanSheetWhitespace(file.name))
+    !set.excludeNoPoem || !PRIORITY_VIDEO_NO_POEM_PATTERN.test(cleanSheetWhitespace(file.name))
   ));
   let reviewsByFileId = new Map();
   const normalizedReviewerEmail = cleanSheetWhitespace(reviewerEmail).toLowerCase();
@@ -2196,16 +2211,21 @@ async function loadPriorityVideoSet(prioritySetId, reviewerEmail = "") {
         .filter(([fileId]) => fileId)
     );
   }
-  const items = files.map(file => ({
-    ...parsePriorityVideoFileName(file.name),
-    videoUrl: cleanSheetWhitespace(file.webViewLink) || `https://drive.google.com/file/d/${encodeURIComponent(file.id)}/view`,
-    eventName: set.eventName || set.label,
-    prioritySetId: set.id,
-    sourceFolderId: set.folderId,
-    sourceFileId: cleanSheetWhitespace(file.id),
-    sourceFileName: cleanSheetWhitespace(file.name),
-    review: reviewsByFileId.get(cleanSheetWhitespace(file.id)) || null
-  }));
+  const items = files.map(file => {
+    const videoReleaseStatus = getPriorityVideoReleaseStatus(file.name);
+    return {
+      ...parsePriorityVideoFileName(file.name),
+      videoUrl: cleanSheetWhitespace(file.webViewLink) || `https://drive.google.com/file/d/${encodeURIComponent(file.id)}/view`,
+      eventName: set.eventName || set.label,
+      prioritySetId: set.id,
+      sourceFolderId: set.folderId,
+      sourceFileId: cleanSheetWhitespace(file.id),
+      sourceFileName: cleanSheetWhitespace(file.name),
+      videoReleaseStatus,
+      publicationRestricted: Boolean(videoReleaseStatus),
+      review: reviewsByFileId.get(cleanSheetWhitespace(file.id)) || null
+    };
+  });
   return {
     ok: true,
     prioritySetId: set.id,
@@ -2227,7 +2247,7 @@ async function savePriorityVideoReview(payload = {}) {
   const folderFiles = await listDriveFolderVideoFiles(set.folderId);
   const file = folderFiles.find(candidate => (
     cleanSheetWhitespace(candidate.id) === sourceFileId
-    && (!set.excludeMarkedUnavailable || !PRIORITY_VIDEO_UNAVAILABLE_PATTERN.test(cleanSheetWhitespace(candidate.name)))
+    && (!set.excludeNoPoem || !PRIORITY_VIDEO_NO_POEM_PATTERN.test(cleanSheetWhitespace(candidate.name)))
   ));
   if (!file) {
     throw new Error("The selected video is not in the requested priority set.");
@@ -2240,6 +2260,8 @@ async function savePriorityVideoReview(payload = {}) {
       sourceFolderId: set.folderId,
       sourceFileId,
       sourceFileName: cleanSheetWhitespace(file.name),
+      videoReleaseStatus: getPriorityVideoReleaseStatus(file.name),
+      publicationRestricted: Boolean(getPriorityVideoReleaseStatus(file.name)),
       sourceVideoUrl: cleanSheetWhitespace(file.webViewLink) || `https://drive.google.com/file/d/${encodeURIComponent(sourceFileId)}/view`
     }
   });
@@ -3374,6 +3396,9 @@ function buildExcerptGatheringAppendRow(payload = {}) {
         : "",
       cleanSheetWhitespace(payload.sourceVideoUrl)
         ? `Source video URL: ${cleanSheetWhitespace(payload.sourceVideoUrl)}`
+        : "",
+      isTruthyParam(payload.publicationRestricted)
+        ? `Publication restriction: ${cleanSheetWhitespace(payload.videoReleaseStatus) || "restricted"}`
         : ""
     ].filter(Boolean).join("\n");
     return row;
@@ -3406,6 +3431,8 @@ function buildExcerptRuntimeRecord(payload = {}, { sourceRow = 0, createdAt = ""
     sourceVideoFolderId: cleanSheetWhitespace(payload.sourceFolderId || payload.sourceVideoFolderId),
     sourceVideoFileId: cleanSheetWhitespace(payload.sourceFileId || payload.sourceVideoFileId),
     sourceVideoFileName: cleanSheetWhitespace(payload.sourceFileName || payload.sourceVideoFileName),
+    videoReleaseStatus: cleanSheetWhitespace(payload.videoReleaseStatus),
+    publicationRestricted: isTruthyParam(payload.publicationRestricted),
     curationRating: normalizeCurationRating(payload.curationRating || payload.rating),
     curationLegacyScore: normalizeOptionalCurationScore(payload.curationLegacyScore),
     curationNotes: String(payload.curationNotes || "").trim(),
