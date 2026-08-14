@@ -88,13 +88,21 @@ const PRIORITY_VIDEO_SETS = new Map([
     label: "Publisher's Poetry Slam 2026 - Camera Y",
     eventName: "Publisher's Poetry Slam 2026",
     folderId: "1D5gKXfvHPIOdyQCaV6yOoA4K8_IClzFs",
-    excludeNoPoem: true
+    excludeNoPoem: true,
+    releaseConfirmedFileIds: [
+      "1UySxYK-AB0pXsV9LcIb2wBbEcOx2Zg8m",
+      "1cd_ZK-RSbjTqD41fdmRjoRmURfZlmuZq"
+    ]
   }]
 ]);
 
 const PRIORITY_VIDEO_NO_POEM_PATTERN = /\bno\s+poem\b/i;
+const PRIORITY_VIDEO_RELEASE_MARKER_PATTERN = /\bno\s+video\s+release\b|\bopt\s*out\b/i;
 
-function getPriorityVideoReleaseStatus(fileName) {
+function getPriorityVideoReleaseStatus(fileName, set = null, fileId = "") {
+  if (Array.isArray(set?.releaseConfirmedFileIds) && set.releaseConfirmedFileIds.includes(cleanSheetWhitespace(fileId))) {
+    return "";
+  }
   const name = cleanSheetWhitespace(fileName);
   if (/\bno\s+video\s+release\b/i.test(name)) return "no_video_release";
   if (/\bopt\s*out\b/i.test(name)) return "opted_out";
@@ -2176,7 +2184,7 @@ function parsePriorityVideoFileName(fileName) {
   );
   const separatorIndex = label.indexOf(" - ");
   if (separatorIndex < 0) {
-    return getPriorityVideoReleaseStatus(rawName)
+    return PRIORITY_VIDEO_RELEASE_MARKER_PATTERN.test(rawName)
       ? { author: label, poemTitle: "" }
       : { author: "", poemTitle: label };
   }
@@ -2212,7 +2220,7 @@ async function loadPriorityVideoSet(prioritySetId, reviewerEmail = "") {
     );
   }
   const items = files.map(file => {
-    const videoReleaseStatus = getPriorityVideoReleaseStatus(file.name);
+    const videoReleaseStatus = getPriorityVideoReleaseStatus(file.name, set, file.id);
     return {
       ...parsePriorityVideoFileName(file.name),
       videoUrl: cleanSheetWhitespace(file.webViewLink) || `https://drive.google.com/file/d/${encodeURIComponent(file.id)}/view`,
@@ -2252,6 +2260,7 @@ async function savePriorityVideoReview(payload = {}) {
   if (!file) {
     throw new Error("The selected video is not in the requested priority set.");
   }
+  const videoReleaseStatus = getPriorityVideoReleaseStatus(file.name, set, sourceFileId);
   const result = await syncWeaverRuntimeDb("upsert_curation_review", {
     review: {
       ...payload,
@@ -2260,8 +2269,8 @@ async function savePriorityVideoReview(payload = {}) {
       sourceFolderId: set.folderId,
       sourceFileId,
       sourceFileName: cleanSheetWhitespace(file.name),
-      videoReleaseStatus: getPriorityVideoReleaseStatus(file.name),
-      publicationRestricted: Boolean(getPriorityVideoReleaseStatus(file.name)),
+      videoReleaseStatus,
+      publicationRestricted: Boolean(videoReleaseStatus),
       sourceVideoUrl: cleanSheetWhitespace(file.webViewLink) || `https://drive.google.com/file/d/${encodeURIComponent(sourceFileId)}/view`
     }
   });
