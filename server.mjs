@@ -82,8 +82,17 @@ const PRIORITY_VIDEO_SETS = new Map([
   ["bpl-charm-city-2026", { id: "bpl-charm-city-2026", label: "BPL Charm City 2026", folderId: "1dj6yrZTR8YUMjqw-QPoEMLCgmgjGCBit" }],
   ["mn-writers-respond-loft", { id: "mn-writers-respond-loft", label: "MN Writers Respond @ The Loft", folderId: "1eKj0DFq1Qflks0LDtqhZX7iCinl9O0ib" }],
   ["mpmu-2026-finals", { id: "mpmu-2026-finals", label: "MPMU 2026 Finals", folderId: "1zaFfA8AodYcvzg1fB32g7vBvjzUvN2vk" }],
-  ["ollie-schminkey-action-cam", { id: "ollie-schminkey-action-cam", label: "Ollie Schminkey - Action Cam", folderId: "1ATxYkZP4tlgoaXzbbrSJsC_XeU0pGIJ_" }]
+  ["ollie-schminkey-action-cam", { id: "ollie-schminkey-action-cam", label: "Ollie Schminkey - Action Cam", folderId: "1ATxYkZP4tlgoaXzbbrSJsC_XeU0pGIJ_" }],
+  ["publishers-poetry-slam-2026-camera-y", {
+    id: "publishers-poetry-slam-2026-camera-y",
+    label: "Publisher's Poetry Slam 2026 - Camera Y",
+    eventName: "Publisher's Poetry Slam 2026",
+    folderId: "1D5gKXfvHPIOdyQCaV6yOoA4K8_IClzFs",
+    excludeMarkedUnavailable: true
+  }]
 ]);
+
+const PRIORITY_VIDEO_UNAVAILABLE_PATTERN = /\bno\s+poem\b|\bno\s+video\s+release\b|\bopt\s*out\b/i;
 
 const contentTypes = {
   ".html": "text/html; charset=utf-8",
@@ -2148,7 +2157,11 @@ async function listDriveFolderVideoFiles(folderId) {
 }
 
 function parsePriorityVideoFileName(fileName) {
-  const baseName = cleanSheetWhitespace(String(fileName || "").replace(/\.[^.]+$/, ""));
+  const rawName = cleanSheetWhitespace(fileName);
+  const embeddedExtensionMatch = rawName.match(/^[^\s]+\.(?:mp4|mov|m4v)\s+(.+)$/i);
+  const baseName = cleanSheetWhitespace(
+    embeddedExtensionMatch?.[1] || rawName.replace(/\.[^.]+$/, "")
+  );
   const label = cleanSheetWhitespace(baseName.replace(/^\[Vertical Version(?:\s+[A-Z])?\]\s*/i, ""));
   const separatorIndex = label.indexOf(" - ");
   if (separatorIndex < 0) return { author: "", poemTitle: label };
@@ -2161,7 +2174,9 @@ function parsePriorityVideoFileName(fileName) {
 async function loadPriorityVideoSet(prioritySetId, reviewerEmail = "") {
   const set = PRIORITY_VIDEO_SETS.get(cleanSheetWhitespace(prioritySetId));
   if (!set) throw new Error("Unknown priority video set.");
-  const files = await listDriveFolderVideoFiles(set.folderId);
+  const files = (await listDriveFolderVideoFiles(set.folderId)).filter(file => (
+    !set.excludeMarkedUnavailable || !PRIORITY_VIDEO_UNAVAILABLE_PATTERN.test(cleanSheetWhitespace(file.name))
+  ));
   let reviewsByFileId = new Map();
   const normalizedReviewerEmail = cleanSheetWhitespace(reviewerEmail).toLowerCase();
   if (normalizedReviewerEmail) {
@@ -2184,7 +2199,7 @@ async function loadPriorityVideoSet(prioritySetId, reviewerEmail = "") {
   const items = files.map(file => ({
     ...parsePriorityVideoFileName(file.name),
     videoUrl: cleanSheetWhitespace(file.webViewLink) || `https://drive.google.com/file/d/${encodeURIComponent(file.id)}/view`,
-    eventName: set.label,
+    eventName: set.eventName || set.label,
     prioritySetId: set.id,
     sourceFolderId: set.folderId,
     sourceFileId: cleanSheetWhitespace(file.id),
@@ -2195,7 +2210,7 @@ async function loadPriorityVideoSet(prioritySetId, reviewerEmail = "") {
     ok: true,
     prioritySetId: set.id,
     formTitle: set.label,
-    eventName: set.label,
+    eventName: set.eventName || set.label,
     sourceFolderId: set.folderId,
     count: items.length,
     reviewedCount: items.filter(item => item.review?.rating).length,
@@ -2210,7 +2225,10 @@ async function savePriorityVideoReview(payload = {}) {
   const reviewerEmail = cleanSheetWhitespace(payload.email || payload.reviewerEmail).toLowerCase();
   if (!sourceFileId || !reviewerEmail) throw new Error("Video review requires a source file and reviewer email.");
   const folderFiles = await listDriveFolderVideoFiles(set.folderId);
-  const file = folderFiles.find(candidate => cleanSheetWhitespace(candidate.id) === sourceFileId);
+  const file = folderFiles.find(candidate => (
+    cleanSheetWhitespace(candidate.id) === sourceFileId
+    && (!set.excludeMarkedUnavailable || !PRIORITY_VIDEO_UNAVAILABLE_PATTERN.test(cleanSheetWhitespace(candidate.name)))
+  ));
   if (!file) {
     throw new Error("The selected video is not in the requested priority set.");
   }
