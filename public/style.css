@@ -244,10 +244,25 @@ body {
 }
 
 .video-progress-dashboard {
+  margin-top: 12px;
   padding: 18px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.48);
+}
+
+.video-progress-management {
+  margin-top: 6px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.video-progress-management > summary {
+  width: fit-content;
+  cursor: pointer;
+  color: var(--support);
+  font-family: "Helvetica Neue", Arial, sans-serif;
+  font-weight: 700;
 }
 
 .video-progress-dashboard__header {
