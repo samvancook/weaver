@@ -243,6 +243,119 @@ body {
   min-width: 0;
 }
 
+.video-progress-dashboard {
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.48);
+}
+
+.video-progress-dashboard__header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.video-progress-dashboard__header h3 {
+  margin: 0 0 4px;
+  font-size: 1.35rem;
+}
+
+.video-progress-dashboard__header .hint {
+  margin: 0;
+}
+
+.video-progress-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 16px 0;
+}
+
+.video-progress-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.video-progress-table {
+  width: 100%;
+  min-width: 760px;
+  border-collapse: collapse;
+  font-family: "Helvetica Neue", Arial, sans-serif;
+}
+
+.video-progress-table th,
+.video-progress-table td {
+  padding: 11px 10px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: middle;
+}
+
+.video-progress-table th {
+  color: var(--muted);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
+
+.video-progress-table td {
+  font-size: 0.9rem;
+}
+
+.video-progress-table__primary {
+  display: block;
+  font-weight: 700;
+}
+
+.video-progress-table__secondary {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.video-progress-bar {
+  width: 150px;
+  height: 10px;
+  margin-bottom: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(29, 26, 23, 0.1);
+}
+
+.video-progress-bar__fill {
+  display: block;
+  height: 100%;
+  background: var(--support);
+}
+
+.video-progress-empty {
+  padding: 24px !important;
+  color: var(--muted);
+  text-align: center !important;
+}
+
+.video-progress-reviewers {
+  margin-top: 16px;
+}
+
+.video-progress-reviewers summary {
+  cursor: pointer;
+  font-family: "Helvetica Neue", Arial, sans-serif;
+  font-weight: 700;
+}
+
+.video-progress-reviewers[open] summary {
+  margin-bottom: 10px;
+}
+
+.video-progress-status--complete {
+  color: var(--support);
+  font-weight: 700;
+}
+
 .gathering-fields--book .field--span-5 {
   grid-column: span 5;
 }
@@ -263,6 +376,17 @@ body {
   gap: 12px;
   align-items: center;
   justify-content: space-between;
+}
+
+@media (max-width: 720px) {
+  .video-progress-dashboard__header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .video-progress-dashboard__header .button {
+    width: 100%;
+  }
 }
 
 .gathering-inline-tools__left {

@@ -89,6 +89,11 @@ const elements = {
   gatheringBookNotes: document.getElementById("gathering-book-notes"),
   gatheringBookReaction: document.getElementById("gathering-book-reaction"),
   gatheringVideoFields: document.getElementById("gathering-video-fields"),
+  gatheringVideoLoadProgress: document.getElementById("gathering-video-load-progress"),
+  videoProgressStatus: document.getElementById("video-progress-status"),
+  videoProgressMetrics: document.getElementById("video-progress-metrics"),
+  videoProgressSetRows: document.getElementById("video-progress-set-rows"),
+  videoProgressReviewerRows: document.getElementById("video-progress-reviewer-rows"),
   gatheringVideoAuthor: document.getElementById("gathering-video-author"),
   gatheringVideoTitle: document.getElementById("gathering-video-title"),
   gatheringVideoBook: document.getElementById("gathering-video-book"),
@@ -1393,6 +1398,98 @@ function normalizeVideoPlaylistItem(rawItem, eventName) {
 
 function getCurrentGatheringVideoPlaylistItem() {
   return currentGatheringVideoPlaylist?.items?.[currentGatheringVideoPlaylist.index] || null;
+}
+
+function formatVideoProgressDate(value) {
+  const timestamp = Date.parse(value || "");
+  if (!Number.isFinite(timestamp)) return "No activity";
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric"
+  }).format(new Date(timestamp));
+}
+
+function renderPriorityVideoProgress(result) {
+  const sets = Array.isArray(result?.sets) ? result.sets : [];
+  const totals = result?.totals || {};
+  if (elements.videoProgressMetrics) {
+    elements.videoProgressMetrics.innerHTML = [
+      `${Number(totals.prioritySets || 0)} Sets`,
+      `${Number(totals.videos || 0)} Videos`,
+      `${Number(totals.reviewRecords || 0)} Reviews`,
+      `${Number(totals.excerpts || 0)} Excerpts`
+    ].map(label => `<span class="badge badge--muted">${escapeHtml(label)}</span>`).join("");
+  }
+  if (elements.videoProgressSetRows) {
+    elements.videoProgressSetRows.innerHTML = sets.length
+      ? sets.map(set => {
+        const percent = Math.max(0, Math.min(100, Number(set.progressPercent || 0)));
+        return `
+          <tr>
+            <td>
+              <span class="video-progress-table__primary">${escapeHtml(set.label || set.prioritySetId)}</span>
+              <span class="video-progress-table__secondary">${Number(set.reviewerCount || 0)} participating reviewer${Number(set.reviewerCount || 0) === 1 ? "" : "s"}</span>
+            </td>
+            <td>
+              <div class="video-progress-bar" aria-label="${percent}% reviewer coverage"><span class="video-progress-bar__fill" style="width:${percent}%"></span></div>
+              <span class="video-progress-table__secondary">${Number(set.completedReviewSlots || 0)} of ${Number(set.totalReviewSlots || 0)} reviews · ${percent}%</span>
+            </td>
+            <td>${Number(set.reviewedVideos || 0)} of ${Number(set.totalVideos || 0)}<span class="video-progress-table__secondary">${Number(set.untouchedVideos || 0)} untouched</span></td>
+            <td>${Number(set.excerptCount || 0)}</td>
+            <td>${Number(set.completeReviewerCount || 0)} of ${Number(set.reviewerCount || 0)}</td>
+            <td>${escapeHtml(formatVideoProgressDate(set.lastActivityAt))}</td>
+          </tr>`;
+      }).join("")
+      : '<tr><td colspan="6" class="video-progress-empty">No priority video sets were found.</td></tr>';
+  }
+  const reviewers = sets.flatMap(set => (
+    (Array.isArray(set.reviewers) ? set.reviewers : []).map(reviewer => ({ ...reviewer, setLabel: set.label }))
+  ));
+  if (elements.videoProgressReviewerRows) {
+    elements.videoProgressReviewerRows.innerHTML = reviewers.length
+      ? reviewers.map(reviewer => {
+        const percent = Math.max(0, Math.min(100, Number(reviewer.progressPercent || 0)));
+        const isComplete = reviewer.status === "complete";
+        return `
+          <tr>
+            <td>${escapeHtml(reviewer.reviewerEmail)}</td>
+            <td>${escapeHtml(reviewer.setLabel)}</td>
+            <td>
+              <div class="video-progress-bar" aria-label="${percent}% complete"><span class="video-progress-bar__fill" style="width:${percent}%"></span></div>
+              <span class="video-progress-table__secondary">${Number(reviewer.reviewedCount || 0)} of ${Number(reviewer.totalVideos || 0)} · ${percent}%</span>
+            </td>
+            <td>${Number(reviewer.remainingCount || 0)}</td>
+            <td>${Number(reviewer.excerptCount || 0)}</td>
+            <td class="${isComplete ? "video-progress-status--complete" : ""}">${isComplete ? "Complete" : "In progress"}</td>
+          </tr>`;
+      }).join("")
+      : '<tr><td colspan="6" class="video-progress-empty">No participating reviewers were found.</td></tr>';
+  }
+  if (elements.videoProgressStatus) {
+    elements.videoProgressStatus.textContent = `Updated ${formatVideoProgressDate(result.generatedAt)}. Progress is based on reviewers who have started each set.`;
+  }
+}
+
+async function loadPriorityVideoProgress() {
+  const button = elements.gatheringVideoLoadProgress;
+  if (button) button.disabled = true;
+  if (elements.videoProgressStatus) elements.videoProgressStatus.textContent = "Loading current progress...";
+  try {
+    const response = await adminFetch("/api/intake/video-progress", {
+      headers: { Accept: "application/json" },
+      cache: "no-store"
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || !result.ok) {
+      throw new Error(result.error || `Progress request failed (${response.status}).`);
+    }
+    renderPriorityVideoProgress(result);
+  } catch (error) {
+    if (elements.videoProgressStatus) elements.videoProgressStatus.textContent = `Progress load failed: ${error.message}`;
+  } finally {
+    if (button) button.disabled = false;
+  }
 }
 
 async function loadGatheringVideoPlaylist({ auto = false } = {}) {
@@ -6437,6 +6534,7 @@ elements.gatheringBookQuote?.addEventListener("input", updateGatheringQuoteMeta)
 elements.gatheringVideoQuote?.addEventListener("input", updateGatheringQuoteMeta);
 elements.gatheringVideoQuote2?.addEventListener("input", updateGatheringQuoteMeta);
 elements.gatheringVideoQuote3?.addEventListener("input", updateGatheringQuoteMeta);
+elements.gatheringVideoLoadProgress?.addEventListener("click", loadPriorityVideoProgress);
 elements.gatheringVideoLoadPlaylist?.addEventListener("click", () => loadGatheringVideoPlaylist());
 elements.gatheringVideoPrioritySet?.addEventListener("change", () => {
   if (elements.gatheringVideoPrioritySet?.value && elements.gatheringVideoPlaylistUrl) {

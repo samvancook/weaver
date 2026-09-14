@@ -2246,6 +2246,111 @@ async function loadPriorityVideoSet(prioritySetId, reviewerEmail = "") {
   };
 }
 
+async function loadPriorityVideoProgress() {
+  const sets = Array.from(PRIORITY_VIDEO_SETS.values());
+  const [reviewResult, excerptResult, fileResults] = await Promise.all([
+    syncWeaverRuntimeDb("get_curation_reviews", {}),
+    syncWeaverRuntimeDb("get_excerpt_records", {}),
+    Promise.all(sets.map(async set => ({
+      set,
+      files: (await listDriveFolderVideoFiles(set.folderId)).filter(file => (
+        !set.excludeNoPoem || !PRIORITY_VIDEO_NO_POEM_PATTERN.test(cleanSheetWhitespace(file.name))
+      ))
+    })))
+  ]);
+  const reviews = Array.isArray(reviewResult?.records) ? reviewResult.records : [];
+  const excerpts = Array.isArray(excerptResult?.records) ? excerptResult.records : [];
+
+  const progressSets = fileResults.map(({ set, files }) => {
+    const fileIds = new Set(files.map(file => cleanSheetWhitespace(file.id)).filter(Boolean));
+    const setReviews = reviews.filter(review => (
+      cleanSheetWhitespace(review.prioritySetId) === set.id
+      && fileIds.has(cleanSheetWhitespace(review.sourceFileId))
+    ));
+    const setExcerpts = excerpts.filter(record => {
+      const payload = record?.sourcePayload && typeof record.sourcePayload === "object"
+        ? record.sourcePayload
+        : {};
+      return cleanSheetWhitespace(payload.prioritySetId) === set.id
+        && (!cleanSheetWhitespace(payload.sourceFileId) || fileIds.has(cleanSheetWhitespace(payload.sourceFileId)));
+    });
+    const reviewedFileIds = new Set(setReviews.map(review => cleanSheetWhitespace(review.sourceFileId)).filter(Boolean));
+    const reviewerEmails = Array.from(new Set(
+      setReviews.map(review => cleanSheetWhitespace(review.reviewerEmail).toLowerCase()).filter(Boolean)
+    )).sort();
+    const reviewerRows = reviewerEmails.map(reviewerEmail => {
+      const reviewerReviews = setReviews.filter(review => (
+        cleanSheetWhitespace(review.reviewerEmail).toLowerCase() === reviewerEmail
+      ));
+      const reviewerFileIds = new Set(
+        reviewerReviews.map(review => cleanSheetWhitespace(review.sourceFileId)).filter(Boolean)
+      );
+      const reviewerExcerptIds = new Set(
+        reviewerReviews.flatMap(review => Array.isArray(review.excerptRecordIds) ? review.excerptRecordIds : [])
+          .map(cleanSheetWhitespace)
+          .filter(Boolean)
+      );
+      const reviewerExcerptCount = setExcerpts.filter(record => {
+        const payload = record?.sourcePayload && typeof record.sourcePayload === "object"
+          ? record.sourcePayload
+          : {};
+        return cleanSheetWhitespace(payload.reviewerEmail || payload.email).toLowerCase() === reviewerEmail;
+      }).length;
+      const ratingCounts = reviewerReviews.reduce((counts, review) => {
+        const rating = cleanSheetWhitespace(review.rating).toLowerCase();
+        if (rating) counts[rating] = (counts[rating] || 0) + 1;
+        return counts;
+      }, {});
+      const reviewedCount = reviewerFileIds.size;
+      const remainingCount = Math.max(0, files.length - reviewedCount);
+      return {
+        reviewerEmail,
+        reviewedCount,
+        remainingCount,
+        totalVideos: files.length,
+        progressPercent: files.length ? Math.round((reviewedCount / files.length) * 100) : 0,
+        excerptCount: Math.max(reviewerExcerptIds.size, reviewerExcerptCount),
+        ratingCounts,
+        status: remainingCount === 0 ? "complete" : "in_progress",
+        lastReviewedAt: reviewerReviews.map(review => cleanSheetWhitespace(review.updatedAt)).sort().at(-1) || ""
+      };
+    });
+    const completedReviewSlots = reviewerRows.reduce((total, reviewer) => total + reviewer.reviewedCount, 0);
+    const totalReviewSlots = files.length * reviewerRows.length;
+    return {
+      prioritySetId: set.id,
+      label: set.label,
+      eventName: set.eventName || set.label,
+      totalVideos: files.length,
+      reviewedVideos: reviewedFileIds.size,
+      untouchedVideos: Math.max(0, files.length - reviewedFileIds.size),
+      reviewerCount: reviewerRows.length,
+      completeReviewerCount: reviewerRows.filter(reviewer => reviewer.status === "complete").length,
+      completedReviewSlots,
+      totalReviewSlots,
+      progressPercent: totalReviewSlots ? Math.round((completedReviewSlots / totalReviewSlots) * 100) : 0,
+      excerptCount: setExcerpts.length,
+      lastActivityAt: [
+        ...setReviews.map(review => cleanSheetWhitespace(review.updatedAt)),
+        ...setExcerpts.map(record => cleanSheetWhitespace(record.updatedAt || record.createdAt))
+      ].filter(Boolean).sort().at(-1) || "",
+      reviewers: reviewerRows
+    };
+  });
+
+  return {
+    ok: true,
+    generatedAt: new Date().toISOString(),
+    totals: {
+      prioritySets: progressSets.length,
+      videos: progressSets.reduce((total, set) => total + set.totalVideos, 0),
+      reviewRecords: progressSets.reduce((total, set) => total + set.completedReviewSlots, 0),
+      excerpts: progressSets.reduce((total, set) => total + set.excerptCount, 0)
+    },
+    sets: progressSets
+  };
+}
+
 async function savePriorityVideoReview(payload = {}) {
   const set = PRIORITY_VIDEO_SETS.get(cleanSheetWhitespace(payload.prioritySetId));
   if (!set) throw new Error("Unknown priority video set.");
@@ -7428,6 +7533,18 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, result);
     } catch (error) {
       return sendJson(res, 500, {
+        ok: false,
+        error: error.message
+      });
+    }
+  }
+
+  if (url.pathname === "/api/intake/video-progress" && req.method === "GET") {
+    try {
+      await verifyAdministrativeCaller(req);
+      return sendJson(res, 200, await loadPriorityVideoProgress());
+    } catch (error) {
+      return sendJson(res, Number(error.statusCode || 500), {
         ok: false,
         error: error.message
       });
