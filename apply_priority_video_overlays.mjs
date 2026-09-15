@@ -1,12 +1,9 @@
 import { readFile, writeFile } from "node:fs/promises";
 
 const serverPath = new URL("./server.mjs", import.meta.url);
+const indexPath = new URL("./public/index.html", import.meta.url);
 let source = await readFile(serverPath, "utf8");
-
-if (source.includes('id: "northbeast-regional-2023-finals"')) {
-  console.log("NorthBeast priority-video overlay already applied.");
-  process.exit(0);
-}
+let indexSource = await readFile(indexPath, "utf8");
 
 const northBeastSet = `  ["northbeast-regional-2023-finals", {
     id: "northbeast-regional-2023-finals",
@@ -66,53 +63,68 @@ function getPriorityVideoIdentity(file, set) {
 }
 `;
 
-function replaceExactlyOnce(label, before, after) {
-  const first = source.indexOf(before);
-  const last = source.lastIndexOf(before);
-  if (first < 0) {
-    throw new Error(`Overlay failed: ${label} target was not found.`);
-  }
-  if (first !== last) {
-    throw new Error(`Overlay failed: ${label} target was not unique.`);
-  }
-  source = source.replace(before, after);
+function replaceExactlyOnce(text, label, before, after) {
+  const first = text.indexOf(before);
+  const last = text.lastIndexOf(before);
+  if (first < 0) throw new Error(`Overlay failed: ${label} target was not found.`);
+  if (first !== last) throw new Error(`Overlay failed: ${label} target was not unique.`);
+  return text.replace(before, after);
 }
 
-replaceExactlyOnce(
-  "priority set insertion",
-  '  ["publishers-poetry-slam-2026-camera-y", {',
-  `${northBeastSet}  ["publishers-poetry-slam-2026-camera-y", {`
-);
+if (!source.includes('id: "northbeast-regional-2023-finals"')) {
+  source = replaceExactlyOnce(
+    source,
+    "priority set insertion",
+    '  ["publishers-poetry-slam-2026-camera-y", {',
+    `${northBeastSet}  ["publishers-poetry-slam-2026-camera-y", {`
+  );
+  source = replaceExactlyOnce(
+    source,
+    "priority helper insertion",
+    'const PRIORITY_VIDEO_NO_POEM_PATTERN = /\\bno\\s+poem\\b/i;',
+    `${helpers}\nconst PRIORITY_VIDEO_NO_POEM_PATTERN = /\\bno\\s+poem\\b/i;`
+  );
+  source = replaceExactlyOnce(
+    source,
+    "priority set file filtering",
+    `  const files = (await listDriveFolderVideoFiles(set.folderId)).filter(file => (\n    !set.excludeNoPoem || !PRIORITY_VIDEO_NO_POEM_PATTERN.test(cleanSheetWhitespace(file.name))\n  ));`,
+    `  const files = (await listDriveFolderVideoFiles(set.folderId))\n    .filter(file => isPriorityVideoFileIncluded(file, set));`
+  );
+  source = replaceExactlyOnce(
+    source,
+    "priority item metadata",
+    '      ...parsePriorityVideoFileName(file.name),',
+    '      ...getPriorityVideoIdentity(file, set),'
+  );
+  source = replaceExactlyOnce(
+    source,
+    "priority progress filtering",
+    `      files: (await listDriveFolderVideoFiles(set.folderId)).filter(file => (\n        !set.excludeNoPoem || !PRIORITY_VIDEO_NO_POEM_PATTERN.test(cleanSheetWhitespace(file.name))\n      ))`,
+    `      files: (await listDriveFolderVideoFiles(set.folderId))\n        .filter(file => isPriorityVideoFileIncluded(file, set))`
+  );
+  source = replaceExactlyOnce(
+    source,
+    "priority review source validation",
+    `  const file = folderFiles.find(candidate => (\n    cleanSheetWhitespace(candidate.id) === sourceFileId\n    && (!set.excludeNoPoem || !PRIORITY_VIDEO_NO_POEM_PATTERN.test(cleanSheetWhitespace(candidate.name)))\n  ));`,
+    `  const file = folderFiles.find(candidate => (\n    cleanSheetWhitespace(candidate.id) === sourceFileId\n    && isPriorityVideoFileIncluded(candidate, set)\n  ));`
+  );
+  await writeFile(serverPath, source, "utf8");
+}
 
-replaceExactlyOnce(
-  "priority helper insertion",
-  'const PRIORITY_VIDEO_NO_POEM_PATTERN = /\\bno\\s+poem\\b/i;',
-  `${helpers}\nconst PRIORITY_VIDEO_NO_POEM_PATTERN = /\\bno\\s+poem\\b/i;`
-);
+if (!indexSource.includes('value="northbeast-regional-2023-finals"')) {
+  indexSource = replaceExactlyOnce(
+    indexSource,
+    "priority set dropdown",
+    '                <option value="publishers-poetry-slam-2026-camera-y">Publisher\'s Poetry Slam 2026 - Camera Y</option>',
+    '                <option value="northbeast-regional-2023-finals">NorthBeast Regional 2023 - Finals</option>\n                <option value="publishers-poetry-slam-2026-camera-y">Publisher\'s Poetry Slam 2026 - Camera Y</option>'
+  );
+  indexSource = replaceExactlyOnce(
+    indexSource,
+    "priority set count",
+    '<span class="badge badge--muted">5 Sets</span>',
+    '<span class="badge badge--muted">6 Sets</span>'
+  );
+  await writeFile(indexPath, indexSource, "utf8");
+}
 
-replaceExactlyOnce(
-  "priority set file filtering",
-  `  const files = (await listDriveFolderVideoFiles(set.folderId)).filter(file => (\n    !set.excludeNoPoem || !PRIORITY_VIDEO_NO_POEM_PATTERN.test(cleanSheetWhitespace(file.name))\n  ));`,
-  `  const files = (await listDriveFolderVideoFiles(set.folderId))\n    .filter(file => isPriorityVideoFileIncluded(file, set));`
-);
-
-replaceExactlyOnce(
-  "priority item metadata",
-  '      ...parsePriorityVideoFileName(file.name),',
-  '      ...getPriorityVideoIdentity(file, set),'
-);
-
-replaceExactlyOnce(
-  "priority progress filtering",
-  `      files: (await listDriveFolderVideoFiles(set.folderId)).filter(file => (\n        !set.excludeNoPoem || !PRIORITY_VIDEO_NO_POEM_PATTERN.test(cleanSheetWhitespace(file.name))\n      ))`,
-  `      files: (await listDriveFolderVideoFiles(set.folderId))\n        .filter(file => isPriorityVideoFileIncluded(file, set))`
-);
-
-replaceExactlyOnce(
-  "priority review source validation",
-  `  const file = folderFiles.find(candidate => (\n    cleanSheetWhitespace(candidate.id) === sourceFileId\n    && (!set.excludeNoPoem || !PRIORITY_VIDEO_NO_POEM_PATTERN.test(cleanSheetWhitespace(candidate.name)))\n  ));`,
-  `  const file = folderFiles.find(candidate => (\n    cleanSheetWhitespace(candidate.id) === sourceFileId\n    && isPriorityVideoFileIncluded(candidate, set)\n  ));`
-);
-
-await writeFile(serverPath, source, "utf8");
 console.log("Applied NorthBeast Regional 2023 - Finals priority-video overlay.");
