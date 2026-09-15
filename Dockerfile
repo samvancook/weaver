@@ -10,6 +10,8 @@ RUN npm install --omit=dev
 
 COPY public ./public
 COPY server.mjs ./server.mjs
+COPY apply_priority_video_overlays.mjs ./apply_priority_video_overlays.mjs
+RUN node apply_priority_video_overlays.mjs
 COPY catalog_validate.py ./catalog_validate.py
 COPY catalog_poem_text.py ./catalog_poem_text.py
 COPY excerpt_library.py ./excerpt_library.py
