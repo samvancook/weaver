@@ -4,7 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildWeaverVideoImport, parsePoetryPleaseVideoImport } from "./video_curation_handoff.mjs";
+import { buildWeaverVideoImport, parsePoetryPleaseVideoImport, reconcileVideoReviews, resolveCurrentVideoFileId } from "./video_curation_handoff.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -2218,8 +2218,8 @@ async function loadPriorityVideoSet(prioritySetId, reviewerEmail = "") {
       reviewerEmail: normalizedReviewerEmail
     });
     reviewsByFileId = new Map(
-      (Array.isArray(reviewResult?.records) ? reviewResult.records : [])
-        .map(record => [cleanSheetWhitespace(record.sourceFileId), {
+      reconcileVideoReviews(files, Array.isArray(reviewResult?.records) ? reviewResult.records : [])
+        .map(record => [record.sourceFileId, {
           rating: cleanSheetWhitespace(record.rating),
           notes: String(record.notes || ""),
           status: cleanSheetWhitespace(record.status),
@@ -2272,17 +2272,19 @@ async function loadPriorityVideoProgress() {
   const excerpts = Array.isArray(excerptResult?.records) ? excerptResult.records : [];
 
   const progressSets = fileResults.map(({ set, files }) => {
-    const fileIds = new Set(files.map(file => cleanSheetWhitespace(file.id)).filter(Boolean));
-    const setReviews = reviews.filter(review => (
+    const setReviews = reconcileVideoReviews(files, reviews.filter(review => (
       cleanSheetWhitespace(review.prioritySetId) === set.id
-      && fileIds.has(cleanSheetWhitespace(review.sourceFileId))
-    ));
+    )));
     const setExcerpts = excerpts.filter(record => {
       const payload = record?.sourcePayload && typeof record.sourcePayload === "object"
         ? record.sourcePayload
         : {};
       return cleanSheetWhitespace(payload.prioritySetId) === set.id
-        && (!cleanSheetWhitespace(payload.sourceFileId) || fileIds.has(cleanSheetWhitespace(payload.sourceFileId)));
+        && (!cleanSheetWhitespace(payload.sourceFileId)
+          || resolveCurrentVideoFileId({
+            sourceFileId: payload.sourceFileId,
+            sourceFileName: payload.sourceFileName
+          }, files));
     });
     const reviewedFileIds = new Set(setReviews.map(review => cleanSheetWhitespace(review.sourceFileId)).filter(Boolean));
     const reviewerEmails = Array.from(new Set(
@@ -2380,7 +2382,7 @@ async function getVideoCurationCandidates() {
       prioritySetId: set.id
     });
     const reviewsByFileId = new Map();
-    for (const review of Array.isArray(reviewsResult?.records) ? reviewsResult.records : []) {
+    for (const review of reconcileVideoReviews(files, Array.isArray(reviewsResult?.records) ? reviewsResult.records : [])) {
       const sourceFileId = cleanSheetWhitespace(review.sourceFileId);
       if (!sourceFileId || !cleanSheetWhitespace(review.rating)) continue;
       const reviews = reviewsByFileId.get(sourceFileId) || [];
@@ -2415,13 +2417,21 @@ async function getVideoCurationCandidates() {
       const candidateScore = Number((baseScore + excerptBonus).toFixed(2));
       const releaseStatus = getPriorityVideoReleaseStatus(file.name, set, sourceFileId);
       const firstReview = reviews[0] || {};
+      const historicalSourceIds = [...new Set(reviews
+        .flatMap(review => review.originalSourceFileIds || [])
+        .map(cleanSheetWhitespace)
+        .filter(id => id && id !== sourceFileId))];
+      const sourceReviewFileId = historicalSourceIds.length === 1
+        ? historicalSourceIds[0]
+        : cleanSheetWhitespace(existingGate?.sourceReviewFileId);
       const bookMeta = resolvePublishingBookMeta(firstReview.bookTitle, firstReview.bookTitle);
       const candidate = {
         candidateId,
-        videoRecordId: `weaver:video:${sourceFileId}`,
+        videoRecordId: `weaver:video:${sourceReviewFileId || sourceFileId}`,
         prioritySetId: set.id,
         prioritySetLabel: set.label,
         sourceFileId,
+        sourceReviewFileId,
         sourceFileName: cleanSheetWhitespace(file.name),
         sourceVideoUrl: cleanSheetWhitespace(file.webViewLink)
           || `https://drive.google.com/file/d/${encodeURIComponent(sourceFileId)}/view`,

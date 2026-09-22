@@ -9,6 +9,44 @@ function driveFileId(value) {
     || "";
 }
 
+export function resolveCurrentVideoFileId(record, files) {
+  const sourceFileId = clean(record?.sourceFileId);
+  if (files.some(file => clean(file.id) === sourceFileId)) return sourceFileId;
+  const sourceFileName = clean(record?.sourceFileName);
+  if (!sourceFileName) return "";
+  const matches = files.filter(file => clean(file.name) === sourceFileName);
+  return matches.length === 1 ? clean(matches[0].id) : "";
+}
+
+export function reconcileVideoReviews(files, records) {
+  const byReviewerAndFile = new Map();
+  for (const record of records) {
+    const currentFileId = resolveCurrentVideoFileId(record, files);
+    const reviewerEmail = clean(record.reviewerEmail).toLowerCase();
+    if (!currentFileId || !reviewerEmail) continue;
+    const key = `${currentFileId}|${reviewerEmail}`;
+    const previous = byReviewerAndFile.get(key);
+    const isDirect = clean(record.sourceFileId) === currentFileId;
+    const previousIsDirect = previous?.originalSourceFileIds?.includes(currentFileId);
+    const preferCurrent = !previous || (isDirect && !previousIsDirect)
+      || (isDirect === previousIsDirect && clean(record.updatedAt) > clean(previous.updatedAt));
+    const selected = preferCurrent ? record : previous;
+    byReviewerAndFile.set(key, {
+      ...selected,
+      sourceFileId: currentFileId,
+      originalSourceFileIds: [...new Set([
+        ...(previous?.originalSourceFileIds || []),
+        clean(record.sourceFileId)
+      ].filter(Boolean))],
+      excerptRecordIds: [...new Set([
+        ...(previous?.excerptRecordIds || []),
+        ...(record.excerptRecordIds || [])
+      ])]
+    });
+  }
+  return [...byReviewerAndFile.values()];
+}
+
 export function buildWeaverVideoImport(candidate, gate) {
   if (clean(gate?.decision) !== "ready_for_poetry_please") {
     throw new Error("Only a ready-for-Poetry Please video can be handed off.");
@@ -16,12 +54,15 @@ export function buildWeaverVideoImport(candidate, gate) {
   if (candidate?.publicationRestricted || gate?.publicationRestricted || clean(candidate?.releaseStatus)) {
     throw new Error("A publication-restricted source cannot be handed off to Poetry Please.");
   }
-  const sourceFileId = clean(candidate?.sourceFileId);
+  const reviewSourceFileId = clean(candidate?.sourceReviewFileId) || clean(gate?.sourceReviewFileId);
+  const sourceFileId = reviewSourceFileId || clean(candidate?.sourceFileId);
   const sourceRecordId = `weaver:video:${sourceFileId}`;
   const sourceEvent = clean(gate?.sourceEvent) || clean(candidate?.sourceEvent);
   const sourceEventLabel = clean(gate?.sourceEventLabel) || clean(candidate?.sourceEventLabel);
   const finalAssetUrl = clean(gate?.publishableAssetUrl);
-  const sourceVideoUrl = clean(gate?.sourceVideoUrl) || clean(candidate?.sourceVideoUrl);
+  const sourceVideoUrl = reviewSourceFileId
+    ? `https://drive.google.com/file/d/${encodeURIComponent(sourceFileId)}/view`
+    : (clean(gate?.sourceVideoUrl) || clean(candidate?.sourceVideoUrl));
   const missing = Object.entries({ sourceFileId, sourceEvent, sourceEventLabel, finalAssetUrl })
     .filter(([, value]) => !value)
     .map(([key]) => key);

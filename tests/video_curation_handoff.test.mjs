@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildWeaverVideoImport, parsePoetryPleaseVideoImport } from "../video_curation_handoff.mjs";
+import { buildWeaverVideoImport, parsePoetryPleaseVideoImport, reconcileVideoReviews, resolveCurrentVideoFileId } from "../video_curation_handoff.mjs";
 
 const candidate = {
   candidateId: "weaver:video:lane-a:source-123",
@@ -41,6 +41,57 @@ test("video import rejects raw footage and restricted or unready gates", () => {
   }), /raw Weaver source/);
   assert.throws(() => buildWeaverVideoImport({ ...candidate, publicationRestricted: true }, gate), /publication-restricted/);
   assert.throws(() => buildWeaverVideoImport(candidate, { ...gate, decision: "send_to_editing" }), /ready-for-Poetry Please/);
+});
+
+test("replaced Drive files recover reviews only through a unique exact filename", () => {
+  const files = [
+    { id: "new-1080", name: "Rachel Mckibbens - Weather’s Here.mov" },
+    { id: "another", name: "Other poem.mov" }
+  ];
+  assert.equal(resolveCurrentVideoFileId({
+    sourceFileId: "old-720", sourceFileName: "Rachel Mckibbens - Weather’s Here.mov"
+  }, files), "new-1080");
+  assert.equal(resolveCurrentVideoFileId({
+    sourceFileId: "new-1080", sourceFileName: "Stale name.mov"
+  }, files), "new-1080");
+  assert.equal(resolveCurrentVideoFileId({
+    sourceFileId: "old-720", sourceFileName: "Rachel Mckibbens - Other poem.mov"
+  }, files), "");
+  assert.equal(resolveCurrentVideoFileId({
+    sourceFileId: "old-720", sourceFileName: "Rachel Mckibbens - Weather’s Here.mov"
+  }, [...files, { id: "duplicate", name: files[0].name }]), "");
+});
+
+test("a replaced review source stays the stable handoff identity", () => {
+  const record = buildWeaverVideoImport({
+    ...candidate,
+    sourceFileId: "new-1080",
+    sourceReviewFileId: "old-720"
+  }, {
+    ...gate,
+    publishableAssetUrl: "https://drive.google.com/file/d/new-1080/view"
+  });
+  assert.equal(record.sourceRecordId, "weaver:video:old-720");
+  assert.equal(record.sourceFileId, "old-720");
+  assert.equal(record.sourceDriveFileId, "old-720");
+  assert.equal(record.sourceVideoUrl, "https://drive.google.com/file/d/old-720/view");
+  assert.equal(record.finalAssetUrl, "https://drive.google.com/file/d/new-1080/view");
+  assert.equal(buildWeaverVideoImport({ ...candidate, sourceFileId: "new-1080" }, {
+    ...gate, sourceReviewFileId: "old-720", publishableAssetUrl: record.finalAssetUrl
+  }).sourceRecordId, record.sourceRecordId);
+});
+
+test("an updated reviewer counts once and retains excerpts from the archived review", () => {
+  const files = [{ id: "new-1080", name: "Rachel Mckibbens - Weather’s Here.mov" }];
+  const reviews = reconcileVideoReviews(files, [
+    { sourceFileId: "old-720", sourceFileName: files[0].name, reviewerEmail: "sam@example.com", rating: "moved_me", excerptRecordIds: ["exc-old"] },
+    { sourceFileId: "new-1080", sourceFileName: files[0].name, reviewerEmail: "sam@example.com", rating: "like", excerptRecordIds: ["exc-new"] }
+  ]);
+  assert.equal(reviews.length, 1);
+  assert.equal(reviews[0].sourceFileId, "new-1080");
+  assert.equal(reviews[0].rating, "like");
+  assert.deepEqual(reviews[0].excerptRecordIds, ["exc-old", "exc-new"]);
+  assert.deepEqual(reviews[0].originalSourceFileIds, ["old-720", "new-1080"]);
 });
 
 test("Poetry Please canonical response is stored from its documented fields", () => {
