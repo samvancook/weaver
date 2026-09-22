@@ -4,6 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildWeaverVideoImport, parsePoetryPleaseVideoImport } from "./video_curation_handoff.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -98,6 +99,13 @@ const PRIORITY_VIDEO_SETS = new Map([
 
 const PRIORITY_VIDEO_NO_POEM_PATTERN = /\bno\s+poem\b/i;
 const PRIORITY_VIDEO_RELEASE_MARKER_PATTERN = /\bno\s+video\s+release\b|\bopt\s*out\b/i;
+const VIDEO_CURATION_SCORE_BY_RATING = Object.freeze({
+  dislike: 2.5,
+  meh: 5,
+  like: 7.5,
+  moved_me: 10
+});
+const VIDEO_CURATION_CANDIDATE_THRESHOLD = 7;
 
 function getPriorityVideoReleaseStatus(fileName, set = null, fileId = "") {
   if (Array.isArray(set?.releaseConfirmedFileIds) && set.releaseConfirmedFileIds.includes(cleanSheetWhitespace(fileId))) {
@@ -189,7 +197,9 @@ const ADMIN_MUTATION_PATHS = new Set([
   "/api/repair-requests/sync",
   "/api/save-graphics-qc",
   "/api/save-review-single",
-  "/api/save-reviews"
+  "/api/save-reviews",
+  "/api/admin/video-curation-gates",
+  "/api/admin/video-curation-gates/handoff"
 ]);
 
 function isAdministrativeMutationRequest(req, url) {
@@ -2349,6 +2359,168 @@ async function loadPriorityVideoProgress() {
     },
     sets: progressSets
   };
+}
+
+function buildVideoCurationCandidateId(prioritySetId, sourceFileId) {
+  return `weaver:video:${prioritySetId}:${sourceFileId}`;
+}
+
+async function getVideoCurationCandidates() {
+  const gateResult = await syncWeaverRuntimeDb("get_video_curation_gates", {});
+  const gatesByCandidateId = new Map(
+    (Array.isArray(gateResult?.records) ? gateResult.records : [])
+      .map(record => [cleanSheetWhitespace(record.candidateId), record])
+      .filter(([candidateId]) => candidateId)
+  );
+  const candidatesBySet = await Promise.all(Array.from(PRIORITY_VIDEO_SETS.values()).map(async set => {
+    const files = (await listDriveFolderVideoFiles(set.folderId)).filter(file => (
+      !set.excludeNoPoem || !PRIORITY_VIDEO_NO_POEM_PATTERN.test(cleanSheetWhitespace(file.name))
+    ));
+    const reviewsResult = await syncWeaverRuntimeDb("get_curation_reviews", {
+      prioritySetId: set.id
+    });
+    const reviewsByFileId = new Map();
+    for (const review of Array.isArray(reviewsResult?.records) ? reviewsResult.records : []) {
+      const sourceFileId = cleanSheetWhitespace(review.sourceFileId);
+      if (!sourceFileId || !cleanSheetWhitespace(review.rating)) continue;
+      const reviews = reviewsByFileId.get(sourceFileId) || [];
+      reviews.push(review);
+      reviewsByFileId.set(sourceFileId, reviews);
+    }
+
+    return files.map(file => {
+      const sourceFileId = cleanSheetWhitespace(file.id);
+      const reviews = reviewsByFileId.get(sourceFileId) || [];
+      const candidateId = buildVideoCurationCandidateId(set.id, sourceFileId);
+      const existingGate = gatesByCandidateId.get(candidateId) || null;
+      if (!reviews.length && !existingGate) return null;
+      const scoreValues = reviews.map(review => {
+        const legacyScore = Number(review.legacyScore);
+        if (cleanSheetWhitespace(review.ratingSource) === "legacy_import" && Number.isFinite(legacyScore)) {
+          return legacyScore;
+        }
+        return VIDEO_CURATION_SCORE_BY_RATING[cleanSheetWhitespace(review.rating).toLowerCase()] ?? null;
+      }).filter(score => Number.isFinite(score));
+      const baseScore = scoreValues.length
+        ? scoreValues.reduce((total, score) => total + score, 0) / scoreValues.length
+        : 0;
+      const excerptReviewers = new Set(reviews
+        .filter(review => Array.isArray(review.excerptRecordIds) && review.excerptRecordIds.length)
+        .map(review => cleanSheetWhitespace(review.reviewerEmail).toLowerCase())
+        .filter(Boolean));
+      const excerptRecordIds = Array.from(new Set(reviews.flatMap(review => (
+        Array.isArray(review.excerptRecordIds) ? review.excerptRecordIds : []
+      )).map(cleanSheetWhitespace).filter(Boolean))).sort();
+      const excerptBonus = Math.min(1, excerptReviewers.size * 0.5);
+      const candidateScore = Number((baseScore + excerptBonus).toFixed(2));
+      const releaseStatus = getPriorityVideoReleaseStatus(file.name, set, sourceFileId);
+      const firstReview = reviews[0] || {};
+      const bookMeta = resolvePublishingBookMeta(firstReview.bookTitle, firstReview.bookTitle);
+      const candidate = {
+        candidateId,
+        videoRecordId: `weaver:video:${sourceFileId}`,
+        prioritySetId: set.id,
+        prioritySetLabel: set.label,
+        sourceFileId,
+        sourceFileName: cleanSheetWhitespace(file.name),
+        sourceVideoUrl: cleanSheetWhitespace(file.webViewLink)
+          || `https://drive.google.com/file/d/${encodeURIComponent(sourceFileId)}/view`,
+        eventName: cleanSheetWhitespace(firstReview.eventName) || set.eventName || set.label,
+        sourceEvent: cleanSheetWhitespace(firstReview.sourceEvent) || set.eventName || set.label,
+        sourceEventLabel: cleanSheetWhitespace(firstReview.sourceEventLabel) || set.label,
+        eventReleaseCatalog: cleanSheetWhitespace(firstReview.eventReleaseCatalog) || cleanSheetWhitespace(set.eventReleaseCatalog),
+        author: cleanSheetWhitespace(firstReview.author),
+        poemTitle: cleanSheetWhitespace(firstReview.poemTitle),
+        bookTitle: cleanSheetWhitespace(firstReview.bookTitle),
+        releaseCatalog: cleanSheetWhitespace(firstReview.releaseCatalog) || cleanSheetWhitespace(bookMeta?.releaseCatalog),
+        releaseStatus,
+        publicationRestricted: Boolean(releaseStatus),
+        baseScore: Number(baseScore.toFixed(2)),
+        excerptBonus,
+        candidateScore,
+        threshold: VIDEO_CURATION_CANDIDATE_THRESHOLD,
+        isEligible: !releaseStatus && candidateScore >= VIDEO_CURATION_CANDIDATE_THRESHOLD,
+        excerptRecordIds,
+        reviewCount: reviews.length,
+        ratings: reviews.map(review => ({
+          reviewerEmail: cleanSheetWhitespace(review.reviewerEmail),
+          rating: cleanSheetWhitespace(review.rating),
+          notes: String(review.notes || ""),
+          excerptCount: Array.isArray(review.excerptRecordIds) ? review.excerptRecordIds.length : 0,
+          updatedAt: cleanSheetWhitespace(review.updatedAt)
+        })),
+        gate: existingGate
+      };
+      return candidate.isEligible || existingGate ? candidate : null;
+    }).filter(Boolean);
+  }));
+  return {
+    ok: true,
+    threshold: VIDEO_CURATION_CANDIDATE_THRESHOLD,
+    candidates: candidatesBySet.flat().sort((left, right) => (
+      right.candidateScore - left.candidateScore
+        || left.prioritySetLabel.localeCompare(right.prioritySetLabel)
+        || left.sourceFileName.localeCompare(right.sourceFileName)
+    ))
+  };
+}
+
+async function saveVideoCurationGate(payload = {}, decidedBy = "") {
+  const prioritySetId = cleanSheetWhitespace(payload.prioritySetId);
+  const sourceFileId = cleanSheetWhitespace(payload.sourceFileId);
+  const candidatesResult = await getVideoCurationCandidates();
+  const candidate = candidatesResult.candidates.find(record => (
+    record.prioritySetId === prioritySetId && record.sourceFileId === sourceFileId
+  ));
+  if (!candidate) throw new Error("Video is not an eligible curation candidate.");
+  if (candidate.publicationRestricted && payload.decision === "ready_for_poetry_please") {
+    throw new Error("A publication-restricted source cannot be prepared for Poetry Please.");
+  }
+  const allowedExcerptIds = new Set(candidate.excerptRecordIds);
+  const selectedExcerptRecordIds = (Array.isArray(payload.selectedExcerptRecordIds) ? payload.selectedExcerptRecordIds : [])
+    .map(cleanSheetWhitespace)
+    .filter(recordId => allowedExcerptIds.has(recordId));
+  return await syncWeaverRuntimeDb("upsert_video_curation_gate", {
+    gate: {
+      ...candidate,
+      decision: cleanSheetWhitespace(payload.decision),
+      selectedExcerptRecordIds,
+      editingInstructions: String(payload.editingInstructions || ""),
+      publishableAssetUrl: cleanSheetWhitespace(payload.publishableAssetUrl),
+      note: String(payload.note || ""),
+      decidedBy
+    }
+  });
+}
+
+async function handoffVideoCurationGate(payload = {}) {
+  if (!poetryPleaseApiKey) throw new Error("POETRY_PLEASE_API_KEY is not configured.");
+  const prioritySetId = cleanSheetWhitespace(payload.prioritySetId);
+  const sourceFileId = cleanSheetWhitespace(payload.sourceFileId);
+  const candidates = await getVideoCurationCandidates();
+  const candidate = candidates.candidates.find(item => item.prioritySetId === prioritySetId && item.sourceFileId === sourceFileId);
+  if (!candidate?.gate) throw new Error("Save the video gate before sending it to Poetry Please.");
+  const gate = candidate.gate;
+  const record = buildWeaverVideoImport(candidate, gate);
+  const persist = async update => syncWeaverRuntimeDb("upsert_video_curation_gate", {
+    gate: { ...candidate, ...gate, poetryPleaseHandoff: update }
+  });
+  await persist({ status: "sending", sourceRecordId: record.sourceRecordId, updatedAt: new Date().toISOString() });
+  const endpoint = `${poetryPleaseApiUrl.replace(/\/$/, "")}/internal/weaverVideoImport`;
+  try {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-api-key": poetryPleaseApiKey },
+      body: JSON.stringify(record)
+    });
+    const body = await response.json().catch(() => ({}));
+    const result = parsePoetryPleaseVideoImport(response, body, record.sourceRecordId, poetryPleaseApiUrl);
+    const saved = await persist({ ...result, sourceRecordId: record.sourceRecordId, updatedAt: new Date().toISOString() });
+    return { ...result, gate: saved.record, poetryPlease: body };
+  } catch (error) {
+    await persist({ status: "failed", sourceRecordId: record.sourceRecordId, error: error.message, updatedAt: new Date().toISOString() });
+    throw error;
+  }
 }
 
 async function savePriorityVideoReview(payload = {}) {
@@ -7548,6 +7720,36 @@ const server = http.createServer(async (req, res) => {
         ok: false,
         error: error.message
       });
+    }
+  }
+
+  if (url.pathname === "/api/admin/video-curation-candidates" && req.method === "GET") {
+    try {
+      await verifyAdministrativeCaller(req);
+      return sendJson(res, 200, await getVideoCurationCandidates());
+    } catch (error) {
+      return sendJson(res, Number(error.statusCode || 500), { ok: false, error: error.message });
+    }
+  }
+
+  if (url.pathname === "/api/admin/video-curation-gates" && req.method === "POST") {
+    try {
+      const admin = req.weaverAdmin || await verifyAdministrativeCaller(req);
+      const payload = JSON.parse(await readRequestBody(req) || "{}");
+      return sendJson(res, 200, await saveVideoCurationGate(payload, admin.email));
+    } catch (error) {
+      return sendJson(res, Number(error.statusCode || 500), { ok: false, error: error.message });
+    }
+  }
+
+  if (url.pathname === "/api/admin/video-curation-gates/handoff" && req.method === "POST") {
+    try {
+      await verifyAdministrativeCaller(req);
+      const payload = JSON.parse(await readRequestBody(req) || "{}");
+      const result = await handoffVideoCurationGate(payload);
+      return sendJson(res, result.ok ? 200 : 502, result);
+    } catch (error) {
+      return sendJson(res, Number(error.statusCode || 500), { ok: false, error: error.message });
     }
   }
 

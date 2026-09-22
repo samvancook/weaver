@@ -62,12 +62,15 @@ FIRESTORE_HANDOFF_ACTIONS = {
     "get_excerpt_records",
     "upsert_curation_review",
     "get_curation_reviews",
+    "upsert_video_curation_gate",
+    "get_video_curation_gates",
 }
 
 EXPECTED_FIRESTORE_PROJECT_ID = "button-weaver-internal"
 EXPECTED_FIRESTORE_DATABASE_ID = "weaverledger"
 FIRESTORE_REPAIR_REQUESTS_COLLECTION = "poetryPleaseRepairRequests"
 FIRESTORE_CURATION_REVIEWS_COLLECTION = "curationReviews"
+FIRESTORE_VIDEO_CURATION_GATES_COLLECTION = "videoCurationGates"
 PIG_REPAIR_CONTENT_TYPES = {"QI", "FPI"}
 
 
@@ -700,6 +703,98 @@ def fetch_curation_reviews(connection, payload: dict[str, Any]) -> dict[str, Any
         records = [record for record in records if normalize_text(record.get("prioritySetId")) == priority_set_id]
     if reviewer_email:
         records = [record for record in records if normalize_text(record.get("reviewerEmail")).lower() == reviewer_email]
+    return {"ok": True, "records": records, "count": len(records)}
+
+
+def upsert_video_curation_gate(connection, payload: dict[str, Any]) -> dict[str, Any]:
+    source = payload.get("gate") or payload
+    priority_set_id = normalize_text(source.get("prioritySetId"))
+    source_file_id = normalize_text(source.get("sourceFileId"))
+    decision = normalize_text(source.get("decision")).lower()
+    if not priority_set_id or not source_file_id:
+        raise ValueError("prioritySetId and sourceFileId are required")
+    if decision not in {"send_to_editing", "ready_for_poetry_please", "hold", "reject"}:
+        raise ValueError("Unsupported video curation decision")
+    publishable_asset_url = normalize_text(source.get("publishableAssetUrl"))
+    if decision == "ready_for_poetry_please" and not publishable_asset_url:
+        raise ValueError("A final publishable asset is required before Poetry Please handoff")
+
+    gate_id = hashlib.sha256(f"{priority_set_id}|{source_file_id}".encode("utf-8")).hexdigest()[:32]
+    now = utc_now_iso()
+    existing = connection.get_raw_document(FIRESTORE_VIDEO_CURATION_GATES_COLLECTION, gate_id) or {}
+    selected_excerpt_record_ids = sorted({
+        normalize_text(value)
+        for value in (source.get("selectedExcerptRecordIds") or [])
+        if normalize_text(value)
+    })
+    handoff_update = source.get("poetryPleaseHandoff")
+    if not isinstance(handoff_update, dict):
+        handoff_update = {}
+    poetry_please_handoff = {
+        **(existing.get("poetryPleaseHandoff") or {}),
+        **handoff_update,
+    }
+    history = list(existing.get("history") or [])
+    if handoff_update:
+        history.append({
+            "event": "poetry_please_handoff",
+            "status": normalize_text(handoff_update.get("status")),
+            "at": now,
+        })
+    else:
+        history.append({
+            "decision": decision,
+            "decidedBy": normalize_text(source.get("decidedBy")),
+            "note": str(source.get("note") or ""),
+            "at": now,
+        })
+    handoff_status = "ready" if decision == "ready_for_poetry_please" else "not_applicable"
+    if handoff_update:
+        handoff_status = normalize_text(handoff_update.get("status")) or handoff_status
+    record = {
+        **existing,
+        "gateId": gate_id,
+        "candidateId": f"weaver:video:{priority_set_id}:{source_file_id}",
+        "videoRecordId": normalize_text(source.get("videoRecordId")) or normalize_text(existing.get("videoRecordId")) or f"weaver:video:{source_file_id}",
+        "prioritySetId": priority_set_id,
+        "sourceFileId": source_file_id,
+        "sourceFileName": normalize_text(source.get("sourceFileName")),
+        "sourceVideoUrl": normalize_text(source.get("sourceVideoUrl")),
+        "author": normalize_text(source.get("author")),
+        "poemTitle": normalize_text(source.get("poemTitle")),
+        "bookTitle": normalize_text(source.get("bookTitle")),
+        "eventName": normalize_text(source.get("eventName")),
+        "sourceEvent": normalize_text(source.get("sourceEvent")) or normalize_text(existing.get("sourceEvent")),
+        "sourceEventLabel": normalize_text(source.get("sourceEventLabel")) or normalize_text(existing.get("sourceEventLabel")),
+        "eventReleaseCatalog": normalize_text(source.get("eventReleaseCatalog")) or normalize_text(existing.get("eventReleaseCatalog")),
+        "releaseCatalog": normalize_text(source.get("releaseCatalog")) or normalize_text(existing.get("releaseCatalog")),
+        "releaseStatus": normalize_text(source.get("releaseStatus")),
+        "publicationRestricted": bool(source.get("publicationRestricted")),
+        "baseScore": source.get("baseScore"),
+        "excerptBonus": source.get("excerptBonus"),
+        "candidateScore": source.get("candidateScore"),
+        "selectedExcerptRecordIds": selected_excerpt_record_ids,
+        "decision": decision,
+        "status": decision,
+        "editingInstructions": str(source.get("editingInstructions") or ""),
+        "publishableAssetUrl": publishable_asset_url,
+        "handoffStatus": handoff_status,
+        "poetryPleaseHandoff": poetry_please_handoff,
+        "note": str(source.get("note") or ""),
+        "decidedBy": normalize_text(source.get("decidedBy")),
+        "decidedAt": normalize_text(existing.get("decidedAt")) if handoff_update else now,
+        "history": history[-20:],
+        "createdAt": normalize_text(existing.get("createdAt")) or now,
+        "updatedAt": now,
+    }
+    return {
+        "ok": True,
+        "record": connection.write_raw_document(FIRESTORE_VIDEO_CURATION_GATES_COLLECTION, gate_id, record),
+    }
+
+
+def fetch_video_curation_gates(connection, payload: dict[str, Any]) -> dict[str, Any]:
+    records = connection.list_raw_documents(FIRESTORE_VIDEO_CURATION_GATES_COLLECTION)
     return {"ok": True, "records": records, "count": len(records)}
 
 
@@ -1524,6 +1619,10 @@ def main() -> int:
             result = upsert_curation_review(connection, payload)
         elif action == "get_curation_reviews":
             result = fetch_curation_reviews(connection, payload)
+        elif action == "upsert_video_curation_gate":
+            result = upsert_video_curation_gate(connection, payload)
+        elif action == "get_video_curation_gates":
+            result = fetch_video_curation_gates(connection, payload)
         else:
             result = {
                 "ok": False,
