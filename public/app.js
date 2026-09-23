@@ -10,6 +10,7 @@ const elements = {
   showGraphicsOps: document.getElementById("show-graphics-ops"),
   graphicsModuleTitle: document.getElementById("graphics-module-title"),
   graphicsOpsPanel: document.getElementById("graphics-ops-panel"),
+  videoProgressManagement: document.getElementById("video-progress-management"),
   graphicsBookPicker: document.getElementById("graphics-book-picker"),
   graphicsModeField: document.getElementById("graphics-mode-field"),
   graphicsFilterField: document.getElementById("graphics-filter-field"),
@@ -3399,6 +3400,7 @@ function updateGraphicsModuleTitle() {
     ? "Under the Hood"
     : "Graphics QC";
   setElementForcedHidden(elements.graphicsOpsPanel, !isOpsHandoff);
+  setElementForcedHidden(elements.videoProgressManagement, !isOpsView);
   setElementForcedHidden(elements.graphicsModeField, !isOpsView);
   setElementForcedHidden(elements.graphicsFilterField, isOpsView);
   setElementForcedHidden(elements.graphicsReleaseCatalogField, isOpsView);
