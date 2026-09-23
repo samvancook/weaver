@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildWeaverVideoImport, parsePoetryPleaseVideoImport, reconcileVideoReviews, resolveCurrentVideoFileId } from "../video_curation_handoff.mjs";
+import { buildWeaverVideoImport, parsePoetryPleaseVideoImport, poetryPleaseVideoIdForSourceFile, reconcileVideoReviews, resolveCurrentVideoFileId } from "../video_curation_handoff.mjs";
 
 const candidate = {
   candidateId: "weaver:video:lane-a:source-123",
@@ -103,6 +103,19 @@ test("an updated reviewer counts once and retains excerpts from the archived rev
   assert.equal(reviews[0].rating, "like");
   assert.deepEqual(reviews[0].excerptRecordIds, ["exc-old", "exc-new"]);
   assert.deepEqual(reviews[0].originalSourceFileIds, ["old-720", "new-1080"]);
+});
+
+test("approved excerpts link only to a uniquely matched canonical video", () => {
+  const gates = [{
+    sourceFileId: "new-1080", sourceReviewFileId: "old-720",
+    poetryPleaseHandoff: { canonicalVideoId: "WEAVER-VV-ABC" }
+  }];
+  assert.equal(poetryPleaseVideoIdForSourceFile("old-720", gates), "WEAVER-VV-ABC");
+  assert.equal(poetryPleaseVideoIdForSourceFile("new-1080", gates), "WEAVER-VV-ABC");
+  assert.equal(poetryPleaseVideoIdForSourceFile("other", gates), "");
+  assert.equal(poetryPleaseVideoIdForSourceFile("old-720", [
+    ...gates, { sourceFileId: "old-720", poetryPleaseHandoff: { canonicalVideoId: "OTHER" } }
+  ]), "");
 });
 
 test("Poetry Please canonical response is stored from its documented fields", () => {

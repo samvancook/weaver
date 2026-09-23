@@ -4,7 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildWeaverVideoImport, parsePoetryPleaseVideoImport, reconcileVideoReviews, resolveCurrentVideoFileId } from "./video_curation_handoff.mjs";
+import { buildWeaverVideoImport, parsePoetryPleaseVideoImport, poetryPleaseVideoIdForSourceFile, reconcileVideoReviews, resolveCurrentVideoFileId } from "./video_curation_handoff.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -4850,6 +4850,10 @@ async function handoffApprovedExcerptsToPoetryPlease(records = []) {
     return { ok: false, skipped: true, reason: "missing_poetry_please_api_key", results: [] };
   }
 
+  const videoGates = approvedRecords.some(record => record.sourceVideoFileId)
+    ? (await syncWeaverRuntimeDb("get_video_curation_gates", {})).records || []
+    : [];
+
   const results = [];
   let createdCount = 0;
   let updatedCount = 0;
@@ -4866,6 +4870,10 @@ async function handoffApprovedExcerptsToPoetryPlease(records = []) {
       continue;
     }
     try {
+      if (record.sourceVideoFileId) {
+        const canonicalVideoId = poetryPleaseVideoIdForSourceFile(record.sourceVideoFileId, videoGates);
+        if (canonicalVideoId) record.sourceContentId = canonicalVideoId;
+      }
       const response = await fetch(`${poetryPleaseApiUrl.replace(/\/$/, "")}/internal/weaverImport`, {
         method: "POST",
         headers: {

@@ -47,6 +47,15 @@ export function reconcileVideoReviews(files, records) {
   return [...byReviewerAndFile.values()];
 }
 
+export function poetryPleaseVideoIdForSourceFile(sourceFileId, gates = []) {
+  const fileId = clean(sourceFileId);
+  if (!fileId) return "";
+  const ids = new Set(gates.filter(gate => (
+    clean(gate?.sourceReviewFileId) === fileId || clean(gate?.sourceFileId) === fileId
+  )).map(gate => clean(gate?.poetryPleaseHandoff?.canonicalVideoId)).filter(Boolean));
+  return ids.size === 1 ? [...ids][0] : "";
+}
+
 export function buildWeaverVideoImport(candidate, gate) {
   if (clean(gate?.decision) !== "ready_for_poetry_please") {
     throw new Error("Only a ready-for-Poetry Please video can be handed off.");
