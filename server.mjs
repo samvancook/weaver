@@ -2210,15 +2210,27 @@ async function loadPriorityVideoSet(prioritySetId, reviewerEmail = "") {
   const files = (await listDriveFolderVideoFiles(set.folderId)).filter(file => (
     !set.excludeNoPoem || !PRIORITY_VIDEO_NO_POEM_PATTERN.test(cleanSheetWhitespace(file.name))
   ));
+  const allReviewResult = await syncWeaverRuntimeDb("get_curation_reviews", { prioritySetId: set.id });
+  const allReviews = reconcileVideoReviews(
+    files,
+    Array.isArray(allReviewResult?.records) ? allReviewResult.records : []
+  );
+  const excerptIdsByFileId = new Map();
+  for (const review of allReviews) {
+    const fileId = cleanSheetWhitespace(review.sourceFileId);
+    if (!fileId) continue;
+    const excerptIds = excerptIdsByFileId.get(fileId) || new Set();
+    for (const value of Array.isArray(review.excerptRecordIds) ? review.excerptRecordIds : []) {
+      const excerptRecordId = cleanSheetWhitespace(value);
+      if (excerptRecordId) excerptIds.add(excerptRecordId);
+    }
+    excerptIdsByFileId.set(fileId, excerptIds);
+  }
   let reviewsByFileId = new Map();
   const normalizedReviewerEmail = cleanSheetWhitespace(reviewerEmail).toLowerCase();
   if (normalizedReviewerEmail) {
-    const reviewResult = await syncWeaverRuntimeDb("get_curation_reviews", {
-      prioritySetId: set.id,
-      reviewerEmail: normalizedReviewerEmail
-    });
     reviewsByFileId = new Map(
-      reconcileVideoReviews(files, Array.isArray(reviewResult?.records) ? reviewResult.records : [])
+      allReviews.filter(record => cleanSheetWhitespace(record.reviewerEmail).toLowerCase() === normalizedReviewerEmail)
         .map(record => [record.sourceFileId, {
           rating: cleanSheetWhitespace(record.rating),
           notes: String(record.notes || ""),
@@ -2239,6 +2251,7 @@ async function loadPriorityVideoSet(prioritySetId, reviewerEmail = "") {
       sourceFolderId: set.folderId,
       sourceFileId: cleanSheetWhitespace(file.id),
       sourceFileName: cleanSheetWhitespace(file.name),
+      weaverExcerptCount: (excerptIdsByFileId.get(cleanSheetWhitespace(file.id)) || new Set()).size,
       videoReleaseStatus,
       publicationRestricted: Boolean(videoReleaseStatus),
       review: reviewsByFileId.get(cleanSheetWhitespace(file.id)) || null
