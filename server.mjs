@@ -2269,6 +2269,41 @@ async function loadPriorityVideoSet(prioritySetId, reviewerEmail = "") {
   };
 }
 
+async function getPriorityVideoSetAvailability(reviewerEmail = "") {
+  const email = cleanSheetWhitespace(reviewerEmail).toLowerCase();
+  const sets = Array.from(PRIORITY_VIDEO_SETS.values());
+  if (!email) {
+    return { ok: true, sets: sets.map(set => ({ id: set.id, completed: false })) };
+  }
+  const [reviewResult, fileResults] = await Promise.all([
+    syncWeaverRuntimeDb("get_curation_reviews", {}),
+    Promise.all(sets.map(set => listDriveFolderVideoFiles(set.folderId)))
+  ]);
+  const reviews = Array.isArray(reviewResult?.records) ? reviewResult.records : [];
+  return {
+    ok: true,
+    sets: sets.map((set, index) => {
+      const files = fileResults[index].filter(file => (
+        !set.excludeNoPoem || !PRIORITY_VIDEO_NO_POEM_PATTERN.test(cleanSheetWhitespace(file.name))
+      ));
+      const reviewedFileIds = new Set(reconcileVideoReviews(
+        files,
+        reviews.filter(record => (
+          cleanSheetWhitespace(record.prioritySetId) === set.id
+          && cleanSheetWhitespace(record.reviewerEmail).toLowerCase() === email
+          && cleanSheetWhitespace(record.rating)
+        ))
+      ).map(record => cleanSheetWhitespace(record.sourceFileId)));
+      return {
+        id: set.id,
+        totalCount: files.length,
+        reviewedCount: reviewedFileIds.size,
+        completed: files.length > 0 && reviewedFileIds.size === files.length
+      };
+    })
+  };
+}
+
 async function loadPriorityVideoProgress() {
   const sets = Array.from(PRIORITY_VIDEO_SETS.values());
   const [reviewResult, excerptResult, fileResults] = await Promise.all([
@@ -7743,6 +7778,14 @@ const server = http.createServer(async (req, res) => {
         ok: false,
         error: error.message
       });
+    }
+  }
+
+  if (url.pathname === "/api/intake/priority-video-sets" && req.method === "GET") {
+    try {
+      return sendJson(res, 200, await getPriorityVideoSetAvailability(url.searchParams.get("reviewerEmail") || ""));
+    } catch (error) {
+      return sendJson(res, 500, { ok: false, error: error.message });
     }
   }
 
