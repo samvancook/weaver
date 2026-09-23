@@ -47,7 +47,7 @@ export function reconcileVideoReviews(files, records) {
   return [...byReviewerAndFile.values()];
 }
 
-export function buildWeaverVideoImport(candidate, gate) {
+export function buildWeaverVideoImport(candidate, gate, excerpts = []) {
   if (clean(gate?.decision) !== "ready_for_poetry_please") {
     throw new Error("Only a ready-for-Poetry Please video can be handed off.");
   }
@@ -103,6 +103,8 @@ export function buildWeaverVideoImport(candidate, gate) {
     releaseStatus: clean(gate.releaseStatus) || clean(candidate.releaseStatus),
     publicationRestricted: false,
     selectedExcerptRecordIds: Array.isArray(gate.selectedExcerptRecordIds) ? gate.selectedExcerptRecordIds : [],
+    reviews: Array.isArray(candidate.ratings) ? candidate.ratings : [],
+    excerpts,
     baseScore: gate.baseScore ?? candidate.baseScore,
     excerptBonus: gate.excerptBonus ?? candidate.excerptBonus,
     candidateScore: gate.candidateScore ?? candidate.candidateScore,
@@ -114,21 +116,28 @@ export function buildWeaverVideoImport(candidate, gate) {
   };
 }
 
-export function parsePoetryPleaseVideoImport(response, body, sourceRecordId, apiUrl) {
+export function parsePoetryPleaseVideoImport(response, body, sourceRecordId, apiUrl, expected = {}) {
   const item = (Array.isArray(body?.results) ? body.results : [])
     .find(result => clean(result?.sourceRecordId) === sourceRecordId) || {};
   const status = clean(item.status).toLowerCase();
   const canonicalVideoId = clean(item.canonicalVideoId);
   const canonicalVideoUrl = clean(item.canonicalVideoUrl);
+  const reviewsReceived = Number(item.receivedReviewCount) === Number(expected.reviewCount || 0);
+  const excerptsReceived = Number(item.receivedExcerptCount) === Number(expected.excerptCount || 0);
   const ok = response.ok && body?.ok === true
     && ["created", "updated", "duplicate"].includes(status)
-    && Boolean(canonicalVideoId && canonicalVideoUrl);
+    && Boolean(canonicalVideoId && canonicalVideoUrl)
+    && reviewsReceived && excerptsReceived;
   return {
     ok,
     status: ok ? "sent_to_poetry_please" : (status || "failed"),
     canonicalVideoId,
     canonicalVideoUrl: canonicalVideoUrl ? new URL(canonicalVideoUrl, apiUrl).toString() : "",
     finalAssetUrl: clean(item.finalAssetUrl),
-    error: ok ? "" : clean(item.error || body?.error || `Poetry Please returned ${response.status}`)
+    error: ok ? "" : clean(item.error || body?.error || (
+      !reviewsReceived || !excerptsReceived
+        ? "Poetry Please did not confirm receipt of all reviews and excerpts"
+        : `Poetry Please returned ${response.status}`
+    ))
   };
 }

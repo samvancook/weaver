@@ -2453,9 +2453,13 @@ async function getVideoCurationCandidates() {
         excerptRecordIds,
         reviewCount: reviews.length,
         ratings: reviews.map(review => ({
+          reviewId: cleanSheetWhitespace(review.reviewId),
           reviewerEmail: cleanSheetWhitespace(review.reviewerEmail),
           rating: cleanSheetWhitespace(review.rating),
+          ratingSource: cleanSheetWhitespace(review.ratingSource),
+          legacyScore: review.legacyScore ?? null,
           notes: String(review.notes || ""),
+          excerptRecordIds: Array.isArray(review.excerptRecordIds) ? review.excerptRecordIds : [],
           excerptCount: Array.isArray(review.excerptRecordIds) ? review.excerptRecordIds.length : 0,
           updatedAt: cleanSheetWhitespace(review.updatedAt)
         })),
@@ -2511,7 +2515,30 @@ async function handoffVideoCurationGate(payload = {}) {
   const candidate = candidates.candidates.find(item => item.prioritySetId === prioritySetId && item.sourceFileId === sourceFileId);
   if (!candidate?.gate) throw new Error("Save the video gate before sending it to Poetry Please.");
   const gate = candidate.gate;
-  const record = buildWeaverVideoImport(candidate, gate);
+  const selectedIds = [...new Set((gate.selectedExcerptRecordIds || []).map(cleanSheetWhitespace).filter(Boolean))];
+  const excerptResult = selectedIds.length
+    ? await syncWeaverRuntimeDb("get_excerpt_records", { recordIds: selectedIds })
+    : { records: [] };
+  const excerptsById = new Map((excerptResult.records || []).map(excerpt => [
+    cleanSheetWhitespace(excerpt.sourceRecordId), excerpt
+  ]));
+  const missingIds = selectedIds.filter(id => !cleanSheetWhitespace(excerptsById.get(id)?.excerptText));
+  if (missingIds.length) throw new Error(`Selected excerpts are missing text: ${missingIds.join(", ")}`);
+  const excerpts = selectedIds.map(id => {
+    const excerpt = excerptsById.get(id);
+    return {
+      sourceRecordId: id,
+      excerptText: excerpt.excerptText,
+      author: cleanSheetWhitespace(excerpt.author),
+      poemTitle: cleanSheetWhitespace(excerpt.poemTitle),
+      bookTitle: cleanSheetWhitespace(excerpt.bookTitle),
+      sourceEvent: cleanSheetWhitespace(excerpt.sourceEvent),
+      reviewDecision: cleanSheetWhitespace(excerpt.reviewDecision),
+      submittedBy: cleanSheetWhitespace(excerpt.submittedBy),
+      sourceVideoFileId: cleanSheetWhitespace(excerpt.sourceVideoFileId)
+    };
+  });
+  const record = buildWeaverVideoImport(candidate, gate, excerpts);
   const persist = async update => syncWeaverRuntimeDb("upsert_video_curation_gate", {
     gate: { ...candidate, ...gate, poetryPleaseHandoff: update }
   });
@@ -2524,7 +2551,10 @@ async function handoffVideoCurationGate(payload = {}) {
       body: JSON.stringify(record)
     });
     const body = await response.json().catch(() => ({}));
-    const result = parsePoetryPleaseVideoImport(response, body, record.sourceRecordId, poetryPleaseApiUrl);
+    const result = parsePoetryPleaseVideoImport(response, body, record.sourceRecordId, poetryPleaseApiUrl, {
+      reviewCount: record.reviews.length,
+      excerptCount: record.excerpts.length
+    });
     const saved = await persist({ ...result, sourceRecordId: record.sourceRecordId, updatedAt: new Date().toISOString() });
     return { ...result, gate: saved.record, poetryPlease: body };
   } catch (error) {
