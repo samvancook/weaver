@@ -1321,9 +1321,29 @@ function setGatheringVideoPlaylistStatus(message = "") {
   elements.gatheringVideoPlaylistStatus.textContent = message || "Load a curation form to prefill the event name, author, and poem title, then advance through the playlist as you submit.";
 }
 
+function clearGatheringVideoPlaylistItemFields() {
+  [
+    elements.gatheringVideoAuthor,
+    elements.gatheringVideoTitle,
+    elements.gatheringVideoBook,
+    elements.gatheringVideoEvent,
+    elements.gatheringVideoScore,
+    elements.gatheringVideoScoreNotes,
+    elements.gatheringVideoQuote,
+    elements.gatheringVideoQuote2,
+    elements.gatheringVideoQuote3
+  ].forEach(field => { if (field) field.value = ""; });
+  if (elements.gatheringVideoReleaseWarning) {
+    elements.gatheringVideoReleaseWarning.hidden = true;
+    elements.gatheringVideoReleaseWarning.textContent = "";
+  }
+  updateGatheringQuoteMeta();
+}
+
 function updateGatheringVideoPlaylistUi() {
   const playlist = currentGatheringVideoPlaylist;
   const hasPlaylist = !!(playlist && Array.isArray(playlist.items) && playlist.items.length);
+  const isComplete = Boolean(playlist?.prioritySetId && playlist?.completed);
   const currentItem = hasPlaylist ? playlist.items[playlist.index] : null;
   if (elements.gatheringVideoPrevItem) {
     elements.gatheringVideoPrevItem.disabled = !hasPlaylist || playlist.index <= 0;
@@ -1337,6 +1357,9 @@ function updateGatheringVideoPlaylistUi() {
   if (elements.gatheringVideoSaveRating) {
     elements.gatheringVideoSaveRating.disabled = !hasPlaylist || !playlist?.prioritySetId;
   }
+  if (elements.submitGathering && getSelectedGatheringMode() === "video") {
+    elements.submitGathering.disabled = isComplete;
+  }
   if (elements.gatheringVideoExcerptGuidance) {
     const count = Math.max(0, Number(currentItem?.weaverExcerptCount) || 0);
     const remaining = Math.max(0, 3 - count);
@@ -1345,9 +1368,11 @@ function updateGatheringVideoPlaylistUi() {
       ? `${count} Weaver excerpt${count === 1 ? "" : "s"} recorded. Excerpt needed: add ${remaining} more strong passage${remaining === 1 ? "" : "s"}.`
       : `${count} Weaver excerpts recorded. Further excerpts are optional.`;
   }
-  if (hasPlaylist) {
-    const reviewedCount = playlist.items.filter(item => item.review?.rating).length;
-    const label = `${playlist.eventName || "Playlist"}: item ${playlist.index + 1} of ${playlist.items.length} · ${reviewedCount} reviewed${currentItem?.author ? ` · ${currentItem.author}` : ""}${currentItem?.poemTitle ? ` · ${currentItem.poemTitle}` : ""}`;
+  if (hasPlaylist || isComplete) {
+    const reviewedCount = Math.max(0, Number(playlist.reviewedCount) || 0);
+    const label = isComplete
+      ? `${playlist.eventName || "Playlist"}: all ${playlist.totalCount} videos reviewed.`
+      : `${playlist.eventName || "Playlist"}: ${playlist.index + 1} of ${playlist.items.length} remaining · ${reviewedCount} reviewed${currentItem?.author ? ` · ${currentItem.author}` : ""}${currentItem?.poemTitle ? ` · ${currentItem.poemTitle}` : ""}`;
     setGatheringVideoPlaylistStatus(label);
   } else {
     setGatheringVideoPlaylistStatus("");
@@ -1408,6 +1433,25 @@ function normalizeVideoPlaylistItem(rawItem, eventName) {
     publicationRestricted: Boolean(rawItem?.publicationRestricted),
     review: rawItem?.review && typeof rawItem.review === "object" ? rawItem.review : null
   };
+}
+
+async function refreshPriorityVideoSetVisibility() {
+  const select = elements.gatheringVideoPrioritySet;
+  if (!select) return;
+  const email = elements.gatheringEmail?.value.trim() || "";
+  const options = Array.from(select.options).filter(option => option.value);
+  if (!email) {
+    options.forEach(option => { option.hidden = false; option.disabled = false; });
+    return;
+  }
+  const result = await requestReviewApi("/api/intake/priority-video-sets", { reviewerEmail: email });
+  if (email !== (elements.gatheringEmail?.value.trim() || "")) return;
+  const completed = new Set((result.sets || []).filter(set => set.completed).map(set => set.id));
+  options.forEach(option => {
+    option.hidden = completed.has(option.value);
+    option.disabled = completed.has(option.value);
+  });
+  if (completed.has(select.value)) select.value = "";
 }
 
 function getCurrentGatheringVideoPlaylistItem() {
@@ -1613,30 +1657,49 @@ async function loadGatheringVideoPlaylist({ auto = false } = {}) {
     if (!auto) {
       setStatus("Loading video playlist...");
     }
+    const reviewerEmail = elements.gatheringEmail?.value.trim() || "";
     const result = await requestReviewApi("/api/intake/video-playlist", {
       formUrl,
       prioritySetId,
-      reviewerEmail: elements.gatheringEmail?.value.trim() || ""
+      reviewerEmail
     });
-    const items = Array.isArray(result.items)
+    if (reviewerEmail !== (elements.gatheringEmail?.value.trim() || "")) {
+      throw new Error("Reviewer email changed; load the playlist again.");
+    }
+    const allItems = Array.isArray(result.items)
       ? result.items.map(item => normalizeVideoPlaylistItem(item, result.eventName)).filter(item => item.author || item.poemTitle)
       : [];
-    if (!items.length) {
+    if (!allItems.length) {
       throw new Error("No playlist items were found in that form.");
     }
+    const items = prioritySetId && reviewerEmail
+      ? allItems.filter(item => !item.review?.rating)
+      : allItems;
     currentGatheringVideoPlaylist = {
       formUrl,
       prioritySetId: cleanSheetWhitespace(result.prioritySetId || prioritySetId),
       eventName: cleanSheetWhitespace(result.eventName),
       formTitle: cleanSheetWhitespace(result.formTitle),
       items,
-      index: Math.max(0, items.findIndex(item => !item.review?.rating))
+      totalCount: allItems.length,
+      reviewedCount: allItems.length - items.length,
+      index: 0,
+      completed: Boolean(prioritySetId && reviewerEmail && !items.length)
     };
-    applyGatheringVideoPlaylistItem(items[currentGatheringVideoPlaylist.index]);
+    if (currentGatheringVideoPlaylist.completed) {
+      clearGatheringVideoPlaylistItemFields();
+    } else {
+      applyGatheringVideoPlaylistItem(items[0]);
+    }
     if (getSelectedGatheringMode() !== "video") {
       setGatheringMode("video");
+    } else if (currentGatheringVideoPlaylist.completed) {
+      refreshPriorityVideoSetVisibility().catch(() => {});
     }
-    setStatus(`Loaded ${items.length} playlist items from "${currentGatheringVideoPlaylist.eventName || currentGatheringVideoPlaylist.formTitle || "the curation form"}".`);
+    updateGatheringVideoPlaylistUi();
+    setStatus(currentGatheringVideoPlaylist.completed
+      ? `All videos in "${currentGatheringVideoPlaylist.eventName || currentGatheringVideoPlaylist.formTitle}" are reviewed for this email.`
+      : `Loaded ${items.length} remaining playlist items from "${currentGatheringVideoPlaylist.eventName || currentGatheringVideoPlaylist.formTitle || "the curation form"}".`);
   } catch (error) {
     currentGatheringVideoPlaylist = null;
     updateGatheringVideoPlaylistUi();
@@ -1721,6 +1784,7 @@ function setGatheringMode(mode) {
   if (!elements.gatheringMode) return;
   elements.gatheringMode.value = mode;
   updateGatheringModeUi();
+  if (mode === "video") refreshPriorityVideoSetVisibility().catch(() => {});
 }
 
 function setActiveModule(moduleName) {
@@ -2091,12 +2155,26 @@ function resetGatheringAfterSubmit(mode) {
     if (elements.gatheringVideoScore) elements.gatheringVideoScore.value = "";
     if (elements.gatheringVideoScoreNotes) elements.gatheringVideoScoreNotes.value = "";
     if (currentGatheringVideoPlaylist?.items?.length) {
-      if (currentGatheringVideoPlaylist.index < currentGatheringVideoPlaylist.items.length - 1) {
-        currentGatheringVideoPlaylist.index += 1;
+      const playlist = currentGatheringVideoPlaylist;
+      const currentItem = playlist.items[playlist.index];
+      const previousIndex = playlist.index;
+      if (playlist.prioritySetId && currentItem?.review?.rating) {
+        playlist.items.splice(playlist.index, 1);
+        playlist.reviewedCount += 1;
+        playlist.index = Math.min(playlist.index, Math.max(0, playlist.items.length - 1));
+      } else if (playlist.index < playlist.items.length - 1) {
+        playlist.index += 1;
+      }
+      if (playlist.items.length && (playlist.prioritySetId || playlist.index !== previousIndex)) {
         applyGatheringVideoPlaylistItem(
           currentGatheringVideoPlaylist.items[currentGatheringVideoPlaylist.index],
           { preserveQuote: false }
         );
+      } else if (!playlist.items.length) {
+        playlist.completed = Boolean(playlist.prioritySetId);
+        clearGatheringVideoPlaylistItemFields();
+        updateGatheringVideoPlaylistUi();
+        refreshPriorityVideoSetVisibility().catch(() => {});
       } else {
         updateGatheringVideoPlaylistUi();
       }
@@ -6625,7 +6703,19 @@ elements.gatheringEmail?.addEventListener("input", () => {
     setActiveModule("gathering");
   }
 });
-elements.gatheringMode?.addEventListener("change", updateGatheringModeUi);
+elements.gatheringEmail?.addEventListener("change", () => {
+  if (currentGatheringVideoPlaylist?.prioritySetId) {
+    currentGatheringVideoPlaylist = null;
+    updateGatheringVideoPlaylistUi();
+  }
+  refreshPriorityVideoSetVisibility().catch(error => {
+    setStatus(`Priority video set status could not be loaded: ${error.message}`);
+  });
+});
+elements.gatheringMode?.addEventListener("change", () => {
+  updateGatheringModeUi();
+  if (getSelectedGatheringMode() === "video") refreshPriorityVideoSetVisibility().catch(() => {});
+});
 elements.gatheringBookBook?.addEventListener("change", () => {
   handleGatheringBookSelectionChange().catch(error => {
     setStatus(`Book metadata load failed: ${error.message}`);
