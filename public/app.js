@@ -10,6 +10,7 @@ const elements = {
   showGraphicsOps: document.getElementById("show-graphics-ops"),
   graphicsModuleTitle: document.getElementById("graphics-module-title"),
   graphicsOpsPanel: document.getElementById("graphics-ops-panel"),
+  videoProgressManagement: document.getElementById("video-progress-management"),
   graphicsBookPicker: document.getElementById("graphics-book-picker"),
   graphicsModeField: document.getElementById("graphics-mode-field"),
   graphicsFilterField: document.getElementById("graphics-filter-field"),
@@ -94,6 +95,9 @@ const elements = {
   videoProgressMetrics: document.getElementById("video-progress-metrics"),
   videoProgressSetRows: document.getElementById("video-progress-set-rows"),
   videoProgressReviewerRows: document.getElementById("video-progress-reviewer-rows"),
+  videoCurationRefresh: document.getElementById("video-curation-refresh"),
+  videoCurationStatus: document.getElementById("video-curation-status"),
+  videoCurationCandidates: document.getElementById("video-curation-candidates"),
   gatheringVideoAuthor: document.getElementById("gathering-video-author"),
   gatheringVideoTitle: document.getElementById("gathering-video-title"),
   gatheringVideoBook: document.getElementById("gathering-video-book"),
@@ -1489,6 +1493,103 @@ async function loadPriorityVideoProgress() {
     if (elements.videoProgressStatus) elements.videoProgressStatus.textContent = `Progress load failed: ${error.message}`;
   } finally {
     if (button) button.disabled = false;
+  }
+}
+
+let videoCurationCandidates = [];
+
+function renderVideoCurationCandidates() {
+  const container = elements.videoCurationCandidates;
+  if (!container) return;
+  container.replaceChildren();
+  if (!videoCurationCandidates.length) {
+    container.textContent = "No ranked candidates yet.";
+    return;
+  }
+  for (const [index, candidate] of videoCurationCandidates.entries()) {
+    const gate = candidate.gate || {};
+    const article = document.createElement("article");
+    article.className = "excerpt-card";
+    article.innerHTML = `
+      <h4>${index + 1}. ${escapeHtml(candidate.sourceFileName || "Untitled video")}</h4>
+      <p>${escapeHtml(candidate.prioritySetLabel || "")} · Score ${Number(candidate.candidateScore || 0).toFixed(2)} · ${Number(candidate.reviewCount || 0)} reviews · ${candidate.excerptRecordIds.length} excerpts</p>
+      <p><a href="https://drive.google.com/file/d/${encodeURIComponent(candidate.sourceFileId)}/view" target="_blank" rel="noopener noreferrer">Open source video</a></p>
+      <label class="field"><span>Decision</span><select data-field="decision">
+        <option value="">Choose</option>
+        <option value="send_to_editing">Send to editing</option>
+        <option value="ready_for_poetry_please">Ready for Poetry Please</option>
+        <option value="hold">Hold</option>
+        <option value="reject">Reject</option>
+      </select></label>
+      <label class="field"><span>Final publishable video URL</span><input data-field="publishableAssetUrl" type="url" value="${escapeAttribute(gate.publishableAssetUrl || "")}"></label>
+      <label class="field"><span>Editing instructions</span><textarea data-field="editingInstructions">${escapeHtml(gate.editingInstructions || "")}</textarea></label>
+      <label class="field"><span>Decision note</span><textarea data-field="note">${escapeHtml(gate.note || "")}</textarea></label>
+      <fieldset><legend>Excerpts for Weaver review</legend>${candidate.excerptRecordIds.map(id => `
+        <label><input type="checkbox" data-excerpt-id="${escapeAttribute(id)}" ${gate.selectedExcerptRecordIds?.includes(id) ? "checked" : ""}> ${escapeHtml(id)}</label>
+      `).join("") || "None"}</fieldset>
+      <p>${escapeHtml(gate.poetryPleaseHandoff?.status || gate.handoffStatus || "")}</p>
+      <button type="button" class="button button--secondary" data-action="save">Save Decision</button>
+      ${gate.decision === "ready_for_poetry_please" ? '<button type="button" class="button" data-action="handoff">Send to Poetry Please</button>' : ""}
+    `;
+    article.querySelector('[data-field="decision"]').value = gate.decision || "";
+    article.querySelector('[data-action="save"]').addEventListener("click", () => saveVideoCurationDecision(candidate, article));
+    article.querySelector('[data-action="handoff"]')?.addEventListener("click", () => sendVideoCurationHandoff(candidate));
+    container.append(article);
+  }
+}
+
+async function loadVideoCurationCandidates() {
+  if (elements.videoCurationStatus) elements.videoCurationStatus.textContent = "Loading...";
+  try {
+    const response = await adminFetch("/api/admin/video-curation-candidates", { cache: "no-store" });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || !result.ok) throw new Error(result.error || `Request failed (${response.status}).`);
+    videoCurationCandidates = result.candidates || [];
+    renderVideoCurationCandidates();
+    if (elements.videoCurationStatus) elements.videoCurationStatus.textContent = `${videoCurationCandidates.length} ranked videos`;
+  } catch (error) {
+    if (elements.videoCurationStatus) elements.videoCurationStatus.textContent = error.message;
+  }
+}
+
+async function saveVideoCurationDecision(candidate, article) {
+  const selectedExcerptRecordIds = [...article.querySelectorAll("[data-excerpt-id]:checked")]
+    .map(input => input.dataset.excerptId);
+  const field = name => article.querySelector(`[data-field="${name}"]`)?.value || "";
+  const payload = {
+    prioritySetId: candidate.prioritySetId,
+    sourceFileId: candidate.sourceFileId,
+    decision: field("decision"),
+    publishableAssetUrl: field("publishableAssetUrl"),
+    editingInstructions: field("editingInstructions"),
+    note: field("note"),
+    selectedExcerptRecordIds
+  };
+  try {
+    const response = await adminFetch("/api/admin/video-curation-gates", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload)
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || !result.ok) throw new Error(result.error || `Save failed (${response.status}).`);
+    setStatus("Video decision saved.");
+    await loadVideoCurationCandidates();
+  } catch (error) {
+    setStatus(`Video decision failed: ${error.message}`);
+  }
+}
+
+async function sendVideoCurationHandoff(candidate) {
+  try {
+    const response = await adminFetch("/api/admin/video-curation-gates/handoff", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prioritySetId: candidate.prioritySetId, sourceFileId: candidate.sourceFileId })
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || !result.ok) throw new Error(result.error || `Handoff failed (${response.status}).`);
+    setStatus(`Video sent to Poetry Please: ${result.canonicalVideoId}`);
+    await loadVideoCurationCandidates();
+  } catch (error) {
+    setStatus(`Video handoff failed: ${error.message}`);
   }
 }
 
@@ -3299,6 +3400,7 @@ function updateGraphicsModuleTitle() {
     ? "Under the Hood"
     : "Graphics QC";
   setElementForcedHidden(elements.graphicsOpsPanel, !isOpsHandoff);
+  setElementForcedHidden(elements.videoProgressManagement, !isOpsView);
   setElementForcedHidden(elements.graphicsModeField, !isOpsView);
   setElementForcedHidden(elements.graphicsFilterField, isOpsView);
   setElementForcedHidden(elements.graphicsReleaseCatalogField, isOpsView);
@@ -6535,6 +6637,7 @@ elements.gatheringVideoQuote?.addEventListener("input", updateGatheringQuoteMeta
 elements.gatheringVideoQuote2?.addEventListener("input", updateGatheringQuoteMeta);
 elements.gatheringVideoQuote3?.addEventListener("input", updateGatheringQuoteMeta);
 elements.gatheringVideoLoadProgress?.addEventListener("click", loadPriorityVideoProgress);
+elements.videoCurationRefresh?.addEventListener("click", loadVideoCurationCandidates);
 elements.gatheringVideoLoadPlaylist?.addEventListener("click", () => loadGatheringVideoPlaylist());
 elements.gatheringVideoPrioritySet?.addEventListener("change", () => {
   if (elements.gatheringVideoPrioritySet?.value && elements.gatheringVideoPlaylistUrl) {

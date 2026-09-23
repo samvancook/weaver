@@ -10,6 +10,7 @@
 !public/**
 
 !server.mjs
+!video_curation_handoff.mjs
 !catalog_validate.py
 !catalog_poem_text.py
 !excerpt_library.py

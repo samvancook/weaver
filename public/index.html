@@ -181,59 +181,6 @@
               <textarea id="gathering-video-quote-3" rows="4" placeholder="Optional third excerpt"></textarea>
             </label>
             <p class="gathering-quote-meta field--full" id="gathering-video-quote-meta-3">Word count: 0. Rough sweet spot: 10–25 words.</p>
-            <details class="video-progress-management field--full">
-              <summary>Progress management</summary>
-              <section class="video-progress-dashboard" aria-labelledby="video-progress-title">
-                <div class="video-progress-dashboard__header">
-                  <div>
-                    <h3 id="video-progress-title">Priority Video Progress</h3>
-                    <p class="hint" id="video-progress-status">Load progress to see every priority set and participating reviewer.</p>
-                  </div>
-                  <button id="gathering-video-load-progress" class="button button--secondary" type="button">Refresh Progress</button>
-                </div>
-                <div class="video-progress-metrics" id="video-progress-metrics" aria-live="polite">
-                  <span class="badge badge--muted">5 Sets</span>
-                  <span class="badge badge--muted">Load current totals</span>
-                </div>
-                <div class="video-progress-table-wrap">
-                  <table class="video-progress-table">
-                    <thead>
-                      <tr>
-                        <th scope="col">Priority set</th>
-                        <th scope="col">Reviewer coverage</th>
-                        <th scope="col">Videos touched</th>
-                        <th scope="col">Excerpts</th>
-                        <th scope="col">Reviewers complete</th>
-                        <th scope="col">Last activity</th>
-                      </tr>
-                    </thead>
-                    <tbody id="video-progress-set-rows">
-                      <tr><td colspan="6" class="video-progress-empty">Progress has not been loaded.</td></tr>
-                    </tbody>
-                  </table>
-                </div>
-                <details class="video-progress-reviewers">
-                  <summary>Reviewer progress</summary>
-                  <div class="video-progress-table-wrap">
-                    <table class="video-progress-table">
-                      <thead>
-                        <tr>
-                          <th scope="col">Reviewer</th>
-                          <th scope="col">Priority set</th>
-                          <th scope="col">Progress</th>
-                          <th scope="col">Remaining</th>
-                          <th scope="col">Excerpts</th>
-                          <th scope="col">Status</th>
-                        </tr>
-                      </thead>
-                      <tbody id="video-progress-reviewer-rows">
-                        <tr><td colspan="6" class="video-progress-empty">Progress has not been loaded.</td></tr>
-                      </tbody>
-                    </table>
-                  </div>
-                </details>
-              </section>
-            </details>
           </div>
 
           <div class="gathering-fields gathering-fields--fix" id="gathering-fix-fields" hidden>
@@ -511,6 +458,69 @@
             <p class="empty-state">Load the EXC handoff summary to monitor queued, failed, and sent excerpt exports.</p>
           </div>
         </div>
+        <details class="video-progress-management" id="video-progress-management" hidden>
+          <summary>Video curation progress and scoreboard</summary>
+          <section class="video-progress-dashboard" aria-labelledby="video-progress-title">
+            <div class="video-progress-dashboard__header">
+              <div>
+                <h3 id="video-progress-title">Priority Video Progress</h3>
+                <p class="hint" id="video-progress-status">Load progress to see every priority set and participating reviewer.</p>
+              </div>
+              <button id="gathering-video-load-progress" class="button button--secondary" type="button">Refresh Progress</button>
+            </div>
+            <div class="video-progress-metrics" id="video-progress-metrics" aria-live="polite">
+              <span class="badge badge--muted">5 Sets</span>
+              <span class="badge badge--muted">Load current totals</span>
+            </div>
+            <div class="video-progress-table-wrap">
+              <table class="video-progress-table">
+                <thead>
+                  <tr>
+                    <th scope="col">Priority set</th>
+                    <th scope="col">Reviewer coverage</th>
+                    <th scope="col">Videos touched</th>
+                    <th scope="col">Excerpts</th>
+                    <th scope="col">Reviewers complete</th>
+                    <th scope="col">Last activity</th>
+                  </tr>
+                </thead>
+                <tbody id="video-progress-set-rows">
+                  <tr><td colspan="6" class="video-progress-empty">Progress has not been loaded.</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <details class="video-progress-reviewers">
+              <summary>Reviewer progress</summary>
+              <div class="video-progress-table-wrap">
+                <table class="video-progress-table">
+                  <thead>
+                    <tr>
+                      <th scope="col">Reviewer</th>
+                      <th scope="col">Priority set</th>
+                      <th scope="col">Progress</th>
+                      <th scope="col">Remaining</th>
+                      <th scope="col">Excerpts</th>
+                      <th scope="col">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody id="video-progress-reviewer-rows">
+                    <tr><td colspan="6" class="video-progress-empty">Progress has not been loaded.</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </details>
+          </section>
+          <section class="video-progress-dashboard" aria-labelledby="video-curation-title">
+            <div class="video-progress-dashboard__header">
+              <div>
+                <h3 id="video-curation-title">Video Publication Gate</h3>
+                <p class="hint" id="video-curation-status">Load candidates to review ranked videos.</p>
+              </div>
+              <button id="video-curation-refresh" class="button button--secondary" type="button">Refresh Candidates</button>
+            </div>
+            <div id="video-curation-candidates" aria-live="polite"></div>
+          </section>
+        </details>
         <details class="folder-import-panel" id="graphics-folder-import-panel">
           <summary class="folder-import-panel__summary">Import Made Graphics From Drive</summary>
           <div class="folder-import-panel__header">
@@ -555,6 +565,6 @@
     </main>
   </div>
 
-  <script src="/app.js?v=20260914b"></script>
+  <script src="/app.js?v=20260923a"></script>
 </body>
 </html>
