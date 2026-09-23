@@ -138,5 +138,6 @@ test("video import is not marked sent when Poetry Please drops review or excerpt
     { reviewCount: 1, excerptCount: 1 }
   );
   assert.equal(result.ok, false);
+  assert.equal(result.status, "failed");
   assert.match(result.error, /did not confirm receipt/);
 });

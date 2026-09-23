@@ -130,7 +130,7 @@ export function parsePoetryPleaseVideoImport(response, body, sourceRecordId, api
     && reviewsReceived && excerptsReceived;
   return {
     ok,
-    status: ok ? "sent_to_poetry_please" : (status || "failed"),
+    status: ok ? "sent_to_poetry_please" : (["created", "updated", "duplicate"].includes(status) ? "failed" : (status || "failed")),
     canonicalVideoId,
     canonicalVideoUrl: canonicalVideoUrl ? new URL(canonicalVideoUrl, apiUrl).toString() : "",
     finalAssetUrl: clean(item.finalAssetUrl),
