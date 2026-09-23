@@ -35,15 +35,14 @@ test("video import is a single root record with stable source identity", () => {
   assert.equal(buildWeaverVideoImport({ ...candidate, prioritySetId: "lane-b" }, gate).sourceRecordId, record.sourceRecordId);
 });
 
-test("video import carries individual reviews and selected excerpt text", () => {
+test("video import carries individual reviews and excerpt IDs, not unapproved quote text", () => {
   const ratings = [{
     reviewId: "review-1", reviewerEmail: "reviewer@example.com", rating: "moved_me",
     notes: "Strong ending", excerptRecordIds: ["exc-1"], updatedAt: "2026-08-12T12:00:00Z"
   }];
-  const excerpts = [{ sourceRecordId: "exc-1", excerptText: "A line worth keeping" }];
-  const record = buildWeaverVideoImport({ ...candidate, ratings }, gate, excerpts);
+  const record = buildWeaverVideoImport({ ...candidate, ratings }, gate);
   assert.deepEqual(record.reviews, ratings);
-  assert.deepEqual(record.excerpts, excerpts);
+  assert.equal(record.excerpts, undefined);
   assert.deepEqual(record.selectedExcerptRecordIds, ["exc-1"]);
 });
 
@@ -115,19 +114,19 @@ test("Poetry Please canonical response is stored from its documented fields", ()
       canonicalVideoId: "WEAVER-VV-ABC",
       canonicalVideoUrl: "/app?item=WEAVER-VV-ABC&type=VV",
       receivedReviewCount: 1,
-      receivedExcerptCount: 1,
+      receivedSelectedExcerptIdCount: 1,
       finalAssetUrl: "https://poetryplease.org/video.mp4"
     }] },
     "weaver:video:source-123",
     "https://poetryplease.org/api",
-    { reviewCount: 1, excerptCount: 1 }
+    { reviewCount: 1, selectedExcerptIdCount: 1 }
   );
   assert.equal(result.ok, true);
   assert.equal(result.canonicalVideoId, "WEAVER-VV-ABC");
   assert.equal(result.canonicalVideoUrl, "https://poetryplease.org/app?item=WEAVER-VV-ABC&type=VV");
 });
 
-test("video import is not marked sent when Poetry Please drops review or excerpt records", () => {
+test("video import is not marked sent when Poetry Please drops reviews or excerpt links", () => {
   const result = parsePoetryPleaseVideoImport(
     { ok: true, status: 200 },
     { ok: true, results: [{
@@ -135,7 +134,7 @@ test("video import is not marked sent when Poetry Please drops review or excerpt
       canonicalVideoId: "WEAVER-VV-ABC", canonicalVideoUrl: "/app?item=WEAVER-VV-ABC&type=VV"
     }] },
     "weaver:video:source-123", "https://poetryplease.org/api",
-    { reviewCount: 1, excerptCount: 1 }
+    { reviewCount: 1, selectedExcerptIdCount: 1 }
   );
   assert.equal(result.ok, false);
   assert.equal(result.status, "failed");

@@ -47,7 +47,7 @@ export function reconcileVideoReviews(files, records) {
   return [...byReviewerAndFile.values()];
 }
 
-export function buildWeaverVideoImport(candidate, gate, excerpts = []) {
+export function buildWeaverVideoImport(candidate, gate) {
   if (clean(gate?.decision) !== "ready_for_poetry_please") {
     throw new Error("Only a ready-for-Poetry Please video can be handed off.");
   }
@@ -104,7 +104,6 @@ export function buildWeaverVideoImport(candidate, gate, excerpts = []) {
     publicationRestricted: false,
     selectedExcerptRecordIds: Array.isArray(gate.selectedExcerptRecordIds) ? gate.selectedExcerptRecordIds : [],
     reviews: Array.isArray(candidate.ratings) ? candidate.ratings : [],
-    excerpts,
     baseScore: gate.baseScore ?? candidate.baseScore,
     excerptBonus: gate.excerptBonus ?? candidate.excerptBonus,
     candidateScore: gate.candidateScore ?? candidate.candidateScore,
@@ -123,11 +122,11 @@ export function parsePoetryPleaseVideoImport(response, body, sourceRecordId, api
   const canonicalVideoId = clean(item.canonicalVideoId);
   const canonicalVideoUrl = clean(item.canonicalVideoUrl);
   const reviewsReceived = Number(item.receivedReviewCount) === Number(expected.reviewCount || 0);
-  const excerptsReceived = Number(item.receivedExcerptCount) === Number(expected.excerptCount || 0);
+  const excerptLinksReceived = Number(item.receivedSelectedExcerptIdCount) === Number(expected.selectedExcerptIdCount || 0);
   const ok = response.ok && body?.ok === true
     && ["created", "updated", "duplicate"].includes(status)
     && Boolean(canonicalVideoId && canonicalVideoUrl)
-    && reviewsReceived && excerptsReceived;
+    && reviewsReceived && excerptLinksReceived;
   return {
     ok,
     status: ok ? "sent_to_poetry_please" : (["created", "updated", "duplicate"].includes(status) ? "failed" : (status || "failed")),
@@ -135,8 +134,8 @@ export function parsePoetryPleaseVideoImport(response, body, sourceRecordId, api
     canonicalVideoUrl: canonicalVideoUrl ? new URL(canonicalVideoUrl, apiUrl).toString() : "",
     finalAssetUrl: clean(item.finalAssetUrl),
     error: ok ? "" : clean(item.error || body?.error || (
-      !reviewsReceived || !excerptsReceived
-        ? "Poetry Please did not confirm receipt of all reviews and excerpts"
+      !reviewsReceived || !excerptLinksReceived
+        ? "Poetry Please did not confirm receipt of all reviews and excerpt links"
         : `Poetry Please returned ${response.status}`
     ))
   };

@@ -2515,30 +2515,7 @@ async function handoffVideoCurationGate(payload = {}) {
   const candidate = candidates.candidates.find(item => item.prioritySetId === prioritySetId && item.sourceFileId === sourceFileId);
   if (!candidate?.gate) throw new Error("Save the video gate before sending it to Poetry Please.");
   const gate = candidate.gate;
-  const selectedIds = [...new Set((gate.selectedExcerptRecordIds || []).map(cleanSheetWhitespace).filter(Boolean))];
-  const excerptResult = selectedIds.length
-    ? await syncWeaverRuntimeDb("get_excerpt_records", { recordIds: selectedIds })
-    : { records: [] };
-  const excerptsById = new Map((excerptResult.records || []).map(excerpt => [
-    cleanSheetWhitespace(excerpt.sourceRecordId), excerpt
-  ]));
-  const missingIds = selectedIds.filter(id => !cleanSheetWhitespace(excerptsById.get(id)?.excerptText));
-  if (missingIds.length) throw new Error(`Selected excerpts are missing text: ${missingIds.join(", ")}`);
-  const excerpts = selectedIds.map(id => {
-    const excerpt = excerptsById.get(id);
-    return {
-      sourceRecordId: id,
-      excerptText: excerpt.excerptText,
-      author: cleanSheetWhitespace(excerpt.author),
-      poemTitle: cleanSheetWhitespace(excerpt.poemTitle),
-      bookTitle: cleanSheetWhitespace(excerpt.bookTitle),
-      sourceEvent: cleanSheetWhitespace(excerpt.sourceEvent),
-      reviewDecision: cleanSheetWhitespace(excerpt.reviewDecision),
-      submittedBy: cleanSheetWhitespace(excerpt.submittedBy),
-      sourceVideoFileId: cleanSheetWhitespace(excerpt.sourceVideoFileId)
-    };
-  });
-  const record = buildWeaverVideoImport(candidate, gate, excerpts);
+  const record = buildWeaverVideoImport(candidate, gate);
   const persist = async update => syncWeaverRuntimeDb("upsert_video_curation_gate", {
     gate: { ...candidate, ...gate, poetryPleaseHandoff: update }
   });
@@ -2553,7 +2530,7 @@ async function handoffVideoCurationGate(payload = {}) {
     const body = await response.json().catch(() => ({}));
     const result = parsePoetryPleaseVideoImport(response, body, record.sourceRecordId, poetryPleaseApiUrl, {
       reviewCount: record.reviews.length,
-      excerptCount: record.excerpts.length
+      selectedExcerptIdCount: record.selectedExcerptRecordIds.length
     });
     const saved = await persist({ ...result, sourceRecordId: record.sourceRecordId, updatedAt: new Date().toISOString() });
     return { ...result, gate: saved.record, poetryPlease: body };
@@ -3209,6 +3186,7 @@ function buildApprovedExcerptExportRecordFromSheetRow(row, index, canonicalBookA
     sourceEvent,
     sourceEventLabel: sourceEvent,
     sourceVideoUrl: isVideoIntake ? (noteMeta.sourceVideoUrl || null) : null,
+    sourceVideoFileId: isVideoIntake ? extractGoogleDriveFileId(noteMeta.sourceVideoUrl) : null,
     curationRating,
     curationLegacyScore,
     curationNotes,
@@ -4822,6 +4800,10 @@ function buildPoetryPleaseExcerptRecord(record) {
     };
   }
 
+  const sourceVideoUrl = cleanSheetWhitespace(record.sourceVideoUrl || handoffPayload.sourceVideoUrl);
+  const sourceVideoFileId = cleanSheetWhitespace(record.sourceVideoFileId || handoffPayload.sourceVideoFileId)
+    || extractGoogleDriveFileId(sourceVideoUrl);
+
   return {
     contentType,
     recordId,
@@ -4845,6 +4827,9 @@ function buildPoetryPleaseExcerptRecord(record) {
     pageNumber: String(record.pageNumber || ""),
     sourceEvent: cleanSheetWhitespace(record.sourceEvent || handoffPayload.sourceEvent) || null,
     sourceEventLabel: cleanSheetWhitespace(record.sourceEventLabel || record.sourceEvent || handoffPayload.sourceEvent) || null,
+    sourceVideoUrl: sourceVideoUrl || null,
+    sourceVideoFileId: sourceVideoFileId || null,
+    sourceVideoRecordId: sourceVideoFileId ? `weaver:video:${sourceVideoFileId}` : null,
     curationRating: normalizeCurationRating(record.curationRating || handoffPayload.curationRating) || null,
     curationLegacyScore: normalizeOptionalCurationScore(record.curationLegacyScore ?? handoffPayload.curationLegacyScore),
     curationNotes: String(record.curationNotes || handoffPayload.curationNotes || "") || null,
@@ -6699,6 +6684,8 @@ function buildAcceptedExcerptHandoff(update) {
       reviewDecision: normalizeDecision(update?.reviewDecision || update?.approval) || "accept",
       sourceEvent: cleanSheetWhitespace(update?.sourceEvent),
       sourceVideoUrl: cleanSheetWhitespace(update?.sourceVideoUrl),
+      sourceVideoFileId: cleanSheetWhitespace(update?.sourceVideoFileId)
+        || extractGoogleDriveFileId(update?.sourceVideoUrl),
       curationRating: normalizeCurationRating(update?.curationRating),
       curationLegacyScore: normalizeOptionalCurationScore(update?.curationLegacyScore),
       curationNotes: String(update?.curationNotes || "")
@@ -6755,6 +6742,8 @@ function buildExcerptHandoffFromApprovedExportRecord(record) {
       reviewDecision: "accept",
       sourceEvent: cleanSheetWhitespace(record?.sourceEvent),
       sourceVideoUrl: cleanSheetWhitespace(record?.sourceVideoUrl),
+      sourceVideoFileId: cleanSheetWhitespace(record?.sourceVideoFileId)
+        || extractGoogleDriveFileId(record?.sourceVideoUrl),
       curationRating: normalizeCurationRating(record?.curationRating || record?.curation?.rating),
       curationLegacyScore: normalizeOptionalCurationScore(record?.curationLegacyScore ?? record?.curation?.legacyScore),
       curationNotes: String(record?.curationNotes || record?.curation?.notes || "")
