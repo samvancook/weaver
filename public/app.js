@@ -118,6 +118,7 @@ const elements = {
   gatheringVideoNextItem: document.getElementById("gathering-video-next-item"),
   gatheringVideoOpenItem: document.getElementById("gathering-video-open-item"),
   gatheringVideoPlaylistStatus: document.getElementById("gathering-video-playlist-status"),
+  gatheringVideoExcerptGuidance: document.getElementById("gathering-video-excerpt-guidance"),
   gatheringVideoReleaseWarning: document.getElementById("gathering-video-release-warning"),
   gatheringFixFields: document.getElementById("gathering-fix-fields"),
   gatheringBatchFields: document.getElementById("gathering-batch-fields"),
@@ -1336,6 +1337,14 @@ function updateGatheringVideoPlaylistUi() {
   if (elements.gatheringVideoSaveRating) {
     elements.gatheringVideoSaveRating.disabled = !hasPlaylist || !playlist?.prioritySetId;
   }
+  if (elements.gatheringVideoExcerptGuidance) {
+    const count = Math.max(0, Number(currentItem?.weaverExcerptCount) || 0);
+    const remaining = Math.max(0, 3 - count);
+    elements.gatheringVideoExcerptGuidance.hidden = !currentItem || !playlist?.prioritySetId;
+    elements.gatheringVideoExcerptGuidance.textContent = remaining
+      ? `${count} Weaver excerpt${count === 1 ? "" : "s"} recorded. Excerpt needed: add ${remaining} more strong passage${remaining === 1 ? "" : "s"}.`
+      : `${count} Weaver excerpts recorded. Further excerpts are optional.`;
+  }
   if (hasPlaylist) {
     const reviewedCount = playlist.items.filter(item => item.review?.rating).length;
     const label = `${playlist.eventName || "Playlist"}: item ${playlist.index + 1} of ${playlist.items.length} · ${reviewedCount} reviewed${currentItem?.author ? ` · ${currentItem.author}` : ""}${currentItem?.poemTitle ? ` · ${currentItem.poemTitle}` : ""}`;
@@ -1394,6 +1403,7 @@ function normalizeVideoPlaylistItem(rawItem, eventName) {
     sourceFolderId: cleanSheetWhitespace(rawItem?.sourceFolderId),
     sourceFileId: cleanSheetWhitespace(rawItem?.sourceFileId),
     sourceFileName: cleanSheetWhitespace(rawItem?.sourceFileName),
+    weaverExcerptCount: Math.max(0, Number(rawItem?.weaverExcerptCount) || 0),
     videoReleaseStatus: cleanSheetWhitespace(rawItem?.videoReleaseStatus),
     publicationRestricted: Boolean(rawItem?.publicationRestricted),
     review: rawItem?.review && typeof rawItem.review === "object" ? rawItem.review : null
@@ -2636,7 +2646,16 @@ async function submitGathering() {
         results.push(await postReviewApi("/api/intake/submit", { ...videoPayload, quote }));
       }
       if (payload.prioritySetId) {
-        await persistGatheringVideoReview({ excerptRecordId: results[0]?.recordId || "" });
+        const item = getCurrentGatheringVideoPlaylistItem();
+        const knownIds = new Set(item?.review?.excerptRecordIds || []);
+        const addedIds = new Set();
+        for (const result of results) {
+          const recordId = result?.recordId || "";
+          if (!recordId) continue;
+          await persistGatheringVideoReview({ excerptRecordId: recordId });
+          if (!knownIds.has(recordId)) addedIds.add(recordId);
+        }
+        if (item) item.weaverExcerptCount += addedIds.size;
       }
       resetGatheringAfterSubmit("video");
       setGatheringEmailWarning("");
