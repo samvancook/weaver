@@ -6568,9 +6568,12 @@ function buildReviewWriteRanges(update) {
   const correctedTitle = String(update.correctedTitle || "").trim();
   const correctedBookTitle = String(update.correctedBookTitle || "").trim();
   const correctedExcerpt = String(update.correctedExcerpt || "");
-  const correctionNote = needsCorrection ? String(update.correctionNote || "").trim() : "";
   const hasDuplicateGroupId = Object.prototype.hasOwnProperty.call(update || {}, "duplicateGroupId");
   const duplicateGroupId = hasDuplicateGroupId ? String(update.duplicateGroupId || "").trim() : "";
+  const correctionNote = needsCorrection || duplicateGroupId.startsWith("queue-exact:")
+    ? String(update.correctionNote || "").trim()
+    : "";
+  const hasExcluded = Object.prototype.hasOwnProperty.call(update || {}, "excluded");
 
   const writes = [
     { column: SHEET_SOURCE_CONFIG.columnMap.approved, value: useForQi ? "Y" : "N" },
@@ -6588,6 +6591,12 @@ function buildReviewWriteRanges(update) {
     writes.push({
       column: SHEET_SOURCE_CONFIG.columnMap.duplicateGroupId,
       value: duplicateGroupId
+    });
+  }
+  if (hasExcluded) {
+    writes.push({
+      column: SHEET_SOURCE_CONFIG.columnMap.exclude,
+      value: isTruthyParam(update.excluded) ? "Y" : ""
     });
   }
 

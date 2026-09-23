@@ -3193,7 +3193,7 @@ function getEffectiveReviewDecision(excerpt) {
 }
 
 function buildBatchReviewSavePayload(update) {
-  return {
+  const payload = {
     sourceRow: update.sourceRow,
     recordId: update.recordId,
     author: update.author,
@@ -3213,6 +3213,10 @@ function buildBatchReviewSavePayload(update) {
     useForInt: Boolean(update.useForInt),
     duplicateGroupId: update.duplicateGroupId || ""
   };
+  if (Object.prototype.hasOwnProperty.call(update, "excluded")) {
+    payload.excluded = Boolean(update.excluded);
+  }
+  return payload;
 }
 
 async function requestBatchSave(updates) {
@@ -5344,6 +5348,7 @@ function buildExcerptCard(excerpt, uniqueKey) {
     </div>
     ${validationMarkup}
     ${queueDuplicateBadge ? `<p class="hint">This card represents ${escapeHtml(String(excerpt.queueDuplicateRows.length + 1))} exact queue duplicates. Accepting it will keep row ${escapeHtml(String(excerpt.sourceRow))} and auto-reject the duplicate row${excerpt.queueDuplicateRows.length === 1 ? "" : "s"} with an explicit Weaver duplicate note.</p>` : ""}
+    ${queueDuplicateBadge ? `<button type="button" class="button button--secondary exclude-exact-duplicates">Exclude ${escapeHtml(String(excerpt.queueDuplicateRows.length))} exact duplicate${excerpt.queueDuplicateRows.length === 1 ? "" : "s"}</button>` : ""}
     <blockquote class="excerpt-card__quote">${escapeHtml(excerpt.excerptText)}</blockquote>
     <p class="hint excerpt-card__hint">Accept sends this to the quote-image queue. Accept excerpt, skip graphic approves the excerpt for Poetry Please without sending it to P.I.G.</p>
     <div class="decision-group">
@@ -5399,6 +5404,35 @@ function buildExcerptCard(excerpt, uniqueKey) {
         block.classList.toggle("correction-block--active", isCorrection);
       }
     });
+  });
+
+  card.querySelector(".exclude-exact-duplicates")?.addEventListener("click", async () => {
+    const duplicates = Array.isArray(excerpt.queueDuplicateRows) ? excerpt.queueDuplicateRows : [];
+    if (!duplicates.length) return;
+    const button = card.querySelector(".exclude-exact-duplicates");
+    button.disabled = true;
+    try {
+      const updates = duplicates.map(duplicate => ({
+        sourceRow: Number(duplicate.sourceRow),
+        recordId: duplicate.recordId || "",
+        reviewDecision: "reject",
+        correctionNote: duplicate.note || `Excluded by Weaver as exact queue duplicate of row ${excerpt.sourceRow}.`,
+        duplicateGroupId: `queue-exact:${excerpt.sourceRow}`,
+        useForQi: false,
+        useForInt: false,
+        excluded: true
+      }));
+      const result = await requestBatchSave(updates);
+      const excludedRows = new Set(updates.map(update => update.sourceRow));
+      currentPendingRecords = currentPendingRecords.filter(item => !excludedRows.has(Number(item.sourceRow)));
+      currentExcerpts = currentExcerpts.filter(item => !excludedRows.has(Number(item.sourceRow)));
+      applyPendingBookData(currentPendingRecords, { preserveSelection: true });
+      renderCurrentExcerpts();
+      setStatus(`Excluded ${result.savedCount || updates.length} exact duplicate row${updates.length === 1 ? "" : "s"}.`);
+    } catch (error) {
+      button.disabled = false;
+      setStatus(`Exact duplicate exclusion failed: ${error.message}`);
+    }
   });
 
   if (wordCount === 0) {
