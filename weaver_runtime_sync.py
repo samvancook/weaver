@@ -653,9 +653,19 @@ def upsert_curation_review(connection, payload: dict[str, Any]) -> dict[str, Any
     source_file_id = normalize_text(source.get("sourceFileId"))
     reviewer_email = normalize_text(source.get("reviewerEmail") or source.get("email")).lower()
     rating = normalize_text(source.get("rating")).lower()
+    legacy_import = bool(source.get("legacyImport"))
+    raw_legacy_score = source.get("legacyScore")
+    legacy_score = None
+    if raw_legacy_score not in (None, ""):
+        try:
+            legacy_score = float(raw_legacy_score)
+        except (TypeError, ValueError) as error:
+            raise ValueError("legacyScore must be numeric") from error
+        if not 0 <= legacy_score <= 10:
+            raise ValueError("legacyScore must be between 0 and 10")
     if not priority_set_id or not source_file_id or not reviewer_email:
         raise ValueError("prioritySetId, sourceFileId, and reviewerEmail are required")
-    if rating not in {"dislike", "meh", "like", "moved_me"}:
+    if not legacy_import and rating not in {"dislike", "meh", "like", "moved_me"}:
         raise ValueError("rating must be dislike, meh, like, or moved_me")
     review_id = hashlib.sha256(
         f"{priority_set_id}|{source_file_id}|{reviewer_email}".encode("utf-8")
@@ -669,6 +679,22 @@ def upsert_curation_review(connection, payload: dict[str, Any]) -> dict[str, Any
     }
     if normalize_text(source.get("excerptRecordId")):
         excerpt_record_ids.add(normalize_text(source.get("excerptRecordId")))
+    legacy_rating = ""
+    if legacy_score is not None:
+        if legacy_score < 3.75:
+            legacy_rating = "dislike"
+        elif legacy_score < 6.25:
+            legacy_rating = "meh"
+        elif legacy_score < 8.75:
+            legacy_rating = "like"
+        else:
+            legacy_rating = "moved_me"
+    existing_rating = normalize_text(existing.get("rating")).lower()
+    preserve_current_rating = (
+        legacy_import
+        and existing_rating in {"dislike", "meh", "like", "moved_me"}
+        and normalize_text(existing.get("ratingSource")) != "legacy_import"
+    )
     record = {
         **existing,
         "reviewId": review_id,
@@ -682,16 +708,30 @@ def upsert_curation_review(connection, payload: dict[str, Any]) -> dict[str, Any
         "poemTitle": normalize_text(source.get("poemTitle")),
         "bookTitle": normalize_text(source.get("bookTitle")),
         "reviewerEmail": reviewer_email,
-        "rating": rating,
-        "notes": str(source.get("notes") or ""),
+        "rating": existing_rating if preserve_current_rating else (legacy_rating if legacy_import else rating),
+        "ratingSource": normalize_text(existing.get("ratingSource")) if preserve_current_rating else ("legacy_import" if legacy_import else "current"),
+        "notes": str(existing.get("notes") or "") if preserve_current_rating else (str(source.get("legacyNotes") or "") if legacy_import else str(source.get("notes") or "")),
         "excerptRecordIds": sorted(excerpt_record_ids),
         "status": "reviewed",
         "createdAt": normalize_text(existing.get("createdAt")) or now,
         "updatedAt": now,
     }
+    if legacy_score is not None:
+        record.update({
+            "legacyScore": legacy_score,
+            "legacyRating": legacy_rating,
+            "legacyNotes": str(source.get("legacyNotes") or ""),
+            "legacyReviewedAt": normalize_text(source.get("legacyReviewedAt")),
+            "legacySourceSpreadsheetId": normalize_text(source.get("legacySourceSpreadsheetId")),
+            "legacySource": normalize_text(source.get("legacySource")) or "numeric_curation_form",
+        })
     return {
         "ok": True,
-        "record": connection.write_raw_document(FIRESTORE_CURATION_REVIEWS_COLLECTION, review_id, record),
+        "record": connection.write_raw_document(
+            FIRESTORE_CURATION_REVIEWS_COLLECTION,
+            review_id,
+            record,
+        ),
     }
 
 
