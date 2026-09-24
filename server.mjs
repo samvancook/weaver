@@ -2445,7 +2445,8 @@ async function getVideoCurationCandidates() {
       const existingGate = gatesByCandidateId.get(candidateId) || null;
       if (!reviews.length && !existingGate) return null;
       const scoreValues = reviews.map(review => {
-        const legacyScore = Number(review.legacyScore);
+        const rawLegacyScore = cleanSheetWhitespace(review.legacyScore);
+        const legacyScore = rawLegacyScore === "" ? NaN : Number(rawLegacyScore);
         if (cleanSheetWhitespace(review.ratingSource) === "legacy_import" && Number.isFinite(legacyScore)) {
           return legacyScore;
         }

@@ -1592,7 +1592,7 @@ function renderVideoCurationCandidates() {
       <p>${escapeHtml(candidate.prioritySetLabel || "")} · Average ${Number(candidate.baseScore || 0).toFixed(2)} + excerpt bonus ${Number(candidate.excerptBonus || 0).toFixed(2)}${candidate.isEligible ? "" : " · Below candidate threshold"}</p>
       <p><a href="https://drive.google.com/file/d/${encodeURIComponent(candidate.sourceFileId)}/view" target="_blank" rel="noopener noreferrer">Open source video</a></p>
       <h5>Reviews</h5>
-      <ul>${(candidate.ratings || []).map(rating => `<li>${escapeHtml(rating.reviewerEmail || "Reviewer")}: ${escapeHtml(rating.rating || "Unrated")}${rating.ratingSource === "legacy_import" && rating.legacyScore !== null ? ` (${Number(rating.legacyScore).toFixed(1)}/10)` : ""}${rating.notes ? ` · ${escapeHtml(rating.notes)}` : ""}</li>`).join("") || "<li>No reviews</li>"}</ul>
+      <ul>${(candidate.ratings || []).map(rating => `<li>${escapeHtml(rating.reviewerEmail || "Reviewer")}: ${escapeHtml(rating.rating || "Unrated")}${rating.ratingSource === "legacy_import" && rating.legacyScore !== null && rating.legacyScore !== "" && Number.isFinite(Number(rating.legacyScore)) ? ` (${Number(rating.legacyScore).toFixed(1)}/10)` : ""}${rating.notes ? ` · ${escapeHtml(rating.notes)}` : ""}</li>`).join("") || "<li>No reviews</li>"}</ul>
       ${candidate.isEligible || candidate.gate ? `
       <label class="field"><span>Decision</span><select data-field="decision">
         <option value="">Choose</option>

@@ -37,3 +37,8 @@ test("scoreboard keeps reviewed videos below threshold and links every excerpt",
   assert.match(app, /candidate\.ratings/);
   assert.match(app, /candidate\.baseScore/);
 });
+
+test("empty imported numeric scores are not displayed or averaged as zero", () => {
+  assert.match(server, /rawLegacyScore === "" \? NaN : Number\(rawLegacyScore\)/);
+  assert.match(app, /rating\.legacyScore !== "" && Number\.isFinite\(Number\(rating\.legacyScore\)\)/);
+});
