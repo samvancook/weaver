@@ -1585,12 +1585,15 @@ function renderVideoCurationCandidates() {
     candidates.sort((a, b) => Number(b.candidateScore || 0) - Number(a.candidateScore || 0) || (a.sourceFileName || "").localeCompare(b.sourceFileName || ""));
     for (const [index, candidate] of candidates.entries()) {
       const gate = candidate.gate || {};
-      const article = document.createElement("article");
+      const article = document.createElement("details");
       article.className = "excerpt-card";
       article.innerHTML = `
-      <h4>${index + 1}. ${escapeHtml(candidate.sourceFileName || "Untitled video")}</h4>
-      <p>${escapeHtml(candidate.prioritySetLabel || "")} · Score ${Number(candidate.candidateScore || 0).toFixed(2)} · ${Number(candidate.reviewCount || 0)} reviews · ${candidate.excerptRecordIds.length} excerpts</p>
+      <summary><strong>${index + 1}. ${escapeHtml(candidate.sourceFileName || "Untitled video")}</strong> · Score ${Number(candidate.candidateScore || 0).toFixed(2)} · ${Number(candidate.reviewCount || 0)} reviews · ${candidate.excerptRecordIds.length} excerpts</summary>
+      <p>${escapeHtml(candidate.prioritySetLabel || "")} · Average ${Number(candidate.baseScore || 0).toFixed(2)} + excerpt bonus ${Number(candidate.excerptBonus || 0).toFixed(2)}${candidate.isEligible ? "" : " · Below candidate threshold"}</p>
       <p><a href="https://drive.google.com/file/d/${encodeURIComponent(candidate.sourceFileId)}/view" target="_blank" rel="noopener noreferrer">Open source video</a></p>
+      <h5>Reviews</h5>
+      <ul>${(candidate.ratings || []).map(rating => `<li>${escapeHtml(rating.reviewerEmail || "Reviewer")}: ${escapeHtml(rating.rating || "Unrated")}${rating.ratingSource === "legacy_import" && rating.legacyScore !== null ? ` (${Number(rating.legacyScore).toFixed(1)}/10)` : ""}${rating.notes ? ` · ${escapeHtml(rating.notes)}` : ""}</li>`).join("") || "<li>No reviews</li>"}</ul>
+      ${candidate.isEligible || candidate.gate ? `
       <label class="field"><span>Decision</span><select data-field="decision">
         <option value="">Choose</option>
         <option value="send_to_editing">Send to editing</option>
@@ -1601,15 +1604,13 @@ function renderVideoCurationCandidates() {
       <label class="field"><span>Final publishable video URL</span><input data-field="publishableAssetUrl" type="url" value="${escapeAttribute(gate.publishableAssetUrl || "")}"></label>
       <label class="field"><span>Editing instructions</span><textarea data-field="editingInstructions">${escapeHtml(gate.editingInstructions || "")}</textarea></label>
       <label class="field"><span>Decision note</span><textarea data-field="note">${escapeHtml(gate.note || "")}</textarea></label>
-      <fieldset><legend>Excerpts for Weaver review</legend>${candidate.excerptRecordIds.map(id => `
-        <label><input type="checkbox" data-excerpt-id="${escapeAttribute(id)}" ${gate.selectedExcerptRecordIds?.includes(id) ? "checked" : ""}> ${escapeHtml(id)}</label>
-      `).join("") || "None"}</fieldset>
       <p>${escapeHtml(gate.poetryPleaseHandoff?.status || gate.handoffStatus || "")}</p>
       <button type="button" class="button button--secondary" data-action="save">Save Decision</button>
       ${gate.decision === "ready_for_poetry_please" ? '<button type="button" class="button" data-action="handoff">Send to Poetry Please</button>' : ""}
+      ` : ""}
       `;
-      article.querySelector('[data-field="decision"]').value = gate.decision || "";
-      article.querySelector('[data-action="save"]').addEventListener("click", () => saveVideoCurationDecision(candidate, article));
+      if (article.querySelector('[data-field="decision"]')) article.querySelector('[data-field="decision"]').value = gate.decision || "";
+      article.querySelector('[data-action="save"]')?.addEventListener("click", () => saveVideoCurationDecision(candidate, article));
       article.querySelector('[data-action="handoff"]')?.addEventListener("click", () => sendVideoCurationHandoff(candidate));
       container.append(article);
     }
@@ -1630,8 +1631,6 @@ async function loadVideoCurationCandidates() {
 }
 
 async function saveVideoCurationDecision(candidate, article) {
-  const selectedExcerptRecordIds = [...article.querySelectorAll("[data-excerpt-id]:checked")]
-    .map(input => input.dataset.excerptId);
   const field = name => article.querySelector(`[data-field="${name}"]`)?.value || "";
   const payload = {
     prioritySetId: candidate.prioritySetId,
@@ -1639,8 +1638,7 @@ async function saveVideoCurationDecision(candidate, article) {
     decision: field("decision"),
     publishableAssetUrl: field("publishableAssetUrl"),
     editingInstructions: field("editingInstructions"),
-    note: field("note"),
-    selectedExcerptRecordIds
+    note: field("note")
   };
   try {
     const response = await adminFetch("/api/admin/video-curation-gates", {

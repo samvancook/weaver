@@ -2513,13 +2513,14 @@ async function getVideoCurationCandidates() {
         })),
         gate: existingGate
       };
-      return candidate.isEligible || existingGate ? candidate : null;
+      return candidate;
     }).filter(Boolean);
   }));
+  const rankedCandidates = candidatesBySet.flat();
   return {
     ok: true,
     threshold: VIDEO_CURATION_CANDIDATE_THRESHOLD,
-    candidates: candidatesBySet.flat().sort((left, right) => (
+    candidates: rankedCandidates.sort((left, right) => (
       right.candidateScore - left.candidateScore
         || left.prioritySetLabel.localeCompare(right.prioritySetLabel)
         || left.sourceFileName.localeCompare(right.sourceFileName)
@@ -2534,19 +2535,17 @@ async function saveVideoCurationGate(payload = {}, decidedBy = "") {
   const candidate = candidatesResult.candidates.find(record => (
     record.prioritySetId === prioritySetId && record.sourceFileId === sourceFileId
   ));
-  if (!candidate) throw new Error("Video is not an eligible curation candidate.");
+  if (!candidate || (!candidate.isEligible && !candidate.gate)) {
+    throw new Error("Video is not an eligible curation candidate.");
+  }
   if (candidate.publicationRestricted && payload.decision === "ready_for_poetry_please") {
     throw new Error("A publication-restricted source cannot be prepared for Poetry Please.");
   }
-  const allowedExcerptIds = new Set(candidate.excerptRecordIds);
-  const selectedExcerptRecordIds = (Array.isArray(payload.selectedExcerptRecordIds) ? payload.selectedExcerptRecordIds : [])
-    .map(cleanSheetWhitespace)
-    .filter(recordId => allowedExcerptIds.has(recordId));
   return await syncWeaverRuntimeDb("upsert_video_curation_gate", {
     gate: {
       ...candidate,
       decision: cleanSheetWhitespace(payload.decision),
-      selectedExcerptRecordIds,
+      selectedExcerptRecordIds: candidate.excerptRecordIds,
       editingInstructions: String(payload.editingInstructions || ""),
       publishableAssetUrl: cleanSheetWhitespace(payload.publishableAssetUrl),
       note: String(payload.note || ""),
@@ -2562,7 +2561,7 @@ async function handoffVideoCurationGate(payload = {}) {
   const candidates = await getVideoCurationCandidates();
   const candidate = candidates.candidates.find(item => item.prioritySetId === prioritySetId && item.sourceFileId === sourceFileId);
   if (!candidate?.gate) throw new Error("Save the video gate before sending it to Poetry Please.");
-  const gate = candidate.gate;
+  const gate = { ...candidate.gate, selectedExcerptRecordIds: candidate.excerptRecordIds };
   const record = buildWeaverVideoImport(candidate, gate);
   const persist = async update => syncWeaverRuntimeDb("upsert_video_curation_gate", {
     gate: { ...candidate, ...gate, poetryPleaseHandoff: update }

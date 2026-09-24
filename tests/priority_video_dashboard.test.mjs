@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 
 const html = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
 const app = readFileSync(new URL("../public/app.js", import.meta.url), "utf8");
+const server = readFileSync(new URL("../server.mjs", import.meta.url), "utf8");
 
 test("priority video progress and scoreboard remain visible from the gear", () => {
   assert.match(html, /<details[^>]*id="video-progress-management"[^>]*\bopen\b/);
@@ -25,4 +26,14 @@ test("video scoreboard offers an event filter and ranks within event groups", ()
   assert.match(app, /videoCurationEvent\?\.addEventListener\("change", renderVideoCurationCandidates\)/);
   assert.match(app, /const groups = new Map\(\)/);
   assert.match(app, /candidates\.sort\(\(a, b\) => Number\(b\.candidateScore/);
+});
+
+test("scoreboard keeps reviewed videos below threshold and links every excerpt", () => {
+  assert.match(server, /if \(!reviews\.length && !existingGate\) return null/);
+  assert.match(server, /return candidate;\s*\}\)\.filter\(Boolean\)/);
+  assert.match(server, /selectedExcerptRecordIds: candidate\.excerptRecordIds/);
+  assert.match(server, /const gate = \{ \.\.\.candidate\.gate, selectedExcerptRecordIds: candidate\.excerptRecordIds \}/);
+  assert.doesNotMatch(app, /data-excerpt-id/);
+  assert.match(app, /candidate\.ratings/);
+  assert.match(app, /candidate\.baseScore/);
 });

@@ -15,7 +15,14 @@ export function resolveCurrentVideoFileId(record, files) {
   const sourceFileName = clean(record?.sourceFileName);
   if (!sourceFileName) return "";
   const matches = files.filter(file => clean(file.name) === sourceFileName);
-  return matches.length === 1 ? clean(matches[0].id) : "";
+  if (matches.length === 1) return clean(matches[0].id);
+  if (matches.length > 1 || !/\(Cam Audio\)/i.test(sourceFileName)) return "";
+  const withoutCamAudio = name => clean(name).replace(/\s*\(Cam Audio\)/ig, "");
+  const movedLabelMatches = files.filter(file => (
+    /\(Cam Audio\)/i.test(clean(file.name))
+    && withoutCamAudio(file.name) === withoutCamAudio(sourceFileName)
+  ));
+  return movedLabelMatches.length === 1 ? clean(movedLabelMatches[0].id) : "";
 }
 
 export function reconcileVideoReviews(files, records) {

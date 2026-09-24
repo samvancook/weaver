@@ -73,6 +73,14 @@ test("replaced Drive files recover reviews only through a unique exact filename"
   }, [...files, { id: "duplicate", name: files[0].name }]), "");
 });
 
+test("Charm City Cam Audio label relocation preserves the reviewed video's identity", () => {
+  const old = "[Vertical Version] George Abraham (Cam Audio) - Ode to Mennel Ibtissam Singing Hallelujah on The Voice (France) Translated in Arabic.mov";
+  const current = "[Vertical Version] George Abraham - Ode to Mennel Ibtissam Singing Hallelujah on The Voice (France) Translated in Arabic (Cam Audio).mov";
+  const files = [{ id: "1mF3LqQ8UNJOxmpse757wxvdBfuH7MF7Q", name: current }];
+  assert.equal(resolveCurrentVideoFileId({ sourceFileId: "1YO78dpn_UobqRF9I9GCnVBAoCm5VtSZB", sourceFileName: old }, files), files[0].id);
+  assert.equal(resolveCurrentVideoFileId({ sourceFileId: "old", sourceFileName: old }, [...files, { id: "duplicate", name: current }]), "");
+});
+
 test("a replaced review source stays the stable handoff identity", () => {
   const record = buildWeaverVideoImport({
     ...candidate,
