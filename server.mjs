@@ -66,7 +66,7 @@ const weaverPublicBaseUrl =
   "https://weaver.buttonpoetry.com";
 const fallbackReviewQueueIncludeTitles = [
   "A Choir of Honest Killers",
-  "all the ugly bits",
+  "unreliable narrator",
   "Coin Laundry at Midnight",
   "DON’T BE AFRAID TO BE BAD: A Big Book of Button Poetry Writing Prompts",
   "Flee",
