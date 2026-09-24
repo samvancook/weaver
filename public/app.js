@@ -188,6 +188,7 @@ let googleSheetsAccessToken = "";
 let googleAdminTokenClient = null;
 let googleAdminAccessToken = "";
 let reviewVisibleCount = 1;
+let reviewShowAdditionalPulls = false;
 let reviewPinnedRowOrder = [];
 let weirdVisibleCount = 25;
 let weirdPinnedRowOrder = [];
@@ -4096,6 +4097,7 @@ async function loadExcerpts() {
     setStatus(`Loading excerpts for "${bookTitle}"...`);
     currentExcerpts = getPendingRecordsForBookKey(bookKey);
     reviewVisibleCount = getReviewBatchSize();
+    reviewShowAdditionalPulls = false;
     reviewPinnedRowOrder = [];
     await loadCatalogValidation(currentExcerpts);
     renderCurrentExcerpts();
@@ -4249,18 +4251,48 @@ async function loadCatalogValidation(excerpts) {
 }
 
 function renderExcerpts(excerpts) {
-  const totalMatching = excerpts.length;
-  const visibleExcerpts = orderReviewExcerptsForRender(excerpts).slice(0, reviewVisibleCount);
+  const orderedExcerpts = orderReviewExcerptsForRender(excerpts);
+  const { candidates, additionalPulls } = splitReviewCandidatesByPoem(orderedExcerpts);
+  const reviewPool = reviewShowAdditionalPulls ? orderedExcerpts : candidates;
+  const totalMatching = reviewPool.length;
+  const visibleExcerpts = reviewPool.slice(0, reviewVisibleCount);
   renderExcerptCollection(visibleExcerpts, elements.excerptList, elements.excerptCountBadge, getEmptyStateMessage(), {
     totalMatching,
     visibleCount: visibleExcerpts.length,
     batchSize: getReviewBatchSize(),
+    additionalPullCount: additionalPulls.length,
+    showingAdditionalPulls: reviewShowAdditionalPulls,
+    onToggleAdditionalPulls: () => {
+      reviewShowAdditionalPulls = !reviewShowAdditionalPulls;
+      reviewVisibleCount = reviewShowAdditionalPulls ? Number.MAX_SAFE_INTEGER : getReviewBatchSize();
+      renderCurrentExcerpts();
+    },
     canShowMore: totalMatching > visibleExcerpts.length,
     onShowMore: () => {
       reviewVisibleCount += getReviewBatchSize();
       renderCurrentExcerpts();
     }
   });
+}
+
+function splitReviewCandidatesByPoem(excerpts) {
+  const seenByPoem = new Map();
+  const candidates = [];
+  const additionalPulls = [];
+
+  excerpts.forEach(excerpt => {
+    const poemKey = [excerpt.bookTitle, excerpt.author, excerpt.title]
+      .map(value => cleanSheetWhitespace(value || "").toLowerCase())
+      .join("\u0000");
+    const textKey = normalizeExactQueueDuplicateText(excerpt.excerptText || excerpt.rawExcerptText || "");
+    const seenTexts = seenByPoem.get(poemKey) || new Set();
+    const target = seenTexts.has(textKey) || seenTexts.size < 3 ? candidates : additionalPulls;
+    target.push(excerpt);
+    seenTexts.add(textKey);
+    seenByPoem.set(poemKey, seenTexts);
+  });
+
+  return { candidates, additionalPulls };
 }
 
 function renderCorrectionExcerpts(excerpts) {
@@ -4817,6 +4849,21 @@ function renderExcerptCollection(excerpts, container, countBadge, emptyMessage, 
     empty.textContent = emptyMessage;
     container.appendChild(empty);
     return;
+  }
+
+  if (Number(options.additionalPullCount || 0) > 0) {
+    const controls = document.createElement("div");
+    controls.className = "excerpt-batch-controls";
+    controls.innerHTML = `
+      <p class="hint excerpt-batch-controls__hint">${options.showingAdditionalPulls
+        ? "Showing all candidate pulls, including additional pulls from the same poem."
+        : `Showing up to 3 distinct pulls per poem. ${options.additionalPullCount} additional pull${options.additionalPullCount === 1 ? " is" : "s are"} available.`}</p>
+      <button type="button" class="button button--secondary excerpt-batch-controls__button">
+        ${options.showingAdditionalPulls ? "Hide additional pulls" : `Show ${options.additionalPullCount} additional pull${options.additionalPullCount === 1 ? "" : "s"}`}
+      </button>
+    `;
+    controls.querySelector("button")?.addEventListener("click", options.onToggleAdditionalPulls);
+    container.appendChild(controls);
   }
 
   const groups = groupExcerptsByTitle(excerpts);
@@ -6807,6 +6854,7 @@ if (elements.reviewFilter) {
     syncReleaseCatalogFilterUi();
     refreshReviewBookSelect(true);
     reviewVisibleCount = getReviewBatchSize();
+    reviewShowAdditionalPulls = false;
     reviewPinnedRowOrder = [];
     if (getSelectedReviewFilter() === "videos" && elements.bookSelect?.querySelector(`option[value="${REVIEW_VIDEOS_BOOK_KEY}"]`)) {
       elements.bookSelect.value = REVIEW_VIDEOS_BOOK_KEY;
@@ -6820,6 +6868,7 @@ if (elements.reviewReleaseCatalog) {
   elements.reviewReleaseCatalog.addEventListener("change", () => {
     refreshReviewBookSelect(true);
     reviewVisibleCount = getReviewBatchSize();
+    reviewShowAdditionalPulls = false;
     reviewPinnedRowOrder = [];
     renderCurrentExcerpts();
   });
@@ -6827,6 +6876,7 @@ if (elements.reviewReleaseCatalog) {
 if (elements.reviewDisplayMode) {
   elements.reviewDisplayMode.addEventListener("change", () => {
     reviewVisibleCount = getReviewBatchSize();
+    reviewShowAdditionalPulls = false;
     reviewPinnedRowOrder = [];
     renderCurrentExcerpts();
   });
