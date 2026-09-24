@@ -18,3 +18,11 @@ test("priority video progress and scoreboard remain visible from the gear", () =
   assert.match(gearHandler[1], /loadPriorityVideoProgress\(\)/);
   assert.match(gearHandler[1], /loadVideoCurationCandidates\(\)/);
 });
+
+test("video scoreboard offers an event filter and ranks within event groups", () => {
+  assert.match(html, /<select id="video-curation-event">/);
+  assert.match(html, /<option value="">All events<\/option>/);
+  assert.match(app, /videoCurationEvent\?\.addEventListener\("change", renderVideoCurationCandidates\)/);
+  assert.match(app, /const groups = new Map\(\)/);
+  assert.match(app, /candidates\.sort\(\(a, b\) => Number\(b\.candidateScore/);
+});

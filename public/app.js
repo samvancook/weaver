@@ -96,6 +96,7 @@ const elements = {
   videoProgressSetRows: document.getElementById("video-progress-set-rows"),
   videoProgressReviewerRows: document.getElementById("video-progress-reviewer-rows"),
   videoCurationRefresh: document.getElementById("video-curation-refresh"),
+  videoCurationEvent: document.getElementById("video-curation-event"),
   videoCurationStatus: document.getElementById("video-curation-status"),
   videoCurationCandidates: document.getElementById("video-curation-candidates"),
   gatheringVideoAuthor: document.getElementById("gathering-video-author"),
@@ -1557,15 +1558,36 @@ function renderVideoCurationCandidates() {
   const container = elements.videoCurationCandidates;
   if (!container) return;
   container.replaceChildren();
+  const eventFor = candidate => (candidate.sourceEvent || candidate.eventName || candidate.prioritySetLabel || "Unassigned event").trim();
+  const events = [...new Set(videoCurationCandidates.map(eventFor))].sort((a, b) => a.localeCompare(b));
+  const selectedEvent = elements.videoCurationEvent?.value || "";
+  if (elements.videoCurationEvent) {
+    elements.videoCurationEvent.replaceChildren(new Option("All events", ""), ...events.map(event => new Option(event, event)));
+    elements.videoCurationEvent.value = events.includes(selectedEvent) ? selectedEvent : "";
+  }
   if (!videoCurationCandidates.length) {
     container.textContent = "No ranked candidates yet.";
+    if (elements.videoCurationStatus) elements.videoCurationStatus.textContent = "0 ranked videos";
     return;
   }
-  for (const [index, candidate] of videoCurationCandidates.entries()) {
-    const gate = candidate.gate || {};
-    const article = document.createElement("article");
-    article.className = "excerpt-card";
-    article.innerHTML = `
+  const filtered = videoCurationCandidates.filter(candidate => !elements.videoCurationEvent?.value || eventFor(candidate) === elements.videoCurationEvent.value);
+  if (elements.videoCurationStatus) elements.videoCurationStatus.textContent = `${filtered.length} of ${videoCurationCandidates.length} ranked videos · ${events.length} events`;
+  const groups = new Map();
+  for (const candidate of filtered) {
+    const event = eventFor(candidate);
+    if (!groups.has(event)) groups.set(event, []);
+    groups.get(event).push(candidate);
+  }
+  for (const [event, candidates] of [...groups].sort(([a], [b]) => a.localeCompare(b))) {
+    const heading = document.createElement("h4");
+    heading.textContent = `${event} · ${candidates.length} videos`;
+    container.append(heading);
+    candidates.sort((a, b) => Number(b.candidateScore || 0) - Number(a.candidateScore || 0) || (a.sourceFileName || "").localeCompare(b.sourceFileName || ""));
+    for (const [index, candidate] of candidates.entries()) {
+      const gate = candidate.gate || {};
+      const article = document.createElement("article");
+      article.className = "excerpt-card";
+      article.innerHTML = `
       <h4>${index + 1}. ${escapeHtml(candidate.sourceFileName || "Untitled video")}</h4>
       <p>${escapeHtml(candidate.prioritySetLabel || "")} · Score ${Number(candidate.candidateScore || 0).toFixed(2)} · ${Number(candidate.reviewCount || 0)} reviews · ${candidate.excerptRecordIds.length} excerpts</p>
       <p><a href="https://drive.google.com/file/d/${encodeURIComponent(candidate.sourceFileId)}/view" target="_blank" rel="noopener noreferrer">Open source video</a></p>
@@ -1585,11 +1607,12 @@ function renderVideoCurationCandidates() {
       <p>${escapeHtml(gate.poetryPleaseHandoff?.status || gate.handoffStatus || "")}</p>
       <button type="button" class="button button--secondary" data-action="save">Save Decision</button>
       ${gate.decision === "ready_for_poetry_please" ? '<button type="button" class="button" data-action="handoff">Send to Poetry Please</button>' : ""}
-    `;
-    article.querySelector('[data-field="decision"]').value = gate.decision || "";
-    article.querySelector('[data-action="save"]').addEventListener("click", () => saveVideoCurationDecision(candidate, article));
-    article.querySelector('[data-action="handoff"]')?.addEventListener("click", () => sendVideoCurationHandoff(candidate));
-    container.append(article);
+      `;
+      article.querySelector('[data-field="decision"]').value = gate.decision || "";
+      article.querySelector('[data-action="save"]').addEventListener("click", () => saveVideoCurationDecision(candidate, article));
+      article.querySelector('[data-action="handoff"]')?.addEventListener("click", () => sendVideoCurationHandoff(candidate));
+      container.append(article);
+    }
   }
 }
 
@@ -1601,7 +1624,6 @@ async function loadVideoCurationCandidates() {
     if (!response.ok || !result.ok) throw new Error(result.error || `Request failed (${response.status}).`);
     videoCurationCandidates = result.candidates || [];
     renderVideoCurationCandidates();
-    if (elements.videoCurationStatus) elements.videoCurationStatus.textContent = `${videoCurationCandidates.length} ranked videos`;
   } catch (error) {
     if (elements.videoCurationStatus) elements.videoCurationStatus.textContent = error.message;
   }
@@ -6841,6 +6863,7 @@ elements.gatheringVideoQuote2?.addEventListener("input", updateGatheringQuoteMet
 elements.gatheringVideoQuote3?.addEventListener("input", updateGatheringQuoteMeta);
 elements.gatheringVideoLoadProgress?.addEventListener("click", loadPriorityVideoProgress);
 elements.videoCurationRefresh?.addEventListener("click", loadVideoCurationCandidates);
+elements.videoCurationEvent?.addEventListener("change", renderVideoCurationCandidates);
 elements.gatheringVideoLoadPlaylist?.addEventListener("click", () => loadGatheringVideoPlaylist());
 elements.gatheringVideoPrioritySet?.addEventListener("change", () => {
   if (elements.gatheringVideoPrioritySet?.value && elements.gatheringVideoPlaylistUrl) {
