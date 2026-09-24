@@ -4251,12 +4251,13 @@ async function loadCatalogValidation(excerpts) {
 }
 
 function renderExcerpts(excerpts) {
-  const orderedExcerpts = orderReviewExcerptsForRender(excerpts);
+  const orderedExcerpts = collapseExactQueueDuplicates(orderReviewExcerptsForRender(excerpts), { includeTitle: true });
   const { candidates, additionalPulls } = splitReviewCandidatesByPoem(orderedExcerpts);
   const reviewPool = reviewShowAdditionalPulls ? orderedExcerpts : candidates;
   const totalMatching = reviewPool.length;
   const visibleExcerpts = reviewPool.slice(0, reviewVisibleCount);
   renderExcerptCollection(visibleExcerpts, elements.excerptList, elements.excerptCountBadge, getEmptyStateMessage(), {
+    duplicatesCollapsed: true,
     totalMatching,
     visibleCount: visibleExcerpts.length,
     batchSize: getReviewBatchSize(),
@@ -4880,7 +4881,8 @@ function renderExcerptCollection(excerpts, container, countBadge, emptyMessage, 
     `;
     section.appendChild(header);
 
-    collapseExactQueueDuplicates(group.excerpts).forEach((excerpt, index) => {
+    const cards = options.duplicatesCollapsed ? group.excerpts : collapseExactQueueDuplicates(group.excerpts);
+    cards.forEach((excerpt, index) => {
       section.appendChild(buildExcerptCard(excerpt, `${slugify(group.title)}-${index}`));
     });
 
@@ -5285,16 +5287,24 @@ function normalizeExactQueueDuplicateText(text) {
   return (text || "").toString().replace(/\r\n/g, "\n").trim();
 }
 
-function collapseExactQueueDuplicates(excerpts) {
+function collapseExactQueueDuplicates(excerpts, { includeTitle = false } = {}) {
   const byText = new Map();
   const collapsed = [];
 
   excerpts.forEach(excerpt => {
-    const key = normalizeExactQueueDuplicateText(excerpt.excerptText || excerpt.rawExcerptText || "");
-    if (!key) {
+    delete excerpt.queueDuplicateRows;
+  });
+
+  excerpts.forEach(excerpt => {
+    const textKey = normalizeExactQueueDuplicateText(excerpt.excerptText || excerpt.rawExcerptText || "");
+    if (!textKey) {
       collapsed.push(excerpt);
       return;
     }
+    const titleKey = includeTitle
+      ? (excerpt.title || "Untitled poem").trim().toLowerCase().replace(/\s+/g, " ").trim()
+      : "";
+    const key = `${titleKey}\u0000${textKey}`;
     if (!byText.has(key)) {
       byText.set(key, excerpt);
       collapsed.push(excerpt);
