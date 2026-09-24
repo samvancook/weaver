@@ -6753,6 +6753,9 @@ elements.showGraphicsOps?.addEventListener("click", () => {
   syncReleaseCatalogFilterUi();
   loadExcerptHandoffs();
   loadGraphicsBooks({ preserveSelection: false });
+  if (elements.videoProgressManagement) elements.videoProgressManagement.open = true;
+  loadPriorityVideoProgress();
+  loadVideoCurationCandidates();
 });
 elements.loadGraphicsBooks?.addEventListener("click", loadGraphicsBooks);
 elements.loadGraphicsRecords?.addEventListener("click", loadGraphicsRecords);
