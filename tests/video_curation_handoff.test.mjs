@@ -1,6 +1,24 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildWeaverVideoImport, parsePoetryPleaseVideoImport, poetryPleaseVideoIdForSourceFile, reconcileVideoReviews, resolveCurrentVideoFileId } from "../video_curation_handoff.mjs";
+import { buildReviewerProgressExport, buildWeaverVideoImport, parsePoetryPleaseVideoImport, poetryPleaseVideoIdForSourceFile, reconcileVideoReviews, resolveCurrentVideoFileId } from "../video_curation_handoff.mjs";
+
+test("reviewer progress export includes unstarted reviewers and reconciles replacement files", () => {
+  const files = [
+    { id: "new-file", name: "Poem A.mov", webViewLink: "https://drive.google.com/file/d/new-file/view" },
+    { id: "other-file", name: "Poem B.mov" }
+  ];
+  const reviews = [{ prioritySetId: "lane-a", reviewerEmail: "Reviewer@Example.com", sourceFileId: "old-file", sourceFileName: "Poem A.mov", rating: "like", excerptRecordIds: ["exc-1", "exc-1"], updatedAt: "2026-08-12T12:00:00Z" }];
+  const input = [{ set: { id: "lane-a", label: "Lane A" }, files, reviews }];
+  const report = buildReviewerProgressExport("REVIEWER@example.com", input);
+  assert.deepEqual(report.totals, { prioritySets: 1, videos: 2, reviewed: 1, remaining: 1 });
+  assert.deepEqual(report.sets[0].videos.map(video => video.reviewStatus), ["reviewed", "not_reviewed"]);
+  assert.equal(report.sets[0].videos[0].sourceFileId, "new-file");
+  assert.equal(report.sets[0].videos[0].excerptCount, 1);
+  assert.equal(report.sets[0].videos[0].rating, "like");
+  assert.equal(report.sets[0].videos[1].videoUrl, "https://drive.google.com/file/d/other-file/view");
+  assert.equal(report.sets[0].videos[1].rating, null);
+  assert.equal(buildReviewerProgressExport("new@example.com", input).totals.remaining, 2);
+});
 
 const candidate = {
   candidateId: "weaver:video:lane-a:source-123",

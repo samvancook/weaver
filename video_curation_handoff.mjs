@@ -54,6 +54,51 @@ export function reconcileVideoReviews(files, records) {
   return [...byReviewerAndFile.values()];
 }
 
+export function buildReviewerProgressExport(reviewerEmail, setResults) {
+  const email = clean(reviewerEmail).toLowerCase();
+  const sets = setResults.map(({ set, files, reviews }) => {
+    const matchingReviews = reconcileVideoReviews(files, reviews.filter(review => (
+      clean(review.prioritySetId) === set.id && clean(review.reviewerEmail).toLowerCase() === email
+    )));
+    const reviewsByFileId = new Map(matchingReviews.map(review => [clean(review.sourceFileId), review]));
+    const videos = files.map(file => {
+      const fileId = clean(file.id);
+      const review = reviewsByFileId.get(fileId);
+      return {
+        sourceFileId: fileId,
+        sourceFileName: clean(file.name),
+        videoUrl: clean(file.webViewLink) || `https://drive.google.com/file/d/${encodeURIComponent(fileId)}/view`,
+        reviewStatus: clean(review?.rating) ? "reviewed" : "not_reviewed",
+        rating: clean(review?.rating) || null,
+        excerptCount: new Set((review?.excerptRecordIds || []).map(clean).filter(Boolean)).size,
+        reviewedAt: clean(review?.updatedAt) || null
+      };
+    });
+    const reviewedCount = videos.filter(video => video.reviewStatus === "reviewed").length;
+    return {
+      prioritySetId: set.id,
+      label: set.label,
+      eventName: set.eventName || set.label,
+      totalVideos: videos.length,
+      reviewedCount,
+      remainingCount: videos.length - reviewedCount,
+      videos
+    };
+  });
+  return {
+    ok: true,
+    generatedAt: new Date().toISOString(),
+    reviewerEmail: email,
+    totals: {
+      prioritySets: sets.length,
+      videos: sets.reduce((total, set) => total + set.totalVideos, 0),
+      reviewed: sets.reduce((total, set) => total + set.reviewedCount, 0),
+      remaining: sets.reduce((total, set) => total + set.remainingCount, 0)
+    },
+    sets
+  };
+}
+
 export function poetryPleaseVideoIdForSourceFile(sourceFileId, gates = []) {
   const fileId = clean(sourceFileId);
   if (!fileId) return "";

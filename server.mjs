@@ -4,7 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildWeaverVideoImport, parsePoetryPleaseVideoImport, poetryPleaseVideoIdForSourceFile, reconcileVideoReviews, resolveCurrentVideoFileId } from "./video_curation_handoff.mjs";
+import { buildReviewerProgressExport, buildWeaverVideoImport, parsePoetryPleaseVideoImport, poetryPleaseVideoIdForSourceFile, reconcileVideoReviews, resolveCurrentVideoFileId } from "./video_curation_handoff.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -2390,6 +2390,23 @@ async function loadPriorityVideoProgress() {
     },
     sets: progressSets
   };
+}
+
+async function loadPriorityVideoAssignmentExport(reviewerEmail, prioritySetId = "") {
+  const sets = prioritySetId
+    ? [PRIORITY_VIDEO_SETS.get(prioritySetId)].filter(Boolean)
+    : Array.from(PRIORITY_VIDEO_SETS.values());
+  const [reviewResult, setResults] = await Promise.all([
+    syncWeaverRuntimeDb("get_curation_reviews", {}),
+    Promise.all(sets.map(async set => ({
+      set,
+      files: (await listDriveFolderVideoFiles(set.folderId)).filter(file => (
+        !set.excludeNoPoem || !PRIORITY_VIDEO_NO_POEM_PATTERN.test(cleanSheetWhitespace(file.name))
+      ))
+    })))
+  ]);
+  const reviews = Array.isArray(reviewResult?.records) ? reviewResult.records : [];
+  return buildReviewerProgressExport(reviewerEmail, setResults.map(result => ({ ...result, reviews })));
 }
 
 function buildVideoCurationCandidateId(prioritySetId, sourceFileId) {
@@ -7803,6 +7820,23 @@ const server = http.createServer(async (req, res) => {
         ok: false,
         error: error.message
       });
+    }
+  }
+
+  if (url.pathname === "/api/intake/video-progress/export" && req.method === "GET") {
+    try {
+      await verifyAdministrativeCaller(req);
+      const reviewerEmail = cleanSheetWhitespace(url.searchParams.get("reviewerEmail")).toLowerCase();
+      const prioritySetId = cleanSheetWhitespace(url.searchParams.get("prioritySetId"));
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(reviewerEmail)) {
+        return sendJson(res, 400, { ok: false, error: "valid_reviewer_email_required" });
+      }
+      if (prioritySetId && !PRIORITY_VIDEO_SETS.has(prioritySetId)) {
+        return sendJson(res, 400, { ok: false, error: "unknown_priority_set" });
+      }
+      return sendJson(res, 200, await loadPriorityVideoAssignmentExport(reviewerEmail, prioritySetId));
+    } catch (error) {
+      return sendJson(res, Number(error.statusCode || 500), { ok: false, error: error.message });
     }
   }
 
