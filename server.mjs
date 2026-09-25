@@ -2306,9 +2306,8 @@ async function getPriorityVideoSetAvailability(reviewerEmail = "") {
 
 async function loadPriorityVideoProgress() {
   const sets = Array.from(PRIORITY_VIDEO_SETS.values());
-  const [reviewResult, excerptResult, fileResults] = await Promise.all([
+  const [reviewResult, fileResults] = await Promise.all([
     syncWeaverRuntimeDb("get_curation_reviews", {}),
-    syncWeaverRuntimeDb("get_excerpt_records", {}),
     Promise.all(sets.map(async set => ({
       set,
       files: (await listDriveFolderVideoFiles(set.folderId)).filter(file => (
@@ -2317,23 +2316,14 @@ async function loadPriorityVideoProgress() {
     })))
   ]);
   const reviews = Array.isArray(reviewResult?.records) ? reviewResult.records : [];
-  const excerpts = Array.isArray(excerptResult?.records) ? excerptResult.records : [];
 
   const progressSets = fileResults.map(({ set, files }) => {
     const setReviews = reconcileVideoReviews(files, reviews.filter(review => (
       cleanSheetWhitespace(review.prioritySetId) === set.id
     )));
-    const setExcerpts = excerpts.filter(record => {
-      const payload = record?.sourcePayload && typeof record.sourcePayload === "object"
-        ? record.sourcePayload
-        : {};
-      return cleanSheetWhitespace(payload.prioritySetId) === set.id
-        && (!cleanSheetWhitespace(payload.sourceFileId)
-          || resolveCurrentVideoFileId({
-            sourceFileId: payload.sourceFileId,
-            sourceFileName: payload.sourceFileName
-          }, files));
-    });
+    const setExcerptIds = new Set(setReviews.flatMap(review => (
+      Array.isArray(review.excerptRecordIds) ? review.excerptRecordIds : []
+    )).map(cleanSheetWhitespace).filter(Boolean));
     const reviewedFileIds = new Set(setReviews.map(review => cleanSheetWhitespace(review.sourceFileId)).filter(Boolean));
     const reviewerEmails = Array.from(new Set(
       setReviews.map(review => cleanSheetWhitespace(review.reviewerEmail).toLowerCase()).filter(Boolean)
@@ -2350,12 +2340,6 @@ async function loadPriorityVideoProgress() {
           .map(cleanSheetWhitespace)
           .filter(Boolean)
       );
-      const reviewerExcerptCount = setExcerpts.filter(record => {
-        const payload = record?.sourcePayload && typeof record.sourcePayload === "object"
-          ? record.sourcePayload
-          : {};
-        return cleanSheetWhitespace(payload.reviewerEmail || payload.email).toLowerCase() === reviewerEmail;
-      }).length;
       const ratingCounts = reviewerReviews.reduce((counts, review) => {
         const rating = cleanSheetWhitespace(review.rating).toLowerCase();
         if (rating) counts[rating] = (counts[rating] || 0) + 1;
@@ -2369,7 +2353,7 @@ async function loadPriorityVideoProgress() {
         remainingCount,
         totalVideos: files.length,
         progressPercent: files.length ? Math.round((reviewedCount / files.length) * 100) : 0,
-        excerptCount: Math.max(reviewerExcerptIds.size, reviewerExcerptCount),
+        excerptCount: reviewerExcerptIds.size,
         ratingCounts,
         status: remainingCount === 0 ? "complete" : "in_progress",
         lastReviewedAt: reviewerReviews.map(review => cleanSheetWhitespace(review.updatedAt)).sort().at(-1) || ""
@@ -2389,11 +2373,8 @@ async function loadPriorityVideoProgress() {
       completedReviewSlots,
       totalReviewSlots,
       progressPercent: totalReviewSlots ? Math.round((completedReviewSlots / totalReviewSlots) * 100) : 0,
-      excerptCount: setExcerpts.length,
-      lastActivityAt: [
-        ...setReviews.map(review => cleanSheetWhitespace(review.updatedAt)),
-        ...setExcerpts.map(record => cleanSheetWhitespace(record.updatedAt || record.createdAt))
-      ].filter(Boolean).sort().at(-1) || "",
+      excerptCount: setExcerptIds.size,
+      lastActivityAt: setReviews.map(review => cleanSheetWhitespace(review.updatedAt)).filter(Boolean).sort().at(-1) || "",
       reviewers: reviewerRows
     };
   });

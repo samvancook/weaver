@@ -42,3 +42,14 @@ test("empty imported numeric scores are not displayed or averaged as zero", () =
   assert.match(server, /rawLegacyScore === "" \? NaN : Number\(rawLegacyScore\)/);
   assert.match(app, /rating\.legacyScore !== "" && Number\.isFinite\(Number\(rating\.legacyScore\)\)/);
 });
+
+test("parallel admin loads share token acquisition and progress uses linked excerpt IDs", () => {
+  assert.match(app, /if \(googleAdminTokenRequest\) return googleAdminTokenRequest/);
+  assert.match(app, /googleAdminTokenRequest = new Promise/);
+  assert.match(app, /googleAdminTokenRequest = null/);
+  assert.match(app, /Progress request timed out/);
+  const progress = server.match(/async function loadPriorityVideoProgress\(\) \{([\s\S]*?)\n\}\n\nfunction buildVideoCurationCandidateId/);
+  assert.ok(progress);
+  assert.doesNotMatch(progress[1], /get_excerpt_records/);
+  assert.match(progress[1], /const setExcerptIds = new Set/);
+});

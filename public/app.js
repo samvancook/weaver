@@ -188,6 +188,7 @@ let googleSheetsTokenClient = null;
 let googleSheetsAccessToken = "";
 let googleAdminTokenClient = null;
 let googleAdminAccessToken = "";
+let googleAdminTokenRequest = null;
 let reviewVisibleCount = 1;
 let reviewShowAdditionalPulls = false;
 let reviewPinnedRowOrder = [];
@@ -1535,11 +1536,17 @@ async function loadPriorityVideoProgress() {
   const button = elements.gatheringVideoLoadProgress;
   if (button) button.disabled = true;
   if (elements.videoProgressStatus) elements.videoProgressStatus.textContent = "Loading current progress...";
+  let timeoutId;
   try {
-    const response = await adminFetch("/api/intake/video-progress", {
-      headers: { Accept: "application/json" },
-      cache: "no-store"
-    });
+    const response = await Promise.race([
+      adminFetch("/api/intake/video-progress", {
+        headers: { Accept: "application/json" },
+        cache: "no-store"
+      }),
+      new Promise((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error("Progress request timed out. Refresh to retry.")), 30000);
+      })
+    ]);
     const result = await response.json().catch(() => ({}));
     if (!response.ok || !result.ok) {
       throw new Error(result.error || `Progress request failed (${response.status}).`);
@@ -1548,6 +1555,7 @@ async function loadPriorityVideoProgress() {
   } catch (error) {
     if (elements.videoProgressStatus) elements.videoProgressStatus.textContent = `Progress load failed: ${error.message}`;
   } finally {
+    clearTimeout(timeoutId);
     if (button) button.disabled = false;
   }
 }
@@ -2909,8 +2917,11 @@ async function getGoogleAdminAccessToken({ forceAccountSelection = false } = {})
   if (googleAdminAccessToken && !forceAccountSelection) {
     return googleAdminAccessToken;
   }
+  if (googleAdminTokenRequest) return googleAdminTokenRequest;
   const tokenClient = ensureGoogleAdminTokenClient();
-  return await new Promise((resolve, reject) => {
+  let timeoutId;
+  googleAdminTokenRequest = new Promise((resolve, reject) => {
+    timeoutId = setTimeout(() => reject(new Error("Administrator sign-in timed out. Refresh to retry.")), 25000);
     tokenClient.callback = response => {
       if (response?.error) {
         reject(new Error(response.error));
@@ -2927,6 +2938,12 @@ async function getGoogleAdminAccessToken({ forceAccountSelection = false } = {})
       prompt: forceAccountSelection ? "select_account" : ""
     });
   });
+  try {
+    return await googleAdminTokenRequest;
+  } finally {
+    clearTimeout(timeoutId);
+    googleAdminTokenRequest = null;
+  }
 }
 
 async function adminFetch(path, options = {}) {
