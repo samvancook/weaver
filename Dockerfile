@@ -10,6 +10,7 @@ RUN npm install --omit=dev
 
 COPY public ./public
 COPY server.mjs ./server.mjs
+COPY weaver_progress_auth.mjs ./weaver_progress_auth.mjs
 COPY video_curation_handoff.mjs ./video_curation_handoff.mjs
 COPY catalog_validate.py ./catalog_validate.py
 COPY catalog_poem_text.py ./catalog_poem_text.py
