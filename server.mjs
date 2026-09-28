@@ -7814,7 +7814,7 @@ const server = http.createServer(async (req, res) => {
 
   if (url.pathname === "/api/intake/video-progress" && req.method === "GET") {
     try {
-      await verifyAdministrativeCaller(req);
+      await verifyProgressExportCaller(req, verifyAdministrativeCaller);
       return sendJson(res, 200, await loadPriorityVideoProgress());
     } catch (error) {
       return sendJson(res, Number(error.statusCode || 500), {
