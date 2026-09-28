@@ -59,7 +59,6 @@ archive/scripts/data/
 QI_DATABASE_ROADMAP.md
 backfill_source_records_to_weaver.py
 compare_workbook_to_library.py
-export_weaver_excerpt_library.py
 extract_workbook_approved_excerpts.py
 import_old_tool_archive.py
 link_raw_rows_to_excerpt_entries.py
