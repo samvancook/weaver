@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@google/clasp": "^3.3.0"
+    "@google/clasp": "^3.3.0",
+    "google-auth-library": "^9.15.1"
   },
   "scripts": {
     "clasp": "clasp",

@@ -5,6 +5,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildReviewerProgressExport, buildWeaverVideoImport, parsePoetryPleaseVideoImport, poetryPleaseVideoIdForSourceFile, reconcileVideoReviews, resolveCurrentVideoFileId } from "./video_curation_handoff.mjs";
+import { verifyProgressExportCaller } from "./weaver_progress_auth.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -7825,7 +7826,7 @@ const server = http.createServer(async (req, res) => {
 
   if (url.pathname === "/api/intake/video-progress/export" && req.method === "GET") {
     try {
-      await verifyAdministrativeCaller(req);
+      await verifyProgressExportCaller(req, verifyAdministrativeCaller);
       const reviewerEmail = cleanSheetWhitespace(url.searchParams.get("reviewerEmail")).toLowerCase();
       const prioritySetId = cleanSheetWhitespace(url.searchParams.get("prioritySetId"));
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(reviewerEmail)) {
