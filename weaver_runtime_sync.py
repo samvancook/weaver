@@ -63,6 +63,7 @@ FIRESTORE_HANDOFF_ACTIONS = {
     "upsert_curation_review",
     "get_curation_reviews",
     "upsert_video_curation_gate",
+    "claim_video_curation_handoff",
     "get_video_curation_gates",
 }
 
@@ -837,6 +838,29 @@ def upsert_video_curation_gate(connection, payload: dict[str, Any]) -> dict[str,
 def fetch_video_curation_gates(connection, payload: dict[str, Any]) -> dict[str, Any]:
     records = connection.list_raw_documents(FIRESTORE_VIDEO_CURATION_GATES_COLLECTION)
     return {"ok": True, "records": records, "count": len(records)}
+
+
+def claim_video_curation_handoff(connection, payload: dict[str, Any]) -> dict[str, Any]:
+    priority_set_id = normalize_text(payload.get("prioritySetId"))
+    source_file_id = normalize_text(payload.get("sourceFileId"))
+    if not priority_set_id or not source_file_id:
+        raise ValueError("prioritySetId and sourceFileId are required")
+    gate_id = hashlib.sha256(f"{priority_set_id}|{source_file_id}".encode("utf-8")).hexdigest()[:32]
+    existing, update_time = connection.get_raw_document_versioned(FIRESTORE_VIDEO_CURATION_GATES_COLLECTION, gate_id)
+    if not existing or existing.get("decision") != "ready_for_poetry_please":
+        return {"ok": True, "claimed": False, "reason": "gate_not_ready"}
+    if normalize_text((existing.get("poetryPleaseHandoff") or {}).get("status")):
+        return {"ok": True, "claimed": False, "reason": "handoff_already_started", "record": existing}
+    now = utc_now_iso()
+    record = {
+        **existing,
+        "poetryPleaseHandoff": {"status": "sending", "updatedAt": now},
+        "handoffStatus": "sending",
+        "updatedAt": now,
+        "history": (list(existing.get("history") or []) + [{"event": "poetry_please_handoff", "status": "sending", "at": now}])[-20:],
+    }
+    saved = connection.write_raw_document_if_unchanged(FIRESTORE_VIDEO_CURATION_GATES_COLLECTION, gate_id, record, update_time)
+    return {"ok": True, "claimed": bool(saved), "reason": "" if saved else "concurrent_claim", "record": saved}
 
 
 def fetch_graphics_state(connection, payload: dict[str, Any]) -> dict[str, Any]:
@@ -1662,6 +1686,8 @@ def main() -> int:
             result = fetch_curation_reviews(connection, payload)
         elif action == "upsert_video_curation_gate":
             result = upsert_video_curation_gate(connection, payload)
+        elif action == "claim_video_curation_handoff":
+            result = claim_video_curation_handoff(connection, payload)
         elif action == "get_video_curation_gates":
             result = fetch_video_curation_gates(connection, payload)
         else:

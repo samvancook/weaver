@@ -113,9 +113,9 @@
 
           <div class="gathering-fields gathering-fields--video" id="gathering-video-fields" hidden>
             <label class="field field--full">
-              <span>Priority Video Set</span>
+              <span>Video Set</span>
               <select id="gathering-video-priority-set">
-                <option value="">Choose a priority set</option>
+                <option value="">Choose a video set</option>
                 <option value="bpl-charm-city-2026">BPL Charm City 2026</option>
                 <option value="mn-writers-respond-loft">MN Writers Respond @ The Loft</option>
                 <option value="mpmu-2026-finals">MPMU 2026 Finals</option>
@@ -523,6 +523,14 @@
               <span>Event</span>
               <select id="video-curation-event">
                 <option value="">All events</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Handoff</span>
+              <select id="video-curation-handoff-filter">
+                <option value="not_sent">Not sent</option>
+                <option value="sent">Sent to Poetry Please</option>
+                <option value="all">All videos</option>
               </select>
             </label>
             <div id="video-curation-candidates" aria-live="polite"></div>

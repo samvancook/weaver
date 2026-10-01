@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildReviewerProgressExport, buildWeaverVideoImport, parsePoetryPleaseVideoImport, poetryPleaseVideoIdForSourceFile, reconcileVideoReviews, resolveCurrentVideoFileId } from "../video_curation_handoff.mjs";
+import { buildReviewerProgressExport, buildWeaverVideoImport, classifyDriveFolderPath, parsePoetryPleaseVideoImport, poetryPleaseVideoIdForSourceFile, reconcileVideoReviews, resolveCurrentVideoFileId } from "../video_curation_handoff.mjs";
 
 test("reviewer progress export includes unstarted reviewers and reconciles replacement files", () => {
   const files = [
@@ -24,6 +24,7 @@ const candidate = {
   candidateId: "weaver:video:lane-a:source-123",
   prioritySetId: "lane-a",
   sourceFileId: "source-123",
+  sourceMediaType: "FV",
   sourceVideoUrl: "https://drive.google.com/file/d/source-123/view",
   sourceEvent: "BPL Charm City 2026",
   sourceEventLabel: "BPL Charm City 2026",
@@ -39,6 +40,7 @@ const gate = {
   gateId: "gate-123",
   decision: "ready_for_poetry_please",
   publishableAssetUrl: "https://drive.google.com/file/d/final-456/view",
+  publishableAssetMediaType: "FV",
   selectedExcerptRecordIds: ["exc-1"]
 };
 
@@ -65,11 +67,31 @@ test("video import carries individual reviews and excerpt IDs, not unapproved qu
 });
 
 test("video import rejects raw footage and restricted or unready gates", () => {
-  assert.throws(() => buildWeaverVideoImport(candidate, {
+  assert.throws(() => buildWeaverVideoImport({ ...candidate, sourceMediaType: "OM" }, {
     ...gate, publishableAssetUrl: "https://drive.google.com/uc?id=source-123"
   }), /raw Weaver source/);
+  assert.throws(() => buildWeaverVideoImport(candidate, { ...gate, publishableAssetMediaType: "unknown" }), /verified as Finished Video/);
   assert.throws(() => buildWeaverVideoImport({ ...candidate, publicationRestricted: true }, gate), /publication-restricted/);
   assert.throws(() => buildWeaverVideoImport(candidate, { ...gate, decision: "send_to_editing" }), /ready-for-Poetry Please/);
+});
+
+test("FV source may be its own final asset, while folder conflicts stay unknown", () => {
+  const record = buildWeaverVideoImport(candidate, {
+    ...gate, publishableAssetUrl: candidate.sourceVideoUrl
+  });
+  assert.equal(record.finalAssetUrl, candidate.sourceVideoUrl);
+  assert.equal(classifyDriveFolderPath([
+    { id: "child", name: "FV - Vertical Versions - BPL Charm City 2026" },
+    { id: "parent", name: "Vertical Video | 9:16" }
+  ]).sourceMediaType, "FV");
+  assert.equal(classifyDriveFolderPath([
+    { id: "child", name: "Camera Y" },
+    { id: "parent", name: "Button Footage - Original Media (OM)" }
+  ]).sourceMediaType, "OM");
+  assert.equal(classifyDriveFolderPath([
+    { id: "child", name: "OM for completed longform projects" },
+    { id: "parent", name: "FV BTV VJ" }
+  ]).sourceMediaType, "unknown");
 });
 
 test("replaced Drive files recover reviews only through a unique exact filename", () => {

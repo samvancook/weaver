@@ -2,11 +2,27 @@ function clean(value) {
   return String(value ?? "").trim();
 }
 
-function driveFileId(value) {
+export function driveFileId(value) {
   const url = clean(value);
   return url.match(/\/file\/d\/([a-zA-Z0-9_-]+)/)?.[1]
     || url.match(/[?&]id=([a-zA-Z0-9_-]+)/)?.[1]
     || "";
+}
+
+export function classifyDriveFolderPath(folders) {
+  const matches = folders.flatMap(folder => {
+    const name = clean(folder.name);
+    const id = clean(folder.id);
+    return [
+      /(?:^|[\s([/-])(?:FV|Finished Video)(?:$|[\s)\]/:-])/i.test(name) ? { id, type: "FV" } : null,
+      /(?:^|[\s([/-])(?:OM|Original Media)(?:$|[\s)\]/:-])/i.test(name) ? { id, type: "OM" } : null
+    ].filter(Boolean);
+  });
+  const types = new Set(matches.map(folder => folder.type));
+  return {
+    sourceMediaType: types.size === 1 ? [...types][0] : "unknown",
+    sourceMediaTypeFolderId: types.size === 1 ? matches[0].id : ""
+  };
 }
 
 export function resolveCurrentVideoFileId(record, files) {
@@ -115,6 +131,9 @@ export function buildWeaverVideoImport(candidate, gate) {
   if (candidate?.publicationRestricted || gate?.publicationRestricted || clean(candidate?.releaseStatus)) {
     throw new Error("A publication-restricted source cannot be handed off to Poetry Please.");
   }
+  if (clean(gate?.publishableAssetMediaType) !== "FV") {
+    throw new Error("The final asset must be verified as Finished Video (FV) before handoff.");
+  }
   const reviewSourceFileId = clean(candidate?.sourceReviewFileId) || clean(gate?.sourceReviewFileId);
   const sourceFileId = reviewSourceFileId || clean(candidate?.sourceFileId);
   const sourceRecordId = `weaver:video:${sourceFileId}`;
@@ -139,7 +158,8 @@ export function buildWeaverVideoImport(candidate, gate) {
   if (finalUrl.protocol !== "https:") {
     throw new Error("The final publishable asset URL must use HTTPS.");
   }
-  if (finalAssetUrl === sourceVideoUrl || driveFileId(finalAssetUrl) === sourceFileId) {
+  if (clean(candidate?.sourceMediaType) !== "FV"
+    && (finalAssetUrl === sourceVideoUrl || driveFileId(finalAssetUrl) === sourceFileId)) {
     throw new Error("The final publishable asset cannot be the raw Weaver source video.");
   }
 

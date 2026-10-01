@@ -1289,6 +1289,25 @@ class FirestoreLedgerClient:
         document = self.request("GET", self.document_url_for(collection, document_id))
         return self.decode_raw_document(document)
 
+    def get_raw_document_versioned(self, collection: str, document_id: str) -> tuple[dict[str, Any] | None, str]:
+        document = self.request("GET", self.document_url_for(collection, document_id))
+        return self.decode_raw_document(document), str((document or {}).get("updateTime") or "")
+
+    def write_raw_document_if_unchanged(
+        self, collection: str, document_id: str, record: dict[str, Any], update_time: str
+    ) -> dict[str, Any] | None:
+        if not update_time:
+            raise ValueError("A Firestore updateTime is required for a conditional write")
+        body = {"fields": {key: firestore_encode_value(value) for key, value in record.items()}}
+        query = urllib.parse.urlencode({"currentDocument.updateTime": update_time})
+        try:
+            document = self.request("PATCH", f"{self.document_url_for(collection, document_id)}?{query}", body)
+        except RuntimeError as exc:
+            if "HTTP 412" in str(exc):
+                return None
+            raise
+        return self.decode_raw_document(document)
+
     def list_raw_documents(self, collection: str, page_size: int = 500) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
         page_token = ""

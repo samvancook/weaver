@@ -4,7 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildReviewerProgressExport, buildWeaverVideoImport, parsePoetryPleaseVideoImport, poetryPleaseVideoIdForSourceFile, reconcileVideoReviews, resolveCurrentVideoFileId } from "./video_curation_handoff.mjs";
+import { buildReviewerProgressExport, buildWeaverVideoImport, classifyDriveFolderPath, driveFileId, parsePoetryPleaseVideoImport, poetryPleaseVideoIdForSourceFile, reconcileVideoReviews, resolveCurrentVideoFileId } from "./video_curation_handoff.mjs";
 import { verifyProgressExportCaller } from "./weaver_progress_auth.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -2139,6 +2139,39 @@ async function getDriveFileMetadata(fileId) {
   return fetchDriveJson(url);
 }
 
+const videoFolderTypeCache = new Map();
+async function getVideoFolderMediaType(folderId) {
+  const cached = videoFolderTypeCache.get(folderId);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
+  const value = (async () => {
+    try {
+      const folders = [];
+      const visited = new Set();
+      let currentId = folderId;
+      while (currentId && !visited.has(currentId) && folders.length < 20) {
+        visited.add(currentId);
+        const folder = await getDriveFileMetadata(currentId);
+        folders.push(folder);
+        currentId = Array.isArray(folder.parents) ? folder.parents[0] : "";
+      }
+      if (currentId) return { sourceMediaType: "unknown", sourceMediaTypeFolderId: "" };
+      return classifyDriveFolderPath(folders);
+    } catch {
+      return { sourceMediaType: "unknown", sourceMediaTypeFolderId: "" };
+    }
+  })();
+  videoFolderTypeCache.set(folderId, { value, expiresAt: Date.now() + 5 * 60_000 });
+  return value;
+}
+
+async function getVideoAssetMediaType(url) {
+  const fileId = driveFileId(url);
+  if (!fileId) return "unknown";
+  const file = await getDriveFileMetadata(fileId);
+  if (!Array.isArray(file.parents) || file.parents.length !== 1) return "unknown";
+  return (await getVideoFolderMediaType(file.parents[0])).sourceMediaType;
+}
+
 async function listDriveFolderImageFiles(folderId) {
   let pageToken = "";
   const files = [];
@@ -2208,6 +2241,7 @@ function parsePriorityVideoFileName(fileName) {
 async function loadPriorityVideoSet(prioritySetId, reviewerEmail = "") {
   const set = PRIORITY_VIDEO_SETS.get(cleanSheetWhitespace(prioritySetId));
   if (!set) throw new Error("Unknown priority video set.");
+  const sourceMedia = await getVideoFolderMediaType(set.folderId);
   const files = (await listDriveFolderVideoFiles(set.folderId)).filter(file => (
     !set.excludeNoPoem || !PRIORITY_VIDEO_NO_POEM_PATTERN.test(cleanSheetWhitespace(file.name))
   ));
@@ -2250,6 +2284,7 @@ async function loadPriorityVideoSet(prioritySetId, reviewerEmail = "") {
       eventName: set.eventName || set.label,
       prioritySetId: set.id,
       sourceFolderId: set.folderId,
+      ...sourceMedia,
       sourceFileId: cleanSheetWhitespace(file.id),
       sourceFileName: cleanSheetWhitespace(file.name),
       weaverExcerptCount: (excerptIdsByFileId.get(cleanSheetWhitespace(file.id)) || new Set()).size,
@@ -2274,7 +2309,7 @@ async function getPriorityVideoSetAvailability(reviewerEmail = "") {
   const email = cleanSheetWhitespace(reviewerEmail).toLowerCase();
   const sets = Array.from(PRIORITY_VIDEO_SETS.values());
   if (!email) {
-    return { ok: true, sets: sets.map(set => ({ id: set.id, completed: false })) };
+    return { ok: true, sets: sets.map(set => ({ id: set.id, completed: false, lane: "priority_video" })) };
   }
   const [reviewResult, fileResults] = await Promise.all([
     syncWeaverRuntimeDb("get_curation_reviews", {}),
@@ -2287,19 +2322,29 @@ async function getPriorityVideoSetAvailability(reviewerEmail = "") {
       const files = fileResults[index].filter(file => (
         !set.excludeNoPoem || !PRIORITY_VIDEO_NO_POEM_PATTERN.test(cleanSheetWhitespace(file.name))
       ));
-      const reviewedFileIds = new Set(reconcileVideoReviews(
-        files,
-        reviews.filter(record => (
-          cleanSheetWhitespace(record.prioritySetId) === set.id
-          && cleanSheetWhitespace(record.reviewerEmail).toLowerCase() === email
-          && cleanSheetWhitespace(record.rating)
-        ))
-      ).map(record => cleanSheetWhitespace(record.sourceFileId)));
+      const setReviews = reconcileVideoReviews(files, reviews.filter(record => (
+        cleanSheetWhitespace(record.prioritySetId) === set.id && cleanSheetWhitespace(record.rating)
+      )));
+      const reviewedFileIds = new Set(setReviews.filter(record => (
+        cleanSheetWhitespace(record.reviewerEmail).toLowerCase() === email
+      )).map(record => cleanSheetWhitespace(record.sourceFileId)));
+      const readyVideos = files.filter(file => {
+        const fileReviews = setReviews.filter(record => cleanSheetWhitespace(record.sourceFileId) === file.id);
+        const reviewerCount = new Set(fileReviews.map(record => (
+          cleanSheetWhitespace(record.reviewerEmail).toLowerCase()
+        )).filter(Boolean)).size;
+        const excerptCount = new Set(fileReviews.flatMap(record => (
+          Array.isArray(record.excerptRecordIds) ? record.excerptRecordIds : []
+        )).map(cleanSheetWhitespace).filter(Boolean)).size;
+        return reviewerCount >= 5 && excerptCount >= 3;
+      }).length;
       return {
         id: set.id,
         totalCount: files.length,
         reviewedCount: reviewedFileIds.size,
-        completed: files.length > 0 && reviewedFileIds.size === files.length
+        readyVideos,
+        lane: files.length > 0 && readyVideos === files.length ? "video" : "priority_video",
+        completed: Boolean(email) && files.length > 0 && reviewedFileIds.size === files.length
       };
     })
   };
@@ -2414,14 +2459,18 @@ function buildVideoCurationCandidateId(prioritySetId, sourceFileId) {
   return `weaver:video:${prioritySetId}:${sourceFileId}`;
 }
 
-async function getVideoCurationCandidates() {
+async function getVideoCurationCandidates(prioritySetId = "") {
   const gateResult = await syncWeaverRuntimeDb("get_video_curation_gates", {});
   const gatesByCandidateId = new Map(
     (Array.isArray(gateResult?.records) ? gateResult.records : [])
       .map(record => [cleanSheetWhitespace(record.candidateId), record])
       .filter(([candidateId]) => candidateId)
   );
-  const candidatesBySet = await Promise.all(Array.from(PRIORITY_VIDEO_SETS.values()).map(async set => {
+  const sets = prioritySetId
+    ? [PRIORITY_VIDEO_SETS.get(prioritySetId)].filter(Boolean)
+    : Array.from(PRIORITY_VIDEO_SETS.values());
+  const candidatesBySet = await Promise.all(sets.map(async set => {
+    const sourceMedia = await getVideoFolderMediaType(set.folderId);
     const files = (await listDriveFolderVideoFiles(set.folderId)).filter(file => (
       !set.excludeNoPoem || !PRIORITY_VIDEO_NO_POEM_PATTERN.test(cleanSheetWhitespace(file.name))
     ));
@@ -2479,6 +2528,7 @@ async function getVideoCurationCandidates() {
         prioritySetId: set.id,
         prioritySetLabel: set.label,
         sourceFileId,
+        ...sourceMedia,
         sourceReviewFileId,
         sourceFileName: cleanSheetWhitespace(file.name),
         sourceVideoUrl: cleanSheetWhitespace(file.webViewLink)
@@ -2547,7 +2597,9 @@ async function saveVideoCurationGate(payload = {}, decidedBy = "") {
       decision: cleanSheetWhitespace(payload.decision),
       selectedExcerptRecordIds: candidate.excerptRecordIds,
       editingInstructions: String(payload.editingInstructions || ""),
-      publishableAssetUrl: cleanSheetWhitespace(payload.publishableAssetUrl),
+      publishableAssetUrl: cleanSheetWhitespace(payload.publishableAssetUrl)
+        || (payload.decision === "ready_for_poetry_please" && candidate.sourceMediaType === "FV"
+          ? candidate.sourceVideoUrl : ""),
       note: String(payload.note || ""),
       decidedBy
     }
@@ -2558,15 +2610,22 @@ async function handoffVideoCurationGate(payload = {}) {
   if (!poetryPleaseApiKey) throw new Error("POETRY_PLEASE_API_KEY is not configured.");
   const prioritySetId = cleanSheetWhitespace(payload.prioritySetId);
   const sourceFileId = cleanSheetWhitespace(payload.sourceFileId);
-  const candidates = await getVideoCurationCandidates();
+  const candidates = await getVideoCurationCandidates(prioritySetId);
   const candidate = candidates.candidates.find(item => item.prioritySetId === prioritySetId && item.sourceFileId === sourceFileId);
   if (!candidate?.gate) throw new Error("Save the video gate before sending it to Poetry Please.");
-  const gate = { ...candidate.gate, selectedExcerptRecordIds: candidate.excerptRecordIds };
+  const finalAssetUrl = cleanSheetWhitespace(candidate.gate.publishableAssetUrl);
+  const publishableAssetMediaType = candidate.sourceMediaType === "FV"
+    && driveFileId(finalAssetUrl) === candidate.sourceFileId
+    ? "FV" : await getVideoAssetMediaType(finalAssetUrl);
+  const gate = { ...candidate.gate, selectedExcerptRecordIds: candidate.excerptRecordIds, publishableAssetMediaType };
   const record = buildWeaverVideoImport(candidate, gate);
+  const claim = await syncWeaverRuntimeDb("claim_video_curation_handoff", { prioritySetId, sourceFileId });
+  if (!claim?.claimed) {
+    return { ok: false, error: claim?.reason || "video_handoff_claim_failed", gate: claim?.record || null };
+  }
   const persist = async update => syncWeaverRuntimeDb("upsert_video_curation_gate", {
     gate: { ...candidate, ...gate, poetryPleaseHandoff: update }
   });
-  await persist({ status: "sending", sourceRecordId: record.sourceRecordId, updatedAt: new Date().toISOString() });
   const endpoint = `${poetryPleaseApiUrl.replace(/\/$/, "")}/internal/weaverVideoImport`;
   try {
     const response = await fetch(endpoint, {
@@ -2582,9 +2641,38 @@ async function handoffVideoCurationGate(payload = {}) {
     const saved = await persist({ ...result, sourceRecordId: record.sourceRecordId, updatedAt: new Date().toISOString() });
     return { ...result, gate: saved.record, poetryPlease: body };
   } catch (error) {
-    await persist({ status: "failed", sourceRecordId: record.sourceRecordId, error: error.message, updatedAt: new Date().toISOString() });
+    await persist({ status: "needs_reconciliation", sourceRecordId: record.sourceRecordId, error: error.message, updatedAt: new Date().toISOString() });
     throw error;
   }
+}
+
+async function autoAdvanceVideoCuration(prioritySetId, sourceFileId) {
+  const candidates = await getVideoCurationCandidates(prioritySetId);
+  const candidate = candidates.candidates.find(item => item.sourceFileId === sourceFileId);
+  if (!candidate || candidate.publicationRestricted || candidate.candidateScore < 9) return null;
+  const reviewerCount = new Set(candidate.ratings.map(review => (
+    cleanSheetWhitespace(review.reviewerEmail).toLowerCase()
+  )).filter(Boolean)).size;
+  if (reviewerCount < 5 || candidate.gate?.poetryPleaseHandoff?.status) return null;
+  if (candidate.gate && candidate.gate.decision !== "ready_for_poetry_please") return null;
+
+  const knownPublishableUrl = candidate.sourceMediaType === "FV" ? candidate.sourceVideoUrl : "";
+  const publishableAssetUrl = cleanSheetWhitespace(candidate.gate?.publishableAssetUrl || knownPublishableUrl);
+  if (!publishableAssetUrl) {
+    if (!candidate.gate) {
+      await syncWeaverRuntimeDb("upsert_video_curation_gate", {
+        gate: { ...candidate, decision: "send_to_editing", note: "Qualified for publication; final publishable video needed.", decidedBy: "weaver:auto" }
+      });
+    }
+    return { status: "send_to_editing" };
+  }
+  if (!candidate.gate) {
+    await syncWeaverRuntimeDb("upsert_video_curation_gate", {
+      gate: { ...candidate, decision: "ready_for_poetry_please", publishableAssetUrl, decidedBy: "weaver:auto" }
+    });
+  }
+  const handoff = await handoffVideoCurationGate({ prioritySetId, sourceFileId });
+  return { status: handoff.ok ? "sent_to_poetry_please" : "already_started", ...handoff };
 }
 
 async function savePriorityVideoReview(payload = {}) {
@@ -2602,12 +2690,14 @@ async function savePriorityVideoReview(payload = {}) {
     throw new Error("The selected video is not in the requested priority set.");
   }
   const videoReleaseStatus = getPriorityVideoReleaseStatus(file.name, set, sourceFileId);
+  const sourceMedia = await getVideoFolderMediaType(set.folderId);
   const result = await syncWeaverRuntimeDb("upsert_curation_review", {
     review: {
       ...payload,
       reviewerEmail,
       prioritySetId: set.id,
       sourceFolderId: set.folderId,
+      ...sourceMedia,
       sourceFileId,
       sourceFileName: cleanSheetWhitespace(file.name),
       videoReleaseStatus,
@@ -2616,6 +2706,11 @@ async function savePriorityVideoReview(payload = {}) {
     }
   });
   if (!result?.ok) throw new Error(result?.error || "Video review could not be saved.");
+  try {
+    result.autoHandoff = await autoAdvanceVideoCuration(set.id, sourceFileId);
+  } catch (error) {
+    result.autoHandoff = { status: "needs_attention", error: error.message };
+  }
   return result;
 }
 
@@ -3159,6 +3254,9 @@ function buildPendingRecordFromSheetRow(row, index, canonicalBookAuthorMap = nul
     releaseCatalog: noteMeta.releaseCatalog || cleanSheetWhitespace(bookMeta?.releaseCatalog),
     bookShortener: noteMeta.bookShortener || cleanSheetWhitespace(bookMeta?.bookShortener),
     contentType: noteMeta.contentType || "EXC",
+    sourceEvent: isVideoIntake ? (cleanSheetWhitespace(row[17]) || noteMeta.sourceEvent || "") : "",
+    sourceVideoUrl: isVideoIntake ? (noteMeta.sourceVideoUrl || "") : "",
+    sourceVideoFileId: isVideoIntake ? extractGoogleDriveFileId(noteMeta.sourceVideoUrl) : "",
     socialMediaHandle: noteMeta.socialMediaHandle || "",
     bookPrimarySourceFormat: cleanSheetWhitespace(row[config.validationPrimarySourceFormat - 1]),
     catalogValidation: buildCatalogValidationPayload(row)
@@ -3918,6 +4016,34 @@ async function getPendingExcerptsForBookFromSheets(bookTitle) {
     bookTitle: preferredBookTitle,
     excerpts
   };
+}
+
+async function getVideoExcerptApprovalProgressFromSheets() {
+  const values = await getSourceSheetValuesCached();
+  const byVideoFileId = new Map();
+  const approvedTextsByVideoFileId = new Map();
+  for (const row of values) {
+    if (cleanSheetWhitespace(row[2]).toLowerCase() !== "add a quote from a video") continue;
+    const meta = parseIntakeMetadataFromNotes(row[8] || "");
+    const sourceVideoFileId = extractGoogleDriveFileId(meta.sourceVideoUrl);
+    if (!sourceVideoFileId) continue;
+    const progress = byVideoFileId.get(sourceVideoFileId) || { sourceVideoFileId, approvedCount: 0 };
+    const decision = getSheetExcerptReviewDecision(row).toUpperCase();
+    const approved = isAcceptedExcerptReviewDecision(decision)
+      || cleanSheetWhitespace(row[SHEET_SOURCE_CONFIG.columnMap.approved - 1]).toUpperCase() === "Y";
+    if (approved && decision !== "REJECT" && decision !== "NEEDS_CORRECTION"
+      && !isSheetYes(row[SHEET_SOURCE_CONFIG.columnMap.exclude - 1])) {
+      const excerptText = cleanSheetWhitespace(row[12] || row[SHEET_SOURCE_CONFIG.columnMap.excerpt - 1]).toLowerCase();
+      if (excerptText) {
+        const texts = approvedTextsByVideoFileId.get(sourceVideoFileId) || new Set();
+        texts.add(excerptText);
+        approvedTextsByVideoFileId.set(sourceVideoFileId, texts);
+        progress.approvedCount = texts.size;
+      }
+    }
+    byVideoFileId.set(sourceVideoFileId, progress);
+  }
+  return { ok: true, videos: [...byVideoFileId.values()] };
 }
 
 let publishingBooksCache = null;
@@ -8004,6 +8130,14 @@ const server = http.createServer(async (req, res) => {
         ok: false,
         error: error.message
       });
+    }
+  }
+
+  if (url.pathname === "/api/review/video-excerpt-progress" && req.method === "GET") {
+    try {
+      return sendJson(res, 200, await getVideoExcerptApprovalProgressFromSheets());
+    } catch (error) {
+      return sendJson(res, 500, { ok: false, error: error.message });
     }
   }
 
