@@ -7762,7 +7762,7 @@ async function serveFile(res, filePath) {
     if (ext === ".html") {
       headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0";
     } else if (ext === ".js" || ext === ".css") {
-      headers["Cache-Control"] = "public, max-age=31536000, immutable";
+      headers["Cache-Control"] = "no-cache, must-revalidate, max-age=0";
     }
 
     res.writeHead(200, headers);
