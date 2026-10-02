@@ -2592,6 +2592,9 @@ async function saveVideoCurationGate(payload = {}, decidedBy = "") {
   if (candidate.publicationRestricted && payload.decision === "ready_for_poetry_please") {
     throw new Error("A publication-restricted source cannot be prepared for Poetry Please.");
   }
+  if (payload.decision === "ready_for_poetry_please" && !candidate.excerptRecordIds.length) {
+    throw new Error("At least one excerpt must be pulled before sending this video to Poetry Please.");
+  }
   return await syncWeaverRuntimeDb("upsert_video_curation_gate", {
     gate: {
       ...candidate,
@@ -2614,6 +2617,7 @@ async function handoffVideoCurationGate(payload = {}) {
   const candidates = await getVideoCurationCandidates(prioritySetId);
   const candidate = candidates.candidates.find(item => item.prioritySetId === prioritySetId && item.sourceFileId === sourceFileId);
   if (!candidate?.gate) throw new Error("Save the video gate before sending it to Poetry Please.");
+  if (!candidate.excerptRecordIds.length) throw new Error("At least one excerpt must be pulled before sending this video to Poetry Please.");
   const finalAssetUrl = cleanSheetWhitespace(candidate.gate.publishableAssetUrl);
   const publishableAssetMediaType = candidate.sourceMediaType === "FV"
     && driveFileId(finalAssetUrl) === candidate.sourceFileId
@@ -2650,7 +2654,7 @@ async function handoffVideoCurationGate(payload = {}) {
 async function autoAdvanceVideoCuration(prioritySetId, sourceFileId) {
   const candidates = await getVideoCurationCandidates(prioritySetId);
   const candidate = candidates.candidates.find(item => item.sourceFileId === sourceFileId);
-  if (!candidate || candidate.publicationRestricted || candidate.candidateScore < 9) return null;
+  if (!candidate || candidate.publicationRestricted || candidate.candidateScore < 9 || !candidate.excerptRecordIds.length) return null;
   const reviewerCount = new Set(candidate.ratings.map(review => (
     cleanSheetWhitespace(review.reviewerEmail).toLowerCase()
   )).filter(Boolean)).size;
@@ -4076,19 +4080,26 @@ async function getPendingExcerptsForBookFromSheets(bookTitle) {
 async function getVideoExcerptApprovalProgressFromSheets() {
   const values = await getSourceSheetValuesCached();
   const byVideoFileId = new Map();
+  const pulledTextsByVideoFileId = new Map();
   const approvedTextsByVideoFileId = new Map();
   for (const row of values) {
     if (cleanSheetWhitespace(row[2]).toLowerCase() !== "add a quote from a video") continue;
     const meta = parseIntakeMetadataFromNotes(row[8] || "");
     const sourceVideoFileId = extractGoogleDriveFileId(meta.sourceVideoUrl);
     if (!sourceVideoFileId) continue;
-    const progress = byVideoFileId.get(sourceVideoFileId) || { sourceVideoFileId, approvedCount: 0 };
+    const progress = byVideoFileId.get(sourceVideoFileId) || { sourceVideoFileId, pulledCount: 0, approvedCount: 0 };
+    const excerptText = cleanSheetWhitespace(row[12] || row[SHEET_SOURCE_CONFIG.columnMap.excerpt - 1]).toLowerCase();
+    if (excerptText && !isSheetYes(row[SHEET_SOURCE_CONFIG.columnMap.exclude - 1])) {
+      const texts = pulledTextsByVideoFileId.get(sourceVideoFileId) || new Set();
+      texts.add(excerptText);
+      pulledTextsByVideoFileId.set(sourceVideoFileId, texts);
+      progress.pulledCount = texts.size;
+    }
     const decision = getSheetExcerptReviewDecision(row).toUpperCase();
     const approved = isAcceptedExcerptReviewDecision(decision)
       || cleanSheetWhitespace(row[SHEET_SOURCE_CONFIG.columnMap.approved - 1]).toUpperCase() === "Y";
     if (approved && decision !== "REJECT" && decision !== "NEEDS_CORRECTION"
       && !isSheetYes(row[SHEET_SOURCE_CONFIG.columnMap.exclude - 1])) {
-      const excerptText = cleanSheetWhitespace(row[12] || row[SHEET_SOURCE_CONFIG.columnMap.excerpt - 1]).toLowerCase();
       if (excerptText) {
         const texts = approvedTextsByVideoFileId.get(sourceVideoFileId) || new Set();
         texts.add(excerptText);

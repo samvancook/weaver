@@ -207,6 +207,7 @@ const REVIEW_SINGLE_BATCH_SIZE = 1;
 const REVIEW_MULTI_BATCH_SIZE = 25;
 const EXTRA_REVIEW_BATCH_SIZE = 1;
 const REVIEW_VIDEOS_BOOK_KEY = "__video_excerpts__";
+const REVIEW_VIDEO_EVENT_KEY = "__video_event__:";
 let videoExcerptProgressByFileId = new Map();
 const GOOGLE_SHEETS_SCOPES = "https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.file";
 const GOOGLE_ADMIN_SCOPES = "openid email";
@@ -933,9 +934,11 @@ function getVisibleReviewBookSummaries() {
 function refreshReviewBookSelect(preserveSelection = true) {
   const previousSelection = preserveSelection ? elements.bookSelect?.value || "" : "";
   const visibleBooks = getVisibleReviewBookSummaries();
+  const selectionLabel = document.getElementById("review-selection-label");
+  if (selectionLabel) selectionLabel.textContent = getSelectedReviewFilter() === "videos" ? "Event or Video" : "Book Title";
   if (getSelectedReviewFilter() === "videos" && elements.bookSelect) {
     const select = elements.bookSelect;
-    select.replaceChildren(new Option("Choose a video", ""));
+    select.replaceChildren(new Option("Choose an event or video", ""));
     let group = null;
     let previousEvent = "";
     for (const video of visibleBooks) {
@@ -943,25 +946,33 @@ function refreshReviewBookSelect(preserveSelection = true) {
         group = document.createElement("optgroup");
         group.label = video.event;
         select.append(group);
+        const eventVideos = visibleBooks.filter(item => item.event === video.event);
+        group.append(new Option(`Entire event (${eventVideos.length} videos, ${eventVideos.reduce((total, item) => total + item.standardCount, 0)} pending)`, `${REVIEW_VIDEO_EVENT_KEY}${encodeURIComponent(video.event)}`));
         previousEvent = video.event;
       }
-      const approved = video.sourceVideoFileId
+      const progress = video.sourceVideoFileId
         ? videoExcerptProgressByFileId.get(video.sourceVideoFileId) : undefined;
-      const progress = approved === undefined ? "approval count unavailable" : `${approved}/3 approved`;
-      group.append(new Option(`${video.title} · ${video.author} (${video.standardCount} pending, ${progress})`, video.key));
+      const progressLabel = progress === undefined ? "counts unavailable" : `${progress.pulledCount} pulled (goal 3+), ${progress.approvedCount} approved`;
+      group.append(new Option(`${video.title} · ${video.author} (${video.standardCount} pending, ${progressLabel})`, video.key));
     }
-    if (visibleBooks.some(video => video.key === previousSelection)) select.value = previousSelection;
+    if (visibleBooks.some(video => video.key === previousSelection)
+      || [...select.options].some(option => option.value === previousSelection)) select.value = previousSelection;
   } else {
     populateBookSelect(elements.bookSelect, visibleBooks, previousSelection, book => `${book.title} (${book.standardCount})`);
   }
-  elements.bookCountBadge.textContent = `${visibleBooks.length} ${getSelectedReviewFilter() === "videos" ? "Videos" : "Books"}`;
+  elements.bookCountBadge.textContent = getSelectedReviewFilter() === "videos"
+    ? `${new Set(visibleBooks.map(video => video.event)).size} Events · ${visibleBooks.length} Videos`
+    : `${visibleBooks.length} Books`;
 }
 
 async function loadVideoExcerptProgress() {
   try {
     const result = await requestReviewApi("/api/review/video-excerpt-progress");
     videoExcerptProgressByFileId = new Map((result.videos || []).map(video =>
-      [video.sourceVideoFileId, Number(video.approvedCount || 0)]));
+      [video.sourceVideoFileId, {
+        pulledCount: Number(video.pulledCount || 0),
+        approvedCount: Number(video.approvedCount || 0)
+      }]));
   } catch (_error) {
     videoExcerptProgressByFileId = new Map();
   }
@@ -1039,6 +1050,10 @@ function indexBookSummariesByKey(summaries) {
 }
 
 function getPendingRecordsForBookKey(bookKey, records = currentPendingRecords) {
+  if (bookKey.startsWith(REVIEW_VIDEO_EVENT_KEY)) {
+    const event = decodeURIComponent(bookKey.slice(REVIEW_VIDEO_EVENT_KEY.length));
+    return getPendingVideoRecords(records).filter(record => (record.sourceEvent || "Unassigned event") === event);
+  }
   if (bookKey.startsWith(`${REVIEW_VIDEOS_BOOK_KEY}:`)) {
     return getPendingVideoRecords(records).filter(record => {
       const fileId = record.sourceVideoFileId || extractGoogleDriveFileId(record.sourceVideoUrl);
@@ -1207,6 +1222,8 @@ function applyPendingBookData(records, { preserveSelection = false } = {}) {
     const fileId = video.sourceVideoFileId || extractGoogleDriveFileId(video.sourceVideoUrl);
     const key = `${REVIEW_VIDEOS_BOOK_KEY}:${fileId || video.recordId || video.sourceRow}`;
     reviewBookSummaryByKey.set(key, { key, title: video.title || "Untitled video" });
+    const event = video.sourceEvent || "Unassigned event";
+    reviewBookSummaryByKey.set(`${REVIEW_VIDEO_EVENT_KEY}${encodeURIComponent(event)}`, { title: event });
   }
   weirdBookSummaryByKey = indexBookSummariesByKey(currentWeirdBookSummaries);
 
@@ -4213,7 +4230,7 @@ function isGoodValidation(validation) {
 async function loadExcerpts() {
   const bookKey = elements.bookSelect.value;
   if (!bookKey) {
-    setStatus("Choose a book title first.");
+    setStatus(getSelectedReviewFilter() === "videos" ? "Choose an event or video first." : "Choose a book title first.");
     return;
   }
 
@@ -4222,8 +4239,11 @@ async function loadExcerpts() {
     const bookTitle = summary?.title || bookKey;
     setStatus(`Loading excerpts for "${bookTitle}"...`);
     currentExcerpts = getPendingRecordsForBookKey(bookKey);
+    if (bookKey.startsWith(REVIEW_VIDEO_EVENT_KEY) && elements.reviewDisplayMode) {
+      elements.reviewDisplayMode.value = "batch";
+    }
     reviewVisibleCount = getReviewBatchSize();
-    reviewShowAdditionalPulls = false;
+    reviewShowAdditionalPulls = getSelectedReviewFilter() === "videos";
     reviewPinnedRowOrder = [];
     await loadCatalogValidation(currentExcerpts);
     renderCurrentExcerpts();
