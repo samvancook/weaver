@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildReviewerProgressExport, buildWeaverVideoImport, classifyDriveFolderPath, driveFileId, parsePoetryPleaseVideoImport, poetryPleaseVideoIdForSourceFile, reconcileVideoReviews, resolveCurrentVideoFileId } from "./video_curation_handoff.mjs";
 import { verifyProgressExportCaller } from "./weaver_progress_auth.mjs";
+import { findApprovedTextExcerptMatch } from "./video_excerpt_folding.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -3306,6 +3307,7 @@ function buildApprovedExcerptExportRecordFromSheetRow(row, index, canonicalBookA
   const canonicalPoemTitle = cleanSheetWhitespace(row[config.validationMatchedPoemTitle - 1]) || poemTitle;
   const canonicalBookTitle = cleanSheetWhitespace(row[config.validationCanonicalBook - 1]) || bookTitle;
   const duplicateGroupId = (row[config.duplicateGroupId - 1] || "").toString();
+  if (isVideoIntake && duplicateGroupId.startsWith("video-exact:")) return null;
   const createdTimestamp = cleanSheetWhitespace(row[0]);
   const normalizedTimestamp = parseChicagoSheetTimestampToIso(createdTimestamp);
   const lineCount = excerptText
@@ -3903,6 +3905,7 @@ function buildExcerptRuntimeRecord(payload = {}, { sourceRow = 0, createdAt = ""
     correctedBookTitle: cleanSheetWhitespace(payload.correctedBookTitle),
     correctedExcerptText: String(payload.correctedExcerpt || payload.correctedExcerptText || ""),
     duplicateGroupId: cleanSheetWhitespace(payload.duplicateGroupId),
+    canonicalExcerptRecordId: cleanSheetWhitespace(payload.canonicalExcerptRecordId),
     validation: payload.catalogValidation && typeof payload.catalogValidation === "object"
       ? payload.catalogValidation
       : {},
@@ -3929,7 +3932,42 @@ async function shadowExcerptRecordsToRuntime(records) {
 async function appendExcerptGatheringRow(payload = {}) {
   const sourceRecordId = cleanSheetWhitespace(payload.recordId || payload.sourceRecordId)
     || `weaver:${randomUUID()}`;
-  const normalizedPayload = { ...payload, recordId: sourceRecordId };
+  let approvedMatch = null;
+  if (cleanSheetWhitespace(payload.mode).toLowerCase() === "video") {
+    try {
+      const values = await getSourceSheetValuesCached();
+      const approvedTextExcerpts = values
+        .map((row, index) => cleanSheetWhitespace(row[2]).toLowerCase() === "add a quote from a video"
+          ? null
+          : buildApprovedExcerptExportRecordFromSheetRow(row, index))
+        .filter(Boolean);
+      approvedMatch = findApprovedTextExcerptMatch({
+        author: payload.author,
+        bookTitle: payload.bookTitle,
+        poemTitle: payload.title,
+        excerptText: payload.quote
+      }, approvedTextExcerpts);
+    } catch (error) {
+      console.warn(`Video excerpt match unavailable; leaving pull for review: ${error.message}`);
+    }
+  }
+  const normalizedPayload = {
+    ...payload,
+    recordId: sourceRecordId,
+    ...(cleanSheetWhitespace(payload.mode).toLowerCase() === "video" ? {
+      reviewDecision: "",
+      approval: "",
+      duplicateGroupId: "",
+      canonicalExcerptRecordId: "",
+      useForQi: false,
+      graphicsQi: false
+    } : {}),
+    ...(approvedMatch ? {
+      reviewDecision: "ACCEPT_SKIP_GRAPHIC",
+      duplicateGroupId: `video-exact:${approvedMatch.sourceRecordId}`,
+      canonicalExcerptRecordId: approvedMatch.sourceRecordId
+    } : {})
+  };
   const rowValues = buildExcerptGatheringAppendRow(normalizedPayload);
   const response = await appendSheetValuesServer(`'${sourceSheetName.replace(/'/g, "''")}'!A:S`, [rowValues]);
   const updatedRange = cleanSheetWhitespace(response?.updates?.updatedRange || "");
@@ -3963,6 +4001,22 @@ async function appendExcerptGatheringRow(payload = {}) {
         values: [[sourceRecordId]]
       });
     }
+    if (approvedMatch) {
+      writes.push(
+        {
+          range: `'${sourceSheetName.replace(/'/g, "''")}'!${toA1Column(config.approved)}${rowNumber}`,
+          values: [["N"]]
+        },
+        {
+          range: `'${sourceSheetName.replace(/'/g, "''")}'!${toA1Column(config.excerptReviewDecision)}${rowNumber}`,
+          values: [["ACCEPT_SKIP_GRAPHIC"]]
+        },
+        {
+          range: `'${sourceSheetName.replace(/'/g, "''")}'!${toA1Column(config.duplicateGroupId)}${rowNumber}`,
+          values: [[normalizedPayload.duplicateGroupId]]
+        }
+      );
+    }
     await batchUpdateSheetValuesServer(writes);
   }
 
@@ -3975,6 +4029,7 @@ async function appendExcerptGatheringRow(payload = {}) {
     version: `${appVersion}-service-account`,
     rowNumber,
     recordId: sourceRecordId,
+    foldedIntoExcerptRecordId: approvedMatch?.sourceRecordId || null,
     intakeMode: mode,
     updatedRange,
     runtimeDb
