@@ -2595,7 +2595,7 @@ async function saveVideoCurationGate(payload = {}, decidedBy = "") {
   if (payload.decision === "ready_for_poetry_please" && !candidate.excerptRecordIds.length) {
     throw new Error("At least one excerpt must be pulled before sending this video to Poetry Please.");
   }
-  return await syncWeaverRuntimeDb("upsert_video_curation_gate", {
+  const result = await syncWeaverRuntimeDb("upsert_video_curation_gate", {
     gate: {
       ...candidate,
       decision: cleanSheetWhitespace(payload.decision),
@@ -2608,6 +2608,8 @@ async function saveVideoCurationGate(payload = {}, decidedBy = "") {
       decidedBy
     }
   });
+  invalidateQueueSnapshots();
+  return result;
 }
 
 async function handoffVideoCurationGate(payload = {}) {
@@ -2675,6 +2677,7 @@ async function autoAdvanceVideoCuration(prioritySetId, sourceFileId) {
     await syncWeaverRuntimeDb("upsert_video_curation_gate", {
       gate: { ...candidate, decision: "ready_for_poetry_please", publishableAssetUrl, decidedBy: "weaver:auto" }
     });
+    invalidateQueueSnapshots();
   }
   const handoff = await handoffVideoCurationGate({ prioritySetId, sourceFileId });
   return { status: handoff.ok ? "sent_to_poetry_please" : "already_started", ...handoff };
@@ -3243,7 +3246,7 @@ function buildPendingRecordFromSheetRow(row, index, canonicalBookAuthorMap = nul
   const noteMeta = parseIntakeMetadataFromNotes(row[8] || "");
   const bookMeta = resolvePublishingBookMeta(bookTitle, bookTitle);
 
-  if (!bookTitle || !cleanedExcerptText || excluded || !isPendingSheetReview(reviewDecision)) {
+  if ((!bookTitle && !isVideoIntake) || !cleanedExcerptText || excluded || !isPendingSheetReview(reviewDecision)) {
     return null;
   }
 
@@ -4040,13 +4043,35 @@ async function appendExcerptGatheringRow(payload = {}) {
   };
 }
 
+function approvedVideoFileIdsFromGates(gates = []) {
+  return new Set(
+    gates
+      .filter(gate => cleanSheetWhitespace(gate.decision) === "ready_for_poetry_please")
+      .flatMap(gate => [gate.sourceFileId, gate.sourceReviewFileId])
+      .map(cleanSheetWhitespace)
+      .filter(Boolean)
+  );
+}
+
+async function getApprovedVideoFileIds() {
+  const gateResult = await syncWeaverRuntimeDb("get_video_curation_gates", {});
+  if (!gateResult?.ok) throw new Error("Video curation gates could not be loaded.");
+  return approvedVideoFileIdsFromGates(gateResult.records || []);
+}
+
+function isVideoExcerptReleased(record, approvedVideoFileIds) {
+  if (record.intakeMode !== "video") return true;
+  return Boolean(record.sourceVideoFileId && approvedVideoFileIds.has(record.sourceVideoFileId));
+}
+
 async function getPendingRecordsFromSheets() {
   return getCachedQueueSnapshot("pending-records", async () => {
     const values = await getSourceSheetValuesCached();
     const canonicalBookAuthorMap = await getCanonicalGraphicsBookAuthorMap().catch(() => new Map());
+    const approvedVideoFileIds = await getApprovedVideoFileIds();
     const records = values
       .map((row, index) => buildPendingRecordFromSheetRow(row, index, canonicalBookAuthorMap))
-      .filter(Boolean);
+      .filter(record => record && isVideoExcerptReleased(record, approvedVideoFileIds));
 
     return {
       ok: true,
@@ -4058,10 +4083,8 @@ async function getPendingRecordsFromSheets() {
 
 async function getPendingExcerptsForBookFromSheets(bookTitle) {
   const requestedKey = normalizeBookKey(bookTitle);
-  const values = await getSourceSheetValuesCached();
-  const canonicalBookAuthorMap = await getCanonicalGraphicsBookAuthorMap().catch(() => new Map());
-  const excerpts = values
-    .map((row, index) => buildPendingRecordFromSheetRow(row, index, canonicalBookAuthorMap))
+  const pending = await getPendingRecordsFromSheets();
+  const excerpts = pending.records
     .filter(record => record && normalizeBookKey(record.bookTitle) === requestedKey);
 
   const preferredBookTitle = excerpts.reduce(
@@ -4132,8 +4155,16 @@ async function getApprovedExcerptsExportFromSheets({ since = "" } = {}) {
   const sinceValue = cleanSheetWhitespace(since);
   const values = await getSourceSheetValuesCached();
   const canonicalBookAuthorMap = await getCanonicalGraphicsBookAuthorMap().catch(() => new Map());
+  const approvedVideoFileIds = await getApprovedVideoFileIds();
   const records = values
-    .map((row, index) => buildApprovedExcerptExportRecordFromSheetRow(row, index, canonicalBookAuthorMap))
+    .map((row, index) => {
+      const isVideoIntake = cleanSheetWhitespace(row[2]).toLowerCase() === "add a quote from a video";
+      if (isVideoIntake) {
+        const noteMeta = parseIntakeMetadataFromNotes(row[8] || "");
+        if (!approvedVideoFileIds.has(extractGoogleDriveFileId(noteMeta.sourceVideoUrl))) return null;
+      }
+      return buildApprovedExcerptExportRecordFromSheetRow(row, index, canonicalBookAuthorMap);
+    })
     .filter(Boolean)
     .filter(record => !sinceValue || cleanSheetWhitespace(record.metadata?.updatedAt) >= sinceValue);
 
