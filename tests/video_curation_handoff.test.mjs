@@ -49,10 +49,23 @@ test("video import is a single root record with stable source identity", () => {
   assert.equal(record.contentType, "VV");
   assert.equal(record.sourceRecordId, "weaver:video:source-123");
   assert.equal(record.sourceEventLabel, "BPL Charm City 2026");
+  assert.equal(record.releaseCatalog, "BPL Charm City 2026");
+  assert.equal(record.book, "Book");
   assert.equal(record.finalAssetUrl, gate.publishableAssetUrl);
   assert.deepEqual(record.selectedExcerptRecordIds, ["exc-1"]);
   assert.equal(record.records, undefined);
   assert.equal(buildWeaverVideoImport({ ...candidate, prioritySetId: "lane-b" }, gate).sourceRecordId, record.sourceRecordId);
+});
+
+test("Charm City video catalog overrides a stale book catalog without changing other events", () => {
+  const charmCity = buildWeaverVideoImport({ ...candidate, releaseCatalog: "Spring 2022" }, gate);
+  assert.equal(charmCity.releaseCatalog, "BPL Charm City 2026");
+  assert.equal(charmCity.sourceEvent, "BPL Charm City 2026");
+  assert.equal(charmCity.book, "Book");
+  const otherEvent = buildWeaverVideoImport({
+    ...candidate, sourceEvent: "Other event", sourceEventLabel: "Other event", releaseCatalog: "Fall 2026"
+  }, gate);
+  assert.equal(otherEvent.releaseCatalog, "Fall 2026");
 });
 
 test("video import carries individual reviews and excerpt IDs, not unapproved quote text", () => {

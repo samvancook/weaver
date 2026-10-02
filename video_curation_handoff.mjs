@@ -139,6 +139,9 @@ export function buildWeaverVideoImport(candidate, gate) {
   const sourceRecordId = `weaver:video:${sourceFileId}`;
   const sourceEvent = clean(gate?.sourceEvent) || clean(candidate?.sourceEvent);
   const sourceEventLabel = clean(gate?.sourceEventLabel) || clean(candidate?.sourceEventLabel);
+  const releaseCatalog = sourceEvent === "BPL Charm City 2026"
+    ? "BPL Charm City 2026"
+    : clean(gate?.releaseCatalog) || clean(candidate?.releaseCatalog);
   const finalAssetUrl = clean(gate?.publishableAssetUrl);
   const sourceVideoUrl = reviewSourceFileId
     ? `https://drive.google.com/file/d/${encodeURIComponent(sourceFileId)}/view`
@@ -176,7 +179,7 @@ export function buildWeaverVideoImport(candidate, gate) {
     author: clean(gate.author) || clean(candidate.author),
     title: clean(gate.poemTitle) || clean(candidate.poemTitle),
     book: clean(gate.bookTitle) || clean(candidate.bookTitle),
-    releaseCatalog: clean(gate.releaseCatalog) || clean(candidate.releaseCatalog),
+    releaseCatalog,
     eventReleaseCatalog: clean(gate.eventReleaseCatalog) || clean(candidate.eventReleaseCatalog),
     sourceEvent,
     sourceEventLabel,
