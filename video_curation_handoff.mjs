@@ -199,12 +199,16 @@ export function buildWeaverVideoImport(candidate, gate) {
 export function parsePoetryPleaseVideoImport(response, body, sourceRecordId, apiUrl, expected = {}) {
   const item = (Array.isArray(body?.results) ? body.results : [])
     .find(result => clean(result?.sourceRecordId) === sourceRecordId) || {};
+  const warnings = [...new Set([
+    ...(Array.isArray(body?.warnings) ? body.warnings : []),
+    ...(Array.isArray(item.warnings) ? item.warnings : [])
+  ].map(clean).filter(Boolean))];
   const status = clean(item.status).toLowerCase();
   const canonicalVideoId = clean(item.canonicalVideoId);
   const canonicalVideoUrl = clean(item.canonicalVideoUrl);
   const reviewsReceived = Number(item.receivedReviewCount) === Number(expected.reviewCount || 0);
   const excerptLinksReceived = Number(item.receivedSelectedExcerptIdCount) === Number(expected.selectedExcerptIdCount || 0);
-  const ok = response.ok && body?.ok === true
+  const ok = response.ok && body?.ok === true && warnings.length === 0
     && ["created", "updated", "duplicate"].includes(status)
     && Boolean(canonicalVideoId && canonicalVideoUrl)
     && reviewsReceived && excerptLinksReceived;
@@ -214,10 +218,12 @@ export function parsePoetryPleaseVideoImport(response, body, sourceRecordId, api
     canonicalVideoId,
     canonicalVideoUrl: canonicalVideoUrl ? new URL(canonicalVideoUrl, apiUrl).toString() : "",
     finalAssetUrl: clean(item.finalAssetUrl),
+    warnings,
     error: ok ? "" : clean(item.error || body?.error || (
-      !reviewsReceived || !excerptLinksReceived
-        ? "Poetry Please did not confirm receipt of all reviews and excerpt links"
-        : `Poetry Please returned ${response.status}`
+      warnings.length ? `Poetry Please import warnings: ${warnings.join(", ")}`
+        : !reviewsReceived || !excerptLinksReceived
+          ? "Poetry Please did not confirm receipt of all reviews and excerpt links"
+          : `Poetry Please returned ${response.status}`
     ))
   };
 }

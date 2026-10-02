@@ -201,3 +201,36 @@ test("video import is not marked sent when Poetry Please drops reviews or excerp
   assert.equal(result.status, "failed");
   assert.match(result.error, /did not confirm receipt/);
 });
+
+test("Poetry Please catalog warnings fail an otherwise successful video import", () => {
+  const result = parsePoetryPleaseVideoImport(
+    { ok: true, status: 200 },
+    { ok: true, results: [{
+      sourceRecordId: "weaver:video:source-123", status: "updated",
+      canonicalVideoId: "WEAVER-VV-ABC", canonicalVideoUrl: "/app?item=WEAVER-VV-ABC&type=VV",
+      receivedReviewCount: 1, receivedSelectedExcerptIdCount: 1,
+      warnings: ["missing_release_catalog"]
+    }] },
+    "weaver:video:source-123", "https://poetryplease.org/api",
+    { reviewCount: 1, selectedExcerptIdCount: 1 }
+  );
+  assert.equal(result.ok, false);
+  assert.equal(result.status, "failed");
+  assert.deepEqual(result.warnings, ["missing_release_catalog"]);
+  assert.match(result.error, /missing_release_catalog/);
+});
+
+test("top-level Poetry Please warnings also fail a video import", () => {
+  const result = parsePoetryPleaseVideoImport(
+    { ok: true, status: 200 },
+    { ok: true, warnings: ["missing_release_catalog"], results: [{
+      sourceRecordId: "weaver:video:source-123", status: "updated",
+      canonicalVideoId: "WEAVER-VV-ABC", canonicalVideoUrl: "/app?item=WEAVER-VV-ABC&type=VV",
+      receivedReviewCount: 1, receivedSelectedExcerptIdCount: 1
+    }] },
+    "weaver:video:source-123", "https://poetryplease.org/api",
+    { reviewCount: 1, selectedExcerptIdCount: 1 }
+  );
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.warnings, ["missing_release_catalog"]);
+});
