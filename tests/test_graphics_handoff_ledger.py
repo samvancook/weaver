@@ -268,6 +268,39 @@ class GraphicsHandoffLedgerTest(unittest.TestCase):
         self.assertEqual(exc["records"][0]["repairDestination"], "weaver_review")
         self.assertFalse(exc["records"][0]["pigJobId"])
 
+    def test_existing_blocked_qi_repair_reopens_with_original_excerpt(self):
+        connection = MemoryFirestoreLedger()
+        request = {
+            "id": "repair-existing-qi",
+            "status": "requested",
+            "imageId": "original-qi",
+            "contentType": "QI",
+            "author": "Test Author",
+            "book": "Test Book",
+            "title": "Test Poem",
+            "originalContent": {"imageUrl": "https://example.com/original.png"},
+        }
+        first = upsert_repair_requests(connection, {"requests": [request]})
+        job_id = first["records"][0]["pigJobId"]
+        connection.handoffs[job_id]["handoffStatus"] = "blocked"
+        connection.handoffs[job_id]["pigStatus"] = "failed"
+
+        enriched = {
+            **request,
+            "status": "in_progress",
+            "originalContent": {
+                **request["originalContent"],
+                "misc": 'sourceExcerpt="First line\nSecond line"',
+            },
+        }
+        second = upsert_repair_requests(connection, {"requests": [enriched]})
+
+        self.assertEqual(second["updatedCount"], 1)
+        self.assertEqual(second["records"][0]["pigJobId"], job_id)
+        self.assertEqual(connection.handoff_calls, [job_id, job_id])
+        self.assertEqual(connection.handoffs[job_id]["sourcePayload"]["quoteText"], "First line\nSecond line")
+        self.assertEqual(connection.handoffs[job_id]["handoffStatus"], "requested")
+
     def test_repair_completion_returns_structured_replacement_identity(self):
         connection = MemoryFirestoreLedger()
         request = {

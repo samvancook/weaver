@@ -4631,13 +4631,17 @@ async function persistRepairStatusResponse(repairRequestId, status, response, no
   });
 }
 
-async function syncPoetryPleaseRepairRequests({ limit = 1, allowBulk = false } = {}) {
+async function syncPoetryPleaseRepairRequests({ repairRequestId = "", limit = 1, allowBulk = false } = {}) {
   const reconciliation = await reconcilePoetryPleaseRepairRequests();
-  const fetched = await fetchPoetryPleaseRepairRequests();
+  const exactId = cleanSheetWhitespace(repairRequestId);
+  const fetched = exactId
+    ? await fetchPoetryPleaseRepairRequest(exactId)
+    : await fetchPoetryPleaseRepairRequests();
+  const requests = exactId ? (fetched.request ? [fetched.request] : []) : fetched.requests;
   if (!fetched.ok) {
     return {
       ok: false,
-      fetchedCount: fetched.requests.length,
+      fetchedCount: requests.length,
       createdCount: 0,
       updatedCount: 0,
       duplicateCount: 0,
@@ -4648,14 +4652,22 @@ async function syncPoetryPleaseRepairRequests({ limit = 1, allowBulk = false } =
       reconciliation
     };
   }
+  const sourceStatus = cleanSheetWhitespace(fetched.request?.status).toLowerCase();
+  if (exactId && (
+    cleanSheetWhitespace(fetched.request?.id) !== exactId
+    || !["requested", "in_progress"].includes(sourceStatus)
+  )) {
+    return { ok: false, error: "repair_request_not_open", repairRequestId: exactId, reconciliation };
+  }
 
   const bulkEnabled = cleanSheetWhitespace(process.env.WEAVER_REPAIR_BULK_ENABLED).toLowerCase() === "true";
   const requestedLimit = Math.max(1, Math.min(Number(limit || 1), 100));
   const effectiveLimit = allowBulk && bulkEnabled ? requestedLimit : 1;
-  const selected = fetched.requests.slice(0, effectiveLimit);
+  const selected = exactId ? requests : requests.slice(0, effectiveLimit);
   const runtime = await syncWeaverRuntimeDb("upsert_repair_requests", { requests: selected });
   const statusResults = [];
   for (const accepted of (runtime.acceptedForStatusSync || [])) {
+    if (exactId && sourceStatus === "in_progress") continue;
     const note = accepted.destination === "pig"
       ? `Accepted by Weaver; waiting on P.I.G. job ${accepted.pigJobId}.`
       : "Accepted by Weaver; routed to manual review because the content type is not graphics-backed.";
@@ -4676,11 +4688,12 @@ async function syncPoetryPleaseRepairRequests({ limit = 1, allowBulk = false } =
   const statusErrorCount = statusResults.filter(result => !result.ok).length;
   return {
     ok: Boolean(runtime.ok) && statusErrorCount === 0,
-    canaryMode: !(allowBulk && bulkEnabled),
+    canaryMode: Boolean(exactId) || !(allowBulk && bulkEnabled),
     bulkEnabled,
-    fetchedCount: fetched.requests.length,
+    repairRequestId: exactId,
+    fetchedCount: requests.length,
     processedCount: selected.length,
-    deferredCount: Math.max(0, fetched.requests.length - selected.length),
+    deferredCount: Math.max(0, requests.length - selected.length),
     createdCount: Number(runtime.createdCount || 0),
     updatedCount: Number(runtime.updatedCount || 0),
     duplicateCount: Number(runtime.duplicateCount || 0),
@@ -8762,6 +8775,7 @@ const server = http.createServer(async (req, res) => {
       const body = await readRequestBody(req);
       const parsed = JSON.parse(body || "{}");
       const result = await syncPoetryPleaseRepairRequests({
+        repairRequestId: parsed.repairRequestId || "",
         limit: parsed.limit || 1,
         allowBulk: parsed.allowBulk === true
       });
