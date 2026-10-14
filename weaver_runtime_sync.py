@@ -958,6 +958,18 @@ def repair_source_value(request: dict[str, Any], *keys: str) -> Any:
     return ""
 
 
+def repair_source_text(request: dict[str, Any]) -> str:
+    text = normalize_text(repair_source_value(
+        request, "quoteText", "sourceText", "text", "excerpt", "fullText", "ocrText",
+    ))
+    if text:
+        return text
+    original = request.get("originalContent") if isinstance(request.get("originalContent"), dict) else {}
+    misc = normalize_text(original.get("misc"))
+    match = re.search(r'(?:^|\s\|\s)sourceExcerpt="(.+)"\s*$', misc, re.DOTALL)
+    return normalize_text(match.group(1)) if match else ""
+
+
 def append_repair_history(
     history: Any,
     status: str,
@@ -985,15 +997,7 @@ def build_repair_handoff_request(
 ) -> dict[str, Any]:
     content_type = normalize_text(request.get("contentType")).upper()
     original_content = request.get("originalContent") if isinstance(request.get("originalContent"), dict) else {}
-    source_text = normalize_text(repair_source_value(
-        request,
-        "quoteText",
-        "sourceText",
-        "text",
-        "excerpt",
-        "fullText",
-        "ocrText",
-    ))
+    source_text = repair_source_text(request)
     original_asset_link = normalize_text(repair_source_value(
         request,
         "originalAssetLink",
@@ -1084,15 +1088,7 @@ def upsert_repair_requests(connection, payload: dict[str, Any]) -> dict[str, Any
                 "driveLink",
                 "previewUrl",
             ))
-            source_text = normalize_text(repair_source_value(
-                request,
-                "quoteText",
-                "sourceText",
-                "text",
-                "excerpt",
-                "fullText",
-                "ocrText",
-            ))
+            source_text = repair_source_text(request)
             missing_fields = [
                 label for label, value in (
                     ("imageId", request.get("imageId")),
@@ -1112,8 +1108,11 @@ def upsert_repair_requests(connection, payload: dict[str, Any]) -> dict[str, Any
             )
             pig_job_id = normalize_text(existing.get("pigJobId"))
             handed_off_at = normalize_text(existing.get("handedOffAt"))
-            if destination == "pig" and not blocked_reason and not pig_job_id:
-                pig_job_id = f"weaver:repair:{hashlib.sha256(repair_request_id.encode('utf-8')).hexdigest()[:32]}"
+            existing_handoff = get_graphics_handoff(connection, pig_job_id) if pig_job_id else None
+            if destination == "pig" and not blocked_reason and (
+                not pig_job_id or normalize_text((existing_handoff or {}).get("handoffStatus")) == "blocked"
+            ):
+                pig_job_id = pig_job_id or f"weaver:repair:{hashlib.sha256(repair_request_id.encode('utf-8')).hexdigest()[:32]}"
                 handoff = upsert_graphics_handoff_request(
                     connection,
                     build_repair_handoff_request(request, repair_request_id, pig_job_id),
