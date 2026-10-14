@@ -1,6 +1,6 @@
 import http from "node:http";
 import { spawn } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -208,6 +208,14 @@ function isAdministrativeMutationRequest(req, url) {
   if (ADMIN_MUTATION_PATHS.has(url.pathname)) return true;
   if (url.pathname === "/api/graphics/stalled-pig-recovery" && req.method === "POST") return true;
   return /^\/api\/repair-requests\/[^/]+\/retry-status$/.test(url.pathname);
+}
+
+function isPoetryPleaseNotification(req) {
+  const supplied = req.headers["x-api-key"];
+  if (!poetryPleaseApiKey || typeof supplied !== "string") return false;
+  const expectedHash = createHash("sha256").update(poetryPleaseApiKey).digest();
+  const suppliedHash = createHash("sha256").update(supplied).digest();
+  return timingSafeEqual(expectedHash, suppliedHash);
 }
 
 function adminAuthError(message, statusCode = 401) {
@@ -8762,6 +8770,26 @@ const server = http.createServer(async (req, res) => {
         limit: Math.max(1, Math.min(parseInt(url.searchParams.get("limit") || "200", 10) || 200, 500))
       });
       return sendJson(res, result.ok ? 200 : 500, {
+        version: `${appVersion}-service-account`,
+        ...result
+      });
+    } catch (error) {
+      return sendJson(res, 500, { ok: false, error: error.message });
+    }
+  }
+
+  if (url.pathname === "/api/repair-requests/notify" && req.method === "POST") {
+    if (!isPoetryPleaseNotification(req)) {
+      return sendJson(res, 401, { ok: false, error: "invalid_api_key" });
+    }
+    try {
+      const body = JSON.parse(await readRequestBody(req) || "{}");
+      const repairRequestId = cleanSheetWhitespace(body.repairRequestId);
+      if (!repairRequestId) {
+        return sendJson(res, 400, { ok: false, error: "repair_request_id_required" });
+      }
+      const result = await syncPoetryPleaseRepairRequests({ repairRequestId });
+      return sendJson(res, result.ok ? 200 : 502, {
         version: `${appVersion}-service-account`,
         ...result
       });
