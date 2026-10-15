@@ -3641,6 +3641,7 @@ function updateGraphicsModuleTitle() {
   if (!elements.graphicsModuleTitle) return;
   const isOpsView = currentGraphicsView === "ops";
   const isOpsHandoff = isOpsView && getSelectedGraphicsMode() === "handoff";
+  const isOpsRepairs = isOpsView && getSelectedGraphicsMode() === "repair_requests";
   elements.graphicsModuleTitle.textContent = isOpsView
     ? "Under the Hood"
     : "Graphics QC";
@@ -3652,8 +3653,11 @@ function updateGraphicsModuleTitle() {
   setElementForcedHidden(elements.graphicsMainHint, isOpsView);
   setElementForcedHidden(elements.graphicsFolderImportPanel, isOpsView);
   setElementForcedHidden(elements.graphicsBookPicker, isOpsHandoff);
-  setElementForcedHidden(elements.graphicsBookSelect?.closest("label"), isOpsHandoff || getSelectedGraphicsMode() === "repair_requests");
-  setElementForcedHidden(elements.loadGraphicsBooks, isOpsHandoff || getSelectedGraphicsMode() === "repair_requests");
+  setElementForcedHidden(elements.graphicsBookSelect?.closest("label"), isOpsHandoff || isOpsRepairs);
+  setElementForcedHidden(elements.loadGraphicsBooks, isOpsHandoff || isOpsRepairs);
+  if (isOpsRepairs && elements.graphicsBookCountBadge) {
+    elements.graphicsBookCountBadge.textContent = "All repairs";
+  }
   setElementForcedHidden(elements.graphicsQueueRowsHeader, isOpsHandoff);
   setElementForcedHidden(elements.graphicsQueueToolbarTop, isOpsHandoff);
   setElementForcedHidden(elements.graphicsList, isOpsHandoff);
@@ -3995,6 +3999,13 @@ async function loadGraphicsBooks(options = {}) {
   const preserveSelection = options.preserveSelection !== false;
   const mode = getSelectedGraphicsMode();
   const loadSequence = ++graphicsBooksLoadSequence;
+  if (mode === "repair_requests") {
+    currentGraphicsBookSummaries = [];
+    graphicsBookSummaryByKey = new Map();
+    if (elements.graphicsBookSelect) elements.graphicsBookSelect.value = "";
+    if (elements.graphicsBookCountBadge) elements.graphicsBookCountBadge.textContent = "All repairs";
+    return;
+  }
 
   try {
     setStatus(`Loading ${getGraphicsModeLabel(mode)} books...`);
