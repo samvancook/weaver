@@ -12,6 +12,7 @@
 !server.mjs
 !weaver_progress_auth.mjs
 !video_curation_handoff.mjs
+!video_excerpt_folding.mjs
 !catalog_validate.py
 !catalog_poem_text.py
 !excerpt_library.py

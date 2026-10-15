@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildReviewerProgressExport, buildWeaverVideoImport, classifyDriveFolderPath, driveFileId, parsePoetryPleaseVideoImport, poetryPleaseVideoIdForSourceFile, reconcileVideoReviews, resolveCurrentVideoFileId } from "./video_curation_handoff.mjs";
 import { verifyProgressExportCaller } from "./weaver_progress_auth.mjs";
+import { findApprovedTextExcerptMatch } from "./video_excerpt_folding.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -2599,7 +2600,10 @@ async function saveVideoCurationGate(payload = {}, decidedBy = "") {
   if (candidate.publicationRestricted && payload.decision === "ready_for_poetry_please") {
     throw new Error("A publication-restricted source cannot be prepared for Poetry Please.");
   }
-  return await syncWeaverRuntimeDb("upsert_video_curation_gate", {
+  if (payload.decision === "ready_for_poetry_please" && !candidate.excerptRecordIds.length) {
+    throw new Error("At least one excerpt must be pulled before sending this video to Poetry Please.");
+  }
+  const result = await syncWeaverRuntimeDb("upsert_video_curation_gate", {
     gate: {
       ...candidate,
       decision: cleanSheetWhitespace(payload.decision),
@@ -2612,6 +2616,8 @@ async function saveVideoCurationGate(payload = {}, decidedBy = "") {
       decidedBy
     }
   });
+  invalidateQueueSnapshots();
+  return result;
 }
 
 async function handoffVideoCurationGate(payload = {}) {
@@ -2621,6 +2627,7 @@ async function handoffVideoCurationGate(payload = {}) {
   const candidates = await getVideoCurationCandidates(prioritySetId);
   const candidate = candidates.candidates.find(item => item.prioritySetId === prioritySetId && item.sourceFileId === sourceFileId);
   if (!candidate?.gate) throw new Error("Save the video gate before sending it to Poetry Please.");
+  if (!candidate.excerptRecordIds.length) throw new Error("At least one excerpt must be pulled before sending this video to Poetry Please.");
   const finalAssetUrl = cleanSheetWhitespace(candidate.gate.publishableAssetUrl);
   const publishableAssetMediaType = candidate.sourceMediaType === "FV"
     && driveFileId(finalAssetUrl) === candidate.sourceFileId
@@ -2657,7 +2664,7 @@ async function handoffVideoCurationGate(payload = {}) {
 async function autoAdvanceVideoCuration(prioritySetId, sourceFileId) {
   const candidates = await getVideoCurationCandidates(prioritySetId);
   const candidate = candidates.candidates.find(item => item.sourceFileId === sourceFileId);
-  if (!candidate || candidate.publicationRestricted || candidate.candidateScore < 9) return null;
+  if (!candidate || candidate.publicationRestricted || candidate.candidateScore < 9 || !candidate.excerptRecordIds.length) return null;
   const reviewerCount = new Set(candidate.ratings.map(review => (
     cleanSheetWhitespace(review.reviewerEmail).toLowerCase()
   )).filter(Boolean)).size;
@@ -2678,6 +2685,7 @@ async function autoAdvanceVideoCuration(prioritySetId, sourceFileId) {
     await syncWeaverRuntimeDb("upsert_video_curation_gate", {
       gate: { ...candidate, decision: "ready_for_poetry_please", publishableAssetUrl, decidedBy: "weaver:auto" }
     });
+    invalidateQueueSnapshots();
   }
   const handoff = await handoffVideoCurationGate({ prioritySetId, sourceFileId });
   return { status: handoff.ok ? "sent_to_poetry_please" : "already_started", ...handoff };
@@ -3246,13 +3254,13 @@ function buildPendingRecordFromSheetRow(row, index, canonicalBookAuthorMap = nul
   const noteMeta = parseIntakeMetadataFromNotes(row[8] || "");
   const bookMeta = resolvePublishingBookMeta(bookTitle, bookTitle);
 
-  if (!bookTitle || !cleanedExcerptText || excluded || !isPendingSheetReview(reviewDecision)) {
+  if ((!bookTitle && !isVideoIntake) || !cleanedExcerptText || excluded || !isPendingSheetReview(reviewDecision)) {
     return null;
   }
 
   return {
     sourceRow: SHEET_SOURCE_CONFIG.startRow + index,
-    recordId: (row[config.recordId - 1] || "").toString(),
+    recordId: cleanSheetWhitespace(row[config.recordId - 1]) || `weaver:row-${SHEET_SOURCE_CONFIG.startRow + index}`,
     intakeMode: isVideoIntake ? "video" : "book",
     intakeLabel: cleanSheetWhitespace(row[2]),
     author: resolveGraphicsAuthor(row[config.author - 1] || rawVideoAuthor, bookTitle, canonicalBookAuthorMap),
@@ -3314,6 +3322,7 @@ function buildApprovedExcerptExportRecordFromSheetRow(row, index, canonicalBookA
   const canonicalPoemTitle = cleanSheetWhitespace(row[config.validationMatchedPoemTitle - 1]) || poemTitle;
   const canonicalBookTitle = cleanSheetWhitespace(row[config.validationCanonicalBook - 1]) || bookTitle;
   const duplicateGroupId = (row[config.duplicateGroupId - 1] || "").toString();
+  if (isVideoIntake && duplicateGroupId.startsWith("video-exact:")) return null;
   const createdTimestamp = cleanSheetWhitespace(row[0]);
   const normalizedTimestamp = parseChicagoSheetTimestampToIso(createdTimestamp);
   const lineCount = excerptText
@@ -3865,7 +3874,9 @@ function buildExcerptGatheringAppendRow(payload = {}) {
 }
 
 function buildExcerptRuntimeRecord(payload = {}, { sourceRow = 0, createdAt = "" } = {}) {
-  const sourceRecordId = cleanSheetWhitespace(payload.recordId || payload.sourceRecordId);
+  const resolvedSourceRow = parseInt(sourceRow || payload.sourceRow, 10) || 0;
+  const sourceRecordId = cleanSheetWhitespace(payload.recordId) || cleanSheetWhitespace(payload.sourceRecordId)
+    || (resolvedSourceRow >= SHEET_SOURCE_CONFIG.startRow ? `weaver:row-${resolvedSourceRow}` : "");
   if (!sourceRecordId) {
     throw new Error("Excerpt runtime record requires a source record ID.");
   }
@@ -3874,7 +3885,7 @@ function buildExcerptRuntimeRecord(payload = {}, { sourceRow = 0, createdAt = ""
   return {
     sourceKind: "weaver",
     sourceRecordId,
-    sourceRow: parseInt(sourceRow || payload.sourceRow, 10) || 0,
+    sourceRow: resolvedSourceRow,
     intakeMode: mode,
     intakeLabel: mode === "video" ? "Add a quote from a video" : "Add a quote from a book",
     submittedBy: cleanSheetWhitespace(payload.email || payload.submittedBy),
@@ -3911,6 +3922,7 @@ function buildExcerptRuntimeRecord(payload = {}, { sourceRow = 0, createdAt = ""
     correctedBookTitle: cleanSheetWhitespace(payload.correctedBookTitle),
     correctedExcerptText: String(payload.correctedExcerpt || payload.correctedExcerptText || ""),
     duplicateGroupId: cleanSheetWhitespace(payload.duplicateGroupId),
+    canonicalExcerptRecordId: cleanSheetWhitespace(payload.canonicalExcerptRecordId),
     validation: payload.catalogValidation && typeof payload.catalogValidation === "object"
       ? payload.catalogValidation
       : {},
@@ -3937,7 +3949,42 @@ async function shadowExcerptRecordsToRuntime(records) {
 async function appendExcerptGatheringRow(payload = {}) {
   const sourceRecordId = cleanSheetWhitespace(payload.recordId || payload.sourceRecordId)
     || `weaver:${randomUUID()}`;
-  const normalizedPayload = { ...payload, recordId: sourceRecordId };
+  let approvedMatch = null;
+  if (cleanSheetWhitespace(payload.mode).toLowerCase() === "video") {
+    try {
+      const values = await getSourceSheetValuesCached();
+      const approvedTextExcerpts = values
+        .map((row, index) => cleanSheetWhitespace(row[2]).toLowerCase() === "add a quote from a video"
+          ? null
+          : buildApprovedExcerptExportRecordFromSheetRow(row, index))
+        .filter(Boolean);
+      approvedMatch = findApprovedTextExcerptMatch({
+        author: payload.author,
+        bookTitle: payload.bookTitle,
+        poemTitle: payload.title,
+        excerptText: payload.quote
+      }, approvedTextExcerpts);
+    } catch (error) {
+      console.warn(`Video excerpt match unavailable; leaving pull for review: ${error.message}`);
+    }
+  }
+  const normalizedPayload = {
+    ...payload,
+    recordId: sourceRecordId,
+    ...(cleanSheetWhitespace(payload.mode).toLowerCase() === "video" ? {
+      reviewDecision: "",
+      approval: "",
+      duplicateGroupId: "",
+      canonicalExcerptRecordId: "",
+      useForQi: false,
+      graphicsQi: false
+    } : {}),
+    ...(approvedMatch ? {
+      reviewDecision: "ACCEPT_SKIP_GRAPHIC",
+      duplicateGroupId: `video-exact:${approvedMatch.sourceRecordId}`,
+      canonicalExcerptRecordId: approvedMatch.sourceRecordId
+    } : {})
+  };
   const rowValues = buildExcerptGatheringAppendRow(normalizedPayload);
   const response = await appendSheetValuesServer(`'${sourceSheetName.replace(/'/g, "''")}'!A:S`, [rowValues]);
   const updatedRange = cleanSheetWhitespace(response?.updates?.updatedRange || "");
@@ -3971,6 +4018,22 @@ async function appendExcerptGatheringRow(payload = {}) {
         values: [[sourceRecordId]]
       });
     }
+    if (approvedMatch) {
+      writes.push(
+        {
+          range: `'${sourceSheetName.replace(/'/g, "''")}'!${toA1Column(config.approved)}${rowNumber}`,
+          values: [["N"]]
+        },
+        {
+          range: `'${sourceSheetName.replace(/'/g, "''")}'!${toA1Column(config.excerptReviewDecision)}${rowNumber}`,
+          values: [["ACCEPT_SKIP_GRAPHIC"]]
+        },
+        {
+          range: `'${sourceSheetName.replace(/'/g, "''")}'!${toA1Column(config.duplicateGroupId)}${rowNumber}`,
+          values: [[normalizedPayload.duplicateGroupId]]
+        }
+      );
+    }
     await batchUpdateSheetValuesServer(writes);
   }
 
@@ -3983,19 +4046,42 @@ async function appendExcerptGatheringRow(payload = {}) {
     version: `${appVersion}-service-account`,
     rowNumber,
     recordId: sourceRecordId,
+    foldedIntoExcerptRecordId: approvedMatch?.sourceRecordId || null,
     intakeMode: mode,
     updatedRange,
     runtimeDb
   };
 }
 
+function approvedVideoFileIdsFromGates(gates = []) {
+  return new Set(
+    gates
+      .filter(gate => cleanSheetWhitespace(gate.decision) === "ready_for_poetry_please")
+      .flatMap(gate => [gate.sourceFileId, gate.sourceReviewFileId])
+      .map(cleanSheetWhitespace)
+      .filter(Boolean)
+  );
+}
+
+async function getApprovedVideoFileIds() {
+  const gateResult = await syncWeaverRuntimeDb("get_video_curation_gates", {});
+  if (!gateResult?.ok) throw new Error("Video curation gates could not be loaded.");
+  return approvedVideoFileIdsFromGates(gateResult.records || []);
+}
+
+function isVideoExcerptReleased(record, approvedVideoFileIds) {
+  if (record.intakeMode !== "video") return true;
+  return Boolean(record.sourceVideoFileId && approvedVideoFileIds.has(record.sourceVideoFileId));
+}
+
 async function getPendingRecordsFromSheets() {
   return getCachedQueueSnapshot("pending-records", async () => {
     const values = await getSourceSheetValuesCached();
     const canonicalBookAuthorMap = await getCanonicalGraphicsBookAuthorMap().catch(() => new Map());
+    const approvedVideoFileIds = await getApprovedVideoFileIds();
     const records = values
       .map((row, index) => buildPendingRecordFromSheetRow(row, index, canonicalBookAuthorMap))
-      .filter(Boolean);
+      .filter(record => record && isVideoExcerptReleased(record, approvedVideoFileIds));
 
     return {
       ok: true,
@@ -4007,10 +4093,8 @@ async function getPendingRecordsFromSheets() {
 
 async function getPendingExcerptsForBookFromSheets(bookTitle) {
   const requestedKey = normalizeBookKey(bookTitle);
-  const values = await getSourceSheetValuesCached();
-  const canonicalBookAuthorMap = await getCanonicalGraphicsBookAuthorMap().catch(() => new Map());
-  const excerpts = values
-    .map((row, index) => buildPendingRecordFromSheetRow(row, index, canonicalBookAuthorMap))
+  const pending = await getPendingRecordsFromSheets();
+  const excerpts = pending.records
     .filter(record => record && normalizeBookKey(record.bookTitle) === requestedKey);
 
   const preferredBookTitle = excerpts.reduce(
@@ -4029,19 +4113,26 @@ async function getPendingExcerptsForBookFromSheets(bookTitle) {
 async function getVideoExcerptApprovalProgressFromSheets() {
   const values = await getSourceSheetValuesCached();
   const byVideoFileId = new Map();
+  const pulledTextsByVideoFileId = new Map();
   const approvedTextsByVideoFileId = new Map();
   for (const row of values) {
     if (cleanSheetWhitespace(row[2]).toLowerCase() !== "add a quote from a video") continue;
     const meta = parseIntakeMetadataFromNotes(row[8] || "");
     const sourceVideoFileId = extractGoogleDriveFileId(meta.sourceVideoUrl);
     if (!sourceVideoFileId) continue;
-    const progress = byVideoFileId.get(sourceVideoFileId) || { sourceVideoFileId, approvedCount: 0 };
+    const progress = byVideoFileId.get(sourceVideoFileId) || { sourceVideoFileId, pulledCount: 0, approvedCount: 0 };
+    const excerptText = cleanSheetWhitespace(row[12] || row[SHEET_SOURCE_CONFIG.columnMap.excerpt - 1]).toLowerCase();
+    if (excerptText && !isSheetYes(row[SHEET_SOURCE_CONFIG.columnMap.exclude - 1])) {
+      const texts = pulledTextsByVideoFileId.get(sourceVideoFileId) || new Set();
+      texts.add(excerptText);
+      pulledTextsByVideoFileId.set(sourceVideoFileId, texts);
+      progress.pulledCount = texts.size;
+    }
     const decision = getSheetExcerptReviewDecision(row).toUpperCase();
     const approved = isAcceptedExcerptReviewDecision(decision)
       || cleanSheetWhitespace(row[SHEET_SOURCE_CONFIG.columnMap.approved - 1]).toUpperCase() === "Y";
     if (approved && decision !== "REJECT" && decision !== "NEEDS_CORRECTION"
       && !isSheetYes(row[SHEET_SOURCE_CONFIG.columnMap.exclude - 1])) {
-      const excerptText = cleanSheetWhitespace(row[12] || row[SHEET_SOURCE_CONFIG.columnMap.excerpt - 1]).toLowerCase();
       if (excerptText) {
         const texts = approvedTextsByVideoFileId.get(sourceVideoFileId) || new Set();
         texts.add(excerptText);
@@ -4074,8 +4165,16 @@ async function getApprovedExcerptsExportFromSheets({ since = "" } = {}) {
   const sinceValue = cleanSheetWhitespace(since);
   const values = await getSourceSheetValuesCached();
   const canonicalBookAuthorMap = await getCanonicalGraphicsBookAuthorMap().catch(() => new Map());
+  const approvedVideoFileIds = await getApprovedVideoFileIds();
   const records = values
-    .map((row, index) => buildApprovedExcerptExportRecordFromSheetRow(row, index, canonicalBookAuthorMap))
+    .map((row, index) => {
+      const isVideoIntake = cleanSheetWhitespace(row[2]).toLowerCase() === "add a quote from a video";
+      if (isVideoIntake) {
+        const noteMeta = parseIntakeMetadataFromNotes(row[8] || "");
+        if (!approvedVideoFileIds.has(extractGoogleDriveFileId(noteMeta.sourceVideoUrl))) return null;
+      }
+      return buildApprovedExcerptExportRecordFromSheetRow(row, index, canonicalBookAuthorMap);
+    })
     .filter(Boolean)
     .filter(record => !sinceValue || cleanSheetWhitespace(record.metadata?.updatedAt) >= sinceValue);
 
@@ -6759,11 +6858,10 @@ async function saveReviewsToSheets(updates) {
     return { ok: false, error: "No updates provided." };
   }
 
-  await batchUpdateSheetValuesServer(requests);
   const enrichedUpdates = await Promise.all(validUpdates.map(enrichAcceptedExcerptUpdate));
-  const runtimeDb = await shadowExcerptRecordsToRuntime(
-    enrichedUpdates.map(update => buildExcerptRuntimeRecord(update, { sourceRow: update.sourceRow }))
-  );
+  const runtimeRecords = enrichedUpdates.map(update => buildExcerptRuntimeRecord(update, { sourceRow: update.sourceRow }));
+  await batchUpdateSheetValuesServer(requests);
+  const runtimeDb = await shadowExcerptRecordsToRuntime(runtimeRecords);
   const excerptHandoffs = await syncAcceptedExcerptHandoffs(validUpdates);
   return {
     ok: true,
@@ -6780,11 +6878,10 @@ async function saveSingleReviewToSheets(update) {
     return { ok: false, error: "Missing source row target." };
   }
 
-  await batchUpdateSheetValuesServer(requests);
   const enrichedUpdate = await enrichAcceptedExcerptUpdate(update);
-  const runtimeDb = await shadowExcerptRecordsToRuntime([
-    buildExcerptRuntimeRecord(enrichedUpdate, { sourceRow: enrichedUpdate.sourceRow })
-  ]);
+  const runtimeRecord = buildExcerptRuntimeRecord(enrichedUpdate, { sourceRow: enrichedUpdate.sourceRow });
+  await batchUpdateSheetValuesServer(requests);
+  const runtimeDb = await shadowExcerptRecordsToRuntime([runtimeRecord]);
   const excerptHandoffs = await syncAcceptedExcerptHandoffs([update]);
   return {
     ok: true,

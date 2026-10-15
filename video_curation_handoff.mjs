@@ -139,6 +139,9 @@ export function buildWeaverVideoImport(candidate, gate) {
   const sourceRecordId = `weaver:video:${sourceFileId}`;
   const sourceEvent = clean(gate?.sourceEvent) || clean(candidate?.sourceEvent);
   const sourceEventLabel = clean(gate?.sourceEventLabel) || clean(candidate?.sourceEventLabel);
+  const releaseCatalog = sourceEvent === "BPL Charm City 2026"
+    ? "BPL Charm City 2026"
+    : clean(gate?.releaseCatalog) || clean(candidate?.releaseCatalog);
   const finalAssetUrl = clean(gate?.publishableAssetUrl);
   const sourceVideoUrl = reviewSourceFileId
     ? `https://drive.google.com/file/d/${encodeURIComponent(sourceFileId)}/view`
@@ -176,7 +179,7 @@ export function buildWeaverVideoImport(candidate, gate) {
     author: clean(gate.author) || clean(candidate.author),
     title: clean(gate.poemTitle) || clean(candidate.poemTitle),
     book: clean(gate.bookTitle) || clean(candidate.bookTitle),
-    releaseCatalog: clean(gate.releaseCatalog) || clean(candidate.releaseCatalog),
+    releaseCatalog,
     eventReleaseCatalog: clean(gate.eventReleaseCatalog) || clean(candidate.eventReleaseCatalog),
     sourceEvent,
     sourceEventLabel,
@@ -199,12 +202,16 @@ export function buildWeaverVideoImport(candidate, gate) {
 export function parsePoetryPleaseVideoImport(response, body, sourceRecordId, apiUrl, expected = {}) {
   const item = (Array.isArray(body?.results) ? body.results : [])
     .find(result => clean(result?.sourceRecordId) === sourceRecordId) || {};
+  const warnings = [...new Set([
+    ...(Array.isArray(body?.warnings) ? body.warnings : []),
+    ...(Array.isArray(item.warnings) ? item.warnings : [])
+  ].map(clean).filter(Boolean))];
   const status = clean(item.status).toLowerCase();
   const canonicalVideoId = clean(item.canonicalVideoId);
   const canonicalVideoUrl = clean(item.canonicalVideoUrl);
   const reviewsReceived = Number(item.receivedReviewCount) === Number(expected.reviewCount || 0);
   const excerptLinksReceived = Number(item.receivedSelectedExcerptIdCount) === Number(expected.selectedExcerptIdCount || 0);
-  const ok = response.ok && body?.ok === true
+  const ok = response.ok && body?.ok === true && warnings.length === 0
     && ["created", "updated", "duplicate"].includes(status)
     && Boolean(canonicalVideoId && canonicalVideoUrl)
     && reviewsReceived && excerptLinksReceived;
@@ -214,10 +221,12 @@ export function parsePoetryPleaseVideoImport(response, body, sourceRecordId, api
     canonicalVideoId,
     canonicalVideoUrl: canonicalVideoUrl ? new URL(canonicalVideoUrl, apiUrl).toString() : "",
     finalAssetUrl: clean(item.finalAssetUrl),
+    warnings,
     error: ok ? "" : clean(item.error || body?.error || (
-      !reviewsReceived || !excerptLinksReceived
-        ? "Poetry Please did not confirm receipt of all reviews and excerpt links"
-        : `Poetry Please returned ${response.status}`
+      warnings.length ? `Poetry Please import warnings: ${warnings.join(", ")}`
+        : !reviewsReceived || !excerptLinksReceived
+          ? "Poetry Please did not confirm receipt of all reviews and excerpt links"
+          : `Poetry Please returned ${response.status}`
     ))
   };
 }
