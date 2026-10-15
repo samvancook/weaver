@@ -1,3 +1,4 @@
+import hashlib
 import sqlite3
 import sys
 import unittest
@@ -29,6 +30,8 @@ from weaver_runtime_db import (  # noqa: E402
     upsert_graphics_request,
 )
 from weaver_runtime_sync import (  # noqa: E402
+    FIRESTORE_REPAIR_REQUESTS_COLLECTION,
+    repair_document_id,
     reconcile_repair_request,
     sync_completions,
     sync_excerpt_handoffs,
@@ -88,8 +91,14 @@ class MemoryFirestoreLedger(FirestoreLedgerClient):
     def upsert_handoff_request(self, request):
         request_id = request["graphicsRequestId"]
         self.handoff_calls.append(request_id)
-        self.handoffs[request_id] = dict(request)
-        return dict(request)
+        record = dict(request)
+        record["isActionable"] = bool(
+            (request.get("sourcePayload") or {}).get("sourceText")
+            or request.get("contentType") == "FPI"
+            and (request.get("sourcePayload") or {}).get("assetUrl")
+        )
+        self.handoffs[request_id] = record
+        return dict(record)
 
     def get_handoff(self, graphics_request_id):
         return self.handoffs.get(graphics_request_id)
@@ -280,10 +289,23 @@ class GraphicsHandoffLedgerTest(unittest.TestCase):
             "title": "Test Poem",
             "originalContent": {"imageUrl": "https://example.com/original.png"},
         }
-        first = upsert_repair_requests(connection, {"requests": [request]})
-        job_id = first["records"][0]["pigJobId"]
-        connection.handoffs[job_id]["handoffStatus"] = "blocked"
-        connection.handoffs[job_id]["pigStatus"] = "failed"
+        job_id = "weaver:repair:" + hashlib.sha256(request["id"].encode()).hexdigest()[:32]
+        connection.handoffs[job_id] = {
+            "graphicsRequestId": job_id,
+            "handoffStatus": "blocked",
+            "pigStatus": "failed",
+            "blockedReason": "blank_request_text",
+            "isActionable": False,
+            "sourcePayload": {"sourceText": ""},
+        }
+        connection.write_raw_document(FIRESTORE_REPAIR_REQUESTS_COLLECTION, repair_document_id(request["id"]), {
+            "pigJobId": job_id,
+            "weaverRepairStatus": "waiting_on_pig",
+        })
+        blocked = upsert_repair_requests(connection, {"requests": [request]})
+        self.assertEqual(blocked["records"][0]["weaverRepairStatus"], "blocked")
+        self.assertEqual(blocked["records"][0]["pigJobId"], job_id)
+        self.assertFalse(connection.handoff_calls)
 
         enriched = {
             **request,
@@ -297,9 +319,27 @@ class GraphicsHandoffLedgerTest(unittest.TestCase):
 
         self.assertEqual(second["updatedCount"], 1)
         self.assertEqual(second["records"][0]["pigJobId"], job_id)
-        self.assertEqual(connection.handoff_calls, [job_id, job_id])
+        self.assertEqual(connection.handoff_calls, [job_id])
         self.assertEqual(connection.handoffs[job_id]["sourcePayload"]["quoteText"], "First line\nSecond line")
         self.assertEqual(connection.handoffs[job_id]["handoffStatus"], "requested")
+
+    def test_asset_only_qi_repair_is_blocked_before_creating_pig_job(self):
+        connection = MemoryFirestoreLedger()
+        request = {
+            "id": "repair-asset-only-qi",
+            "status": "requested",
+            "imageId": "original-qi",
+            "contentType": "QI",
+            "author": "Test Author",
+            "book": "Test Book",
+            "title": "Test Poem",
+            "originalContent": {"imageUrl": "https://example.com/original.png"},
+        }
+        blocked = upsert_repair_requests(connection, {"requests": [request]})
+        self.assertEqual(blocked["records"][0]["weaverRepairStatus"], "blocked")
+        self.assertIn("sourceText", blocked["records"][0]["blockedReason"])
+        self.assertFalse(blocked["acceptedForStatusSync"])
+        self.assertFalse(connection.handoff_calls)
 
     def test_repair_completion_returns_structured_replacement_identity(self):
         connection = MemoryFirestoreLedger()

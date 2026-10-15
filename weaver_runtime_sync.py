@@ -1088,7 +1088,11 @@ def upsert_repair_requests(connection, payload: dict[str, Any]) -> dict[str, Any
                 "driveLink",
                 "previewUrl",
             ))
-            source_text = repair_source_text(request)
+            pig_job_id = normalize_text(existing.get("pigJobId"))
+            existing_handoff = get_graphics_handoff(connection, pig_job_id) if pig_job_id else None
+            source_text = repair_source_text(request) or normalize_text(existing.get("sourceText"))
+            if not source_text and existing_handoff:
+                source_text = normalize_text((existing_handoff.get("sourcePayload") or {}).get("sourceText"))
             missing_fields = [
                 label for label, value in (
                     ("imageId", request.get("imageId")),
@@ -1101,27 +1105,40 @@ def upsert_repair_requests(connection, payload: dict[str, Any]) -> dict[str, Any
             ]
             if destination == "pig" and not (source_text or original_asset_link):
                 missing_fields.append("sourceTextOrAsset")
+            elif destination == "pig" and content_type == "QI" and not source_text:
+                missing_fields.append("sourceText")
             blocked_reason = (
                 f"missing_required_metadata:{','.join(missing_fields)}"
                 if missing_fields
                 else ""
             )
-            pig_job_id = normalize_text(existing.get("pigJobId"))
             handed_off_at = normalize_text(existing.get("handedOffAt"))
-            existing_handoff = get_graphics_handoff(connection, pig_job_id) if pig_job_id else None
             if destination == "pig" and not blocked_reason and (
-                not pig_job_id or normalize_text((existing_handoff or {}).get("handoffStatus")) == "blocked"
+                not existing_handoff or normalize_text(existing_handoff.get("handoffStatus")) == "blocked"
             ):
                 pig_job_id = pig_job_id or f"weaver:repair:{hashlib.sha256(repair_request_id.encode('utf-8')).hexdigest()[:32]}"
                 handoff = upsert_graphics_handoff_request(
                     connection,
-                    build_repair_handoff_request(request, repair_request_id, pig_job_id),
+                    build_repair_handoff_request({**request, "sourceText": source_text}, repair_request_id, pig_job_id),
                 )
                 pig_job_id = normalize_text(handoff.get("graphicsRequestId")) or pig_job_id
+                existing_handoff = handoff
                 handed_off_at = now
+
+            handoff_in_progress = False
+            if destination == "pig" and not blocked_reason and (
+                not existing_handoff or not existing_handoff.get("isActionable")
+            ):
+                handoff_status = normalize_text((existing_handoff or {}).get("handoffStatus"))
+                if handoff_status in {"sent_to_weaver_qc", "approved", "uploaded"}:
+                    handoff_in_progress = True
+                else:
+                    blocked_reason = normalize_text((existing_handoff or {}).get("blockedReason")) or "handoff_not_actionable"
 
             if blocked_reason:
                 repair_status = "blocked"
+            elif handoff_in_progress:
+                repair_status = "in_progress"
             elif destination == "pig":
                 repair_status = "waiting_on_pig"
             else:
