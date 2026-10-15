@@ -1,6 +1,6 @@
 import http from "node:http";
 import { spawn } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -209,6 +209,14 @@ function isAdministrativeMutationRequest(req, url) {
   if (ADMIN_MUTATION_PATHS.has(url.pathname)) return true;
   if (url.pathname === "/api/graphics/stalled-pig-recovery" && req.method === "POST") return true;
   return /^\/api\/repair-requests\/[^/]+\/retry-status$/.test(url.pathname);
+}
+
+function isPoetryPleaseNotification(req) {
+  const supplied = req.headers["x-api-key"];
+  if (!poetryPleaseApiKey || typeof supplied !== "string") return false;
+  const expectedHash = createHash("sha256").update(poetryPleaseApiKey).digest();
+  const suppliedHash = createHash("sha256").update(supplied).digest();
+  return timingSafeEqual(expectedHash, suppliedHash);
 }
 
 function adminAuthError(message, statusCode = 401) {
@@ -4728,13 +4736,17 @@ async function persistRepairStatusResponse(repairRequestId, status, response, no
   });
 }
 
-async function syncPoetryPleaseRepairRequests({ limit = 1, allowBulk = false } = {}) {
+async function syncPoetryPleaseRepairRequests({ repairRequestId = "", limit = 1, allowBulk = false } = {}) {
   const reconciliation = await reconcilePoetryPleaseRepairRequests();
-  const fetched = await fetchPoetryPleaseRepairRequests();
+  const exactId = cleanSheetWhitespace(repairRequestId);
+  const fetched = exactId
+    ? await fetchPoetryPleaseRepairRequest(exactId)
+    : await fetchPoetryPleaseRepairRequests();
+  const requests = exactId ? (fetched.request ? [fetched.request] : []) : fetched.requests;
   if (!fetched.ok) {
     return {
       ok: false,
-      fetchedCount: fetched.requests.length,
+      fetchedCount: requests.length,
       createdCount: 0,
       updatedCount: 0,
       duplicateCount: 0,
@@ -4745,14 +4757,22 @@ async function syncPoetryPleaseRepairRequests({ limit = 1, allowBulk = false } =
       reconciliation
     };
   }
+  const sourceStatus = cleanSheetWhitespace(fetched.request?.status).toLowerCase();
+  if (exactId && (
+    cleanSheetWhitespace(fetched.request?.id) !== exactId
+    || !["requested", "in_progress"].includes(sourceStatus)
+  )) {
+    return { ok: false, error: "repair_request_not_open", repairRequestId: exactId, reconciliation };
+  }
 
   const bulkEnabled = cleanSheetWhitespace(process.env.WEAVER_REPAIR_BULK_ENABLED).toLowerCase() === "true";
   const requestedLimit = Math.max(1, Math.min(Number(limit || 1), 100));
   const effectiveLimit = allowBulk && bulkEnabled ? requestedLimit : 1;
-  const selected = fetched.requests.slice(0, effectiveLimit);
+  const selected = exactId ? requests : requests.slice(0, effectiveLimit);
   const runtime = await syncWeaverRuntimeDb("upsert_repair_requests", { requests: selected });
   const statusResults = [];
   for (const accepted of (runtime.acceptedForStatusSync || [])) {
+    if (exactId && sourceStatus === "in_progress") continue;
     const note = accepted.destination === "pig"
       ? `Accepted by Weaver; waiting on P.I.G. job ${accepted.pigJobId}.`
       : "Accepted by Weaver; routed to manual review because the content type is not graphics-backed.";
@@ -4773,11 +4793,12 @@ async function syncPoetryPleaseRepairRequests({ limit = 1, allowBulk = false } =
   const statusErrorCount = statusResults.filter(result => !result.ok).length;
   return {
     ok: Boolean(runtime.ok) && statusErrorCount === 0,
-    canaryMode: !(allowBulk && bulkEnabled),
+    canaryMode: Boolean(exactId) || !(allowBulk && bulkEnabled),
     bulkEnabled,
-    fetchedCount: fetched.requests.length,
+    repairRequestId: exactId,
+    fetchedCount: requests.length,
     processedCount: selected.length,
-    deferredCount: Math.max(0, fetched.requests.length - selected.length),
+    deferredCount: Math.max(0, requests.length - selected.length),
     createdCount: Number(runtime.createdCount || 0),
     updatedCount: Number(runtime.updatedCount || 0),
     duplicateCount: Number(runtime.duplicateCount || 0),
@@ -8854,11 +8875,32 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  if (url.pathname === "/api/repair-requests/notify" && req.method === "POST") {
+    if (!isPoetryPleaseNotification(req)) {
+      return sendJson(res, 401, { ok: false, error: "invalid_api_key" });
+    }
+    try {
+      const body = JSON.parse(await readRequestBody(req) || "{}");
+      const repairRequestId = cleanSheetWhitespace(body.repairRequestId);
+      if (!repairRequestId) {
+        return sendJson(res, 400, { ok: false, error: "repair_request_id_required" });
+      }
+      const result = await syncPoetryPleaseRepairRequests({ repairRequestId });
+      return sendJson(res, result.ok ? 200 : 502, {
+        version: `${appVersion}-service-account`,
+        ...result
+      });
+    } catch (error) {
+      return sendJson(res, 500, { ok: false, error: error.message });
+    }
+  }
+
   if (url.pathname === "/api/repair-requests/sync" && req.method === "POST") {
     try {
       const body = await readRequestBody(req);
       const parsed = JSON.parse(body || "{}");
       const result = await syncPoetryPleaseRepairRequests({
+        repairRequestId: parsed.repairRequestId || "",
         limit: parsed.limit || 1,
         allowBulk: parsed.allowBulk === true
       });

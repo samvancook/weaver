@@ -4563,9 +4563,13 @@ function buildPoetryPleaseRepairPanel(records) {
       <span class="badge badge--warn">Blocked / failed ${Number(counts.blocked || 0) + Number(counts.failed || 0)}</span>
       <span class="badge badge--muted">Resolved ${Number(counts.resolved || 0)}</span>
     </div>
-    <button id="sync-poetry-please-repairs" class="button" type="button">Sync and reconcile</button>
+    <label for="poetry-please-repair-id">Repair request ID</label>
+    <input id="poetry-please-repair-id" type="text" autocomplete="off" placeholder="Paste exact request ID" />
+    <button id="sync-poetry-please-repairs" class="button" type="button">Sync selected request</button>
   `;
-  panel.querySelector("#sync-poetry-please-repairs")?.addEventListener("click", syncPoetryPleaseRepairCanary);
+  panel.querySelector("#sync-poetry-please-repairs")?.addEventListener("click", () => (
+    syncPoetryPleaseRepairCanary(panel.querySelector("#poetry-please-repair-id")?.value || "")
+  ));
   return panel;
 }
 
@@ -4611,13 +4615,18 @@ function buildPoetryPleaseRepairCard(record) {
   return card;
 }
 
-async function syncPoetryPleaseRepairCanary() {
+async function syncPoetryPleaseRepairCanary(repairRequestId) {
+  const exactId = String(repairRequestId || "").trim();
+  if (!exactId) {
+    setStatus("Enter the exact Poetry Please repair request ID before syncing.");
+    return;
+  }
   try {
-    setStatus("Syncing one Poetry Please repair canary...");
+    setStatus(`Syncing Poetry Please repair ${exactId}...`);
     const response = await adminFetch("/api/repair-requests/sync", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ limit: 1, allowBulk: false })
+      body: JSON.stringify({ repairRequestId: exactId, limit: 1, allowBulk: false })
     });
     const result = await response.json();
     if (!response.ok || !result.ok) {
