@@ -3652,6 +3652,8 @@ function updateGraphicsModuleTitle() {
   setElementForcedHidden(elements.graphicsMainHint, isOpsView);
   setElementForcedHidden(elements.graphicsFolderImportPanel, isOpsView);
   setElementForcedHidden(elements.graphicsBookPicker, isOpsHandoff);
+  setElementForcedHidden(elements.graphicsBookSelect?.closest("label"), isOpsHandoff || getSelectedGraphicsMode() === "repair_requests");
+  setElementForcedHidden(elements.loadGraphicsBooks, isOpsHandoff || getSelectedGraphicsMode() === "repair_requests");
   setElementForcedHidden(elements.graphicsQueueRowsHeader, isOpsHandoff);
   setElementForcedHidden(elements.graphicsQueueToolbarTop, isOpsHandoff);
   setElementForcedHidden(elements.graphicsList, isOpsHandoff);

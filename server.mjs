@@ -3260,7 +3260,7 @@ function buildPendingRecordFromSheetRow(row, index, canonicalBookAuthorMap = nul
 
   return {
     sourceRow: SHEET_SOURCE_CONFIG.startRow + index,
-    recordId: (row[config.recordId - 1] || "").toString(),
+    recordId: cleanSheetWhitespace(row[config.recordId - 1]) || `weaver:row-${SHEET_SOURCE_CONFIG.startRow + index}`,
     intakeMode: isVideoIntake ? "video" : "book",
     intakeLabel: cleanSheetWhitespace(row[2]),
     author: resolveGraphicsAuthor(row[config.author - 1] || rawVideoAuthor, bookTitle, canonicalBookAuthorMap),
@@ -3874,7 +3874,9 @@ function buildExcerptGatheringAppendRow(payload = {}) {
 }
 
 function buildExcerptRuntimeRecord(payload = {}, { sourceRow = 0, createdAt = "" } = {}) {
-  const sourceRecordId = cleanSheetWhitespace(payload.recordId || payload.sourceRecordId);
+  const resolvedSourceRow = parseInt(sourceRow || payload.sourceRow, 10) || 0;
+  const sourceRecordId = cleanSheetWhitespace(payload.recordId) || cleanSheetWhitespace(payload.sourceRecordId)
+    || (resolvedSourceRow >= SHEET_SOURCE_CONFIG.startRow ? `weaver:row-${resolvedSourceRow}` : "");
   if (!sourceRecordId) {
     throw new Error("Excerpt runtime record requires a source record ID.");
   }
@@ -3883,7 +3885,7 @@ function buildExcerptRuntimeRecord(payload = {}, { sourceRow = 0, createdAt = ""
   return {
     sourceKind: "weaver",
     sourceRecordId,
-    sourceRow: parseInt(sourceRow || payload.sourceRow, 10) || 0,
+    sourceRow: resolvedSourceRow,
     intakeMode: mode,
     intakeLabel: mode === "video" ? "Add a quote from a video" : "Add a quote from a book",
     submittedBy: cleanSheetWhitespace(payload.email || payload.submittedBy),
@@ -6856,11 +6858,10 @@ async function saveReviewsToSheets(updates) {
     return { ok: false, error: "No updates provided." };
   }
 
-  await batchUpdateSheetValuesServer(requests);
   const enrichedUpdates = await Promise.all(validUpdates.map(enrichAcceptedExcerptUpdate));
-  const runtimeDb = await shadowExcerptRecordsToRuntime(
-    enrichedUpdates.map(update => buildExcerptRuntimeRecord(update, { sourceRow: update.sourceRow }))
-  );
+  const runtimeRecords = enrichedUpdates.map(update => buildExcerptRuntimeRecord(update, { sourceRow: update.sourceRow }));
+  await batchUpdateSheetValuesServer(requests);
+  const runtimeDb = await shadowExcerptRecordsToRuntime(runtimeRecords);
   const excerptHandoffs = await syncAcceptedExcerptHandoffs(validUpdates);
   return {
     ok: true,
@@ -6877,11 +6878,10 @@ async function saveSingleReviewToSheets(update) {
     return { ok: false, error: "Missing source row target." };
   }
 
-  await batchUpdateSheetValuesServer(requests);
   const enrichedUpdate = await enrichAcceptedExcerptUpdate(update);
-  const runtimeDb = await shadowExcerptRecordsToRuntime([
-    buildExcerptRuntimeRecord(enrichedUpdate, { sourceRow: enrichedUpdate.sourceRow })
-  ]);
+  const runtimeRecord = buildExcerptRuntimeRecord(enrichedUpdate, { sourceRow: enrichedUpdate.sourceRow });
+  await batchUpdateSheetValuesServer(requests);
+  const runtimeDb = await shadowExcerptRecordsToRuntime([runtimeRecord]);
   const excerptHandoffs = await syncAcceptedExcerptHandoffs([update]);
   return {
     ok: true,
