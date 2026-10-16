@@ -577,6 +577,8 @@ def normalize_excerpt_record(record: dict[str, Any]) -> dict[str, Any]:
         "poemTitle": normalize_text(record.get("poemTitle") or record.get("title")),
         "bookTitle": normalize_text(record.get("bookTitle")),
         "excerptText": str(record.get("excerptText") or record.get("quote") or ""),
+        "poemKey": normalize_text(record.get("poemKey") or record.get("poem_key")),
+        "poemKeySource": normalize_text(record.get("poemKeySource") or record.get("poem_key_source")),
         "sourceEvent": normalize_text(record.get("sourceEvent") or record.get("eventName")),
         "sourceVideoUrl": normalize_text(record.get("sourceVideoUrl")),
         "sourceVideoSetId": normalize_text(record.get("sourceVideoSetId") or record.get("prioritySetId")),
@@ -627,6 +629,9 @@ def upsert_excerpt_records(connection, payload: dict[str, Any]) -> dict[str, Any
             **record,
             "createdAt": normalize_text(existing.get("createdAt")) or record["createdAt"],
         }
+        if not record["poemKey"] and existing.get("poemKey"):
+            merged["poemKey"] = existing["poemKey"]
+            merged["poemKeySource"] = existing.get("poemKeySource", "")
         written.append(connection.write_raw_document(
             FIRESTORE_EXCERPT_RECORDS_COLLECTION,
             record["sourceRecordId"],

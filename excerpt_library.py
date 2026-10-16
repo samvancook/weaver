@@ -315,6 +315,9 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
             excerpt_text TEXT NOT NULL,
             normalized_excerpt TEXT NOT NULL,
             excerpt_hash TEXT NOT NULL,
+            poem_key TEXT,
+            poem_key_source TEXT,
+            poem_key_confidence REAL,
             word_count INTEGER NOT NULL,
             character_count INTEGER NOT NULL,
             metadata_json TEXT NOT NULL,
@@ -423,6 +426,16 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
             ON e.id = l.excerpt_entry_id;
         """
     )
+    existing_columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(excerpt_entries)")
+    }
+    for column, type_name in (
+        ("poem_key", "TEXT"),
+        ("poem_key_source", "TEXT"),
+        ("poem_key_confidence", "REAL"),
+    ):
+        if column not in existing_columns:
+            connection.execute(f"ALTER TABLE excerpt_entries ADD COLUMN {column} {type_name}")
 
 
 def build_imported_excerpt(
@@ -797,6 +810,8 @@ def ingest_weaver_approved_records(
                     "excerpt_text": excerpt_text,
                     "normalized_excerpt": normalized_excerpt,
                     "excerpt_hash": excerpt_hash,
+                    "poem_key": clean_whitespace(record.get("poemKey") or record.get("poem_key")) or None,
+                    "poem_key_source": clean_whitespace(record.get("poemKeySource") or record.get("poem_key_source")) or None,
                     "word_count": len(excerpt_text.split()),
                     "character_count": len(excerpt_text),
                     "metadata_json": metadata_json,
@@ -818,6 +833,8 @@ def ingest_weaver_approved_records(
                             excerpt_text = :excerpt_text,
                             normalized_excerpt = :normalized_excerpt,
                             excerpt_hash = :excerpt_hash,
+                            poem_key = COALESCE(:poem_key, poem_key),
+                            poem_key_source = COALESCE(:poem_key_source, poem_key_source),
                             word_count = :word_count,
                             character_count = :character_count,
                             metadata_json = :metadata_json
@@ -845,6 +862,8 @@ def ingest_weaver_approved_records(
                             excerpt_text,
                             normalized_excerpt,
                             excerpt_hash,
+                            poem_key,
+                            poem_key_source,
                             word_count,
                             character_count,
                             metadata_json
@@ -861,6 +880,8 @@ def ingest_weaver_approved_records(
                             :excerpt_text,
                             :normalized_excerpt,
                             :excerpt_hash,
+                            :poem_key,
+                            :poem_key_source,
                             :word_count,
                             :character_count,
                             :metadata_json
