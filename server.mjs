@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { buildReviewerProgressExport, buildWeaverVideoImport, classifyDriveFolderPath, driveFileId, parsePoetryPleaseVideoImport, poetryPleaseVideoIdForSourceFile, reconcileVideoReviews, resolveCurrentVideoFileId } from "./video_curation_handoff.mjs";
 import { verifyProgressExportCaller } from "./weaver_progress_auth.mjs";
 import { findApprovedTextExcerptMatch } from "./video_excerpt_folding.mjs";
+import { poemKeyForExcerptText, POEM_KEY_SEED_SOURCE } from "./poem_key_seed.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -3279,6 +3280,15 @@ function buildPendingRecordFromSheetRow(row, index, canonicalBookAuthorMap = nul
   };
 }
 
+function resolveExcerptPoemKey(key, source, excerptText) {
+  const suppliedKey = cleanSheetWhitespace(key);
+  if (suppliedKey) {
+    return { poemKey: suppliedKey, poemKeySource: cleanSheetWhitespace(source) || null };
+  }
+  const seedKey = poemKeyForExcerptText(excerptText);
+  return { poemKey: seedKey, poemKeySource: seedKey ? POEM_KEY_SEED_SOURCE : null };
+}
+
 function buildApprovedExcerptExportRecordFromSheetRow(row, index, canonicalBookAuthorMap = null) {
   const config = SHEET_SOURCE_CONFIG.columnMap;
   const isVideoIntake = cleanSheetWhitespace(row[2]).toLowerCase() === "add a quote from a video";
@@ -3343,6 +3353,7 @@ function buildApprovedExcerptExportRecordFromSheetRow(row, index, canonicalBookA
     sourceKind: "weaver",
     sourceRecordId,
     sourceRow,
+    ...resolveExcerptPoemKey(null, null, excerptText),
     sourceApprovedAt: normalizedTimestamp,
     sourceUpdatedAt: normalizedTimestamp,
     sourceEvent,
@@ -5103,8 +5114,8 @@ function buildPoetryPleaseExcerptRecord(record) {
     sourceSystem: cleanSheetWhitespace(record.sourceSystem || "weaver"),
     sourceRecordId: canonicalSourceRecordId,
     sourceIntakeRecordId: intakeSourceRecordId,
-    poemKey: cleanSheetWhitespace(record.poemKey || handoffPayload.poemKey) || null,
-    poemKeySource: cleanSheetWhitespace(record.poemKeySource || handoffPayload.poemKeySource) || null,
+    ...resolveExcerptPoemKey(record.poemKey || handoffPayload.poemKey,
+      record.poemKeySource || handoffPayload.poemKeySource, excerpt),
     author: String(record.author || ""),
     bookTitle: String(record.bookTitle || ""),
     poemTitle: String(record.poemTitle || ""),
@@ -6972,8 +6983,8 @@ function buildAcceptedExcerptHandoff(update) {
     sourceSystem: "weaver",
     sourceRecordId,
     author: String(update?.author || "").trim(),
-    poemKey: cleanSheetWhitespace(update?.poemKey || update?.poem_key) || null,
-    poemKeySource: cleanSheetWhitespace(update?.poemKeySource || update?.poem_key_source) || null,
+    ...resolveExcerptPoemKey(update?.poemKey || update?.poem_key,
+      update?.poemKeySource || update?.poem_key_source, excerptText),
     bookTitle: String(update?.bookTitle || "").trim(),
     poemTitle: String(update?.poemTitle || update?.title || "").trim(),
     excerpt: excerptText,
@@ -7029,8 +7040,8 @@ function buildExcerptHandoffFromApprovedExportRecord(record) {
     sourceSystem: "weaver",
     sourceRecordId,
     author: cleanSheetWhitespace(record?.author),
-    poemKey: cleanSheetWhitespace(record?.poemKey || record?.poem_key) || null,
-    poemKeySource: cleanSheetWhitespace(record?.poemKeySource || record?.poem_key_source) || null,
+    ...resolveExcerptPoemKey(record?.poemKey || record?.poem_key,
+      record?.poemKeySource || record?.poem_key_source, excerptText),
     bookTitle: cleanSheetWhitespace(record?.bookTitle),
     poemTitle: cleanSheetWhitespace(record?.poemTitle),
     excerpt: excerptText,

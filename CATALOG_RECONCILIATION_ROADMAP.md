@@ -12,6 +12,11 @@
 
 ## Next
 
+### Shared catalog poem keys
+
+- Small slice implemented locally: backfill `excerpt_entries.poem_key` from the catalog's 2026-10-15 seed by verified unique excerpt hash; ship a compact, versioned hash-to-key snapshot so approved Weaver excerpt handoffs can include `poemKey` and `poemKeySource` without guessing from a title. Unmatched and ambiguous excerpts keep a null key. Verify a live handoff and Poetry Please readback after deployment.
+- Larger reconciliation: join existing Firestore `excerptRecords` and handoff documents to the operational excerpt database by exact source identity or verified excerpt hash, audit conflicts, and backfill only unambiguous keys. Confirm whether Poetry Please already holds corresponding keys and whether its importer persists the supplied fields. Then add a refresh path for later catalog seed releases, a live catalog lookup for new excerpts, and video-to-poem key propagation. Keep catalog row IDs out of identity joins.
+
 Open provenance issue: reconcile Weaver and Poetry Please release-catalog labels. Identify the authoritative catalog/edition field for each system and compare a small set of exact book identities before changing labels. Do not overwrite book metadata or infer a catalog from a repair request, queue position, or display text.
 
 1. Done for the live Poetry Please Content Library view: use the current signed-in Chrome admin tab to search both names. The new tab was accessible; 137 canonical-name results and zero old-title/shortener results were found. No in-place rename is indicated by this view. Keep the code-only old-title compatibility alias until source inputs and external handoffs no longer send the old title. The Content Library search is not a raw Firestore scan, so do not generalize the zero-match result to every possible internal collection.
