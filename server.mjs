@@ -4653,13 +4653,18 @@ async function checkRepairReplacementAvailability(assetLink) {
   }
 }
 
-async function reconcilePoetryPleaseRepairRequests({ limit = 100 } = {}) {
-  const listed = await syncWeaverRuntimeDb("list_repair_requests", { limit: Math.min(Number(limit || 100), 500) });
-  const candidates = (listed.records || []).filter(record => [
-    "returned",
-    "returned_pending_sync",
-    "resolved"
-  ].includes(cleanSheetWhitespace(record.weaverRepairStatus).toLowerCase()));
+async function reconcilePoetryPleaseRepairRequests({ limit = 100, repairRequestId = "" } = {}) {
+  const exactId = cleanSheetWhitespace(repairRequestId);
+  const listed = await syncWeaverRuntimeDb("list_repair_requests", {
+    limit: exactId ? 500 : Math.min(Number(limit || 100), 500)
+  });
+  const candidates = (listed.records || []).filter(record => (
+    (!exactId || cleanSheetWhitespace(record.poetryPleaseRepairRequestId) === exactId)
+    && (exactId || ["returned", "returned_pending_sync", "resolved"].includes(
+      cleanSheetWhitespace(record.weaverRepairStatus).toLowerCase()
+    ) || (cleanSheetWhitespace(record.repairDestination) === "weaver_review"
+      && cleanSheetWhitespace(record.weaverRepairStatus).toLowerCase() === "in_progress"))
+  ));
   const report = {
     checkedCount: 0,
     resolvedCount: 0,
@@ -4670,6 +4675,7 @@ async function reconcilePoetryPleaseRepairRequests({ limit = 100 } = {}) {
     poetryPleaseAcceptedWeaverNotResolved: [],
     weaverResolvedPoetryPleasePending: [],
     replacementAssetUnavailable: [],
+    results: [],
     errors: []
   };
 
@@ -4711,6 +4717,13 @@ async function reconcilePoetryPleaseRepairRequests({ limit = 100 } = {}) {
       });
       if (!reconciled.ok) throw new Error(reconciled.error || "repair_reconciliation_failed");
       report.checkedCount += 1;
+      report.results.push({
+        repairRequestId,
+        transition: reconciled.transition,
+        weaverRepairStatus: reconciled.record?.weaverRepairStatus || "",
+        poetryPleaseStatus: cleanSheetWhitespace(poetryPleaseRequest.status),
+        resolutionKind: reconciled.record?.resolutionKind || ""
+      });
       if (reconciled.transition === "resolved") report.resolvedCount += 1;
       else if (reconciled.transition === "reopened") report.reopenedCount += 1;
       else report.unchangedCount += 1;
@@ -4750,8 +4763,8 @@ async function persistRepairStatusResponse(repairRequestId, status, response, no
 }
 
 async function syncPoetryPleaseRepairRequests({ repairRequestId = "", limit = 1, allowBulk = false } = {}) {
-  const reconciliation = await reconcilePoetryPleaseRepairRequests();
   const exactId = cleanSheetWhitespace(repairRequestId);
+  const reconciliation = await reconcilePoetryPleaseRepairRequests({ repairRequestId: exactId });
   const fetched = exactId
     ? await fetchPoetryPleaseRepairRequest(exactId)
     : await fetchPoetryPleaseRepairRequests();
@@ -4775,6 +4788,10 @@ async function syncPoetryPleaseRepairRequests({ repairRequestId = "", limit = 1,
     cleanSheetWhitespace(fetched.request?.id) !== exactId
     || !["requested", "in_progress"].includes(sourceStatus)
   )) {
+    const receipt = (reconciliation.results || []).find(item => item.repairRequestId === exactId);
+    if (reconciliation.ok && receipt && cleanSheetWhitespace(fetched.request?.id) === exactId) {
+      return { ok: true, repairRequestId: exactId, disposition: "reconciled", receipt, reconciliation };
+    }
     return { ok: false, error: "repair_request_not_open", repairRequestId: exactId, reconciliation };
   }
 
