@@ -16,6 +16,7 @@ data/excerpt_library.db-wal
 # Keep Docker build context focused on runtime inputs.
 data/*
 !data/book_link_overrides.json
+!data/catalog_poem_key_seed_2026-10-15.json
 !data/excerpt_library_qi_status.db
 !data/excerpt_library_runtime.db
 !data/formal_catalog.db

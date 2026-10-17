@@ -13,6 +13,7 @@
 !weaver_progress_auth.mjs
 !video_curation_handoff.mjs
 !video_excerpt_folding.mjs
+!poem_key_seed.mjs
 !catalog_validate.py
 !catalog_poem_text.py
 !excerpt_library.py
@@ -28,6 +29,7 @@
 !data/
 data/*
 !data/book_link_overrides.json
+!data/catalog_poem_key_seed_2026-10-15.json
 !data/excerpt_library_qi_status.db
 !data/excerpt_library_runtime.db
 !data/formal_catalog.db
