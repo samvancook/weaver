@@ -1,10 +1,34 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { runInNewContext } from "node:vm";
 
 const html = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
 const app = readFileSync(new URL("../public/app.js", import.meta.url), "utf8");
 const server = readFileSync(new URL("../server.mjs", import.meta.url), "utf8");
+
+test("graphics queue rows build without video-intake scope errors", () => {
+  const source = server.match(/function buildGraphicsRequestRecordFromQueueRow\([\s\S]*?\n}\n\nfunction buildGraphicsHandoffLedgerRequest/);
+  assert.ok(source);
+  const build = runInNewContext(`(${source[0].replace(/\n\nfunction buildGraphicsHandoffLedgerRequest$/, "")})`, {
+    cleanSheetWhitespace: value => String(value ?? "").trim(),
+    resolveGraphicsAuthor: value => value,
+    parseIntakeMetadataFromNotes: () => ({ curationRating: "like", curationLegacyScore: 8, curationNotes: "Strong" }),
+    buildWeaverGraphicsRequestId: () => "weaver:qi:existing",
+  });
+  const row = Array(18).fill("");
+  row[0] = "Leslie Kaup";
+  row[1] = "Selected poem";
+  row[2] = "Book";
+  row[3] = "Verified quote";
+  row[8] = "submission-aNT7jMmPfZ7eoyPxOsYr";
+  const record = build(row, 0);
+  assert.equal(record.graphicsRequestId, "weaver:qi:existing");
+  assert.equal(record.quoteText, "Verified quote");
+  assert.equal(record.curationRating, "like");
+  assert.equal(record.curationLegacyScore, 8);
+  assert.equal(record.curationNotes, "Strong");
+});
 
 test("priority video progress and scoreboard remain visible from the gear", () => {
   assert.match(html, /<details[^>]*id="video-progress-management"[^>]*\bopen\b/);
