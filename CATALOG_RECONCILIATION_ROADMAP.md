@@ -12,6 +12,12 @@
 
 ## Next
 
+### Shared catalog poem keys
+
+- Small slice implemented locally: backfill `excerpt_entries.poem_key` from the catalog's 2026-10-15 seed by verified unique excerpt hash; ship a compact, versioned hash-to-key snapshot so approved Weaver excerpt handoffs can include `poemKey` and `poemKeySource` without guessing from a title. Unmatched and ambiguous excerpts keep a null key. Verify a live handoff and Poetry Please readback after deployment.
+- Firestore `excerptRecords` backfill executed 2026-10-16 against `button-weaver-internal/weaverledger`: 848 records scanned; 10 matched a verified catalog key and were conditionally patched with only `poemKey` and `poemKeySource`, then individually read back. Final dry run: 0 planned, 10 already keyed, 4 missing excerpt text, 834 without a verified key. No conflicting key or failed write was observed. Reusable dry-run-first command: `backfill_firestore_excerpt_poem_keys.py` using the operational excerpt database path; use the documented named Weaver deployer credential, not user ADC.
+- Larger reconciliation still needed for the 834: 803 are video-linked and 660 have no book title, so many cannot be tied to a catalog poem from the current seed. Confirm whether Poetry Please exposes an exact `sourceRecordId` to `poemKey` mapping for these records, audit conflicts against Weaver text/source identity, and backfill only unambiguous keys. Also audit existing handoff documents, confirm Poetry Please's importer persists newly supplied keys, add a refresh path for later catalog seed releases, a live catalog lookup for new excerpts, and video-to-poem key propagation. Keep catalog row IDs out of identity joins and do not infer keys from titles.
+
 Open provenance issue: reconcile Weaver and Poetry Please release-catalog labels. Identify the authoritative catalog/edition field for each system and compare a small set of exact book identities before changing labels. Do not overwrite book metadata or infer a catalog from a repair request, queue position, or display text.
 
 1. Done for the live Poetry Please Content Library view: use the current signed-in Chrome admin tab to search both names. The new tab was accessible; 137 canonical-name results and zero old-title/shortener results were found. No in-place rename is indicated by this view. Keep the code-only old-title compatibility alias until source inputs and external handoffs no longer send the old title. The Content Library search is not a raw Firestore scan, so do not generalize the zero-match result to every possible internal collection.
