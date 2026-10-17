@@ -137,6 +137,47 @@ class RepairIdentityFirestoreLedger(FirestoreLedgerClient):
 
 
 class GraphicsHandoffLedgerTest(unittest.TestCase):
+    def test_repair_text_patch_keeps_existing_identity_and_nested_payload(self):
+        connection = RepairIdentityFirestoreLedger()
+        request_id = "weaver:repair:existing"
+        connection.records[request_id] = normalize_handoff_record({
+            "graphicsRequestId": request_id,
+            "contentType": "QI",
+            "imageType": "QI",
+            "handoffStatus": "requested",
+            "pigStatus": "not_started",
+            "qcStatus": "needs_revision",
+            "sourcePayload": {
+                "quote_text": "Old quote",
+                "source_payload": {
+                    "repairRequestId": "existing-repair",
+                    "quoteText": "Old quote",
+                    "originalContentId": "original-content",
+                },
+            },
+            "pigPayload": {"repairRequestId": "existing-repair"},
+            "qcPayload": {"qcNote": "Keep the same design"},
+        })
+        existing = connection.records[request_id]
+
+        written = connection.update_handoff(request_id, {
+            "sourcePayload": {
+                "quote_text": "Correct quote",
+                "sourceText": "Correct quote",
+                "source_payload": {"quoteText": "Correct quote", "sourceText": "Correct quote"},
+            },
+            "pigPayload": existing["pigPayload"],
+            "qcPayload": existing["qcPayload"],
+        })
+
+        self.assertEqual(written["graphicsRequestId"], request_id)
+        self.assertEqual(written["handoffStatus"], "requested")
+        self.assertEqual(written["qcStatus"], "needs_revision")
+        self.assertEqual(written["sourcePayload"]["quote_text"], "Correct quote")
+        self.assertEqual(written["sourcePayload"]["source_payload"]["quoteText"], "Correct quote")
+        self.assertEqual(written["sourcePayload"]["source_payload"]["originalContentId"], "original-content")
+        self.assertEqual(written["pigPayload"], {"repairRequestId": "existing-repair"})
+
     def test_firestore_status_patch_preserves_durable_asset_and_project_identity(self):
         connection = RepairIdentityFirestoreLedger()
         request_id = "weaver:qi:durable-identity"
