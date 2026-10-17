@@ -1612,6 +1612,15 @@ class FirestoreLedgerClient:
             raise KeyError(f"Unknown graphicsRequestId: {graphics_request_id}")
 
         now = utc_now_iso()
+        source_payload = existing.get("sourcePayload") or {}
+        source_update = update.get("sourcePayload")
+        if isinstance(source_update, dict):
+            source_payload = {**source_payload, **source_update}
+            if isinstance(source_update.get("source_payload"), dict):
+                source_payload["source_payload"] = {
+                    **(existing.get("sourcePayload", {}).get("source_payload") or {}),
+                    **source_update["source_payload"],
+                }
         handoff_status = normalize_enum(update.get("handoffStatus"), HANDOFF_STATUSES, existing["handoffStatus"])
         pig_status = normalize_enum(update.get("pigStatus"), PIG_STATUSES, existing["pigStatus"])
         qc_status = normalize_enum(update.get("qcStatus"), QC_STATUSES, existing["qcStatus"])
@@ -1684,6 +1693,7 @@ class FirestoreLedgerClient:
             "requestedChanges": str(update.get("requestedChanges") or existing.get("requestedChanges") or ""),
             "errorMessage": str(update.get("errorMessage") or existing["errorMessage"] or ""),
             "blockedReason": str(update.get("blockedReason") or existing["blockedReason"] or ""),
+            "sourcePayload": source_payload,
             "pigPayload": update.get("pigPayload") or update,
             "qcPayload": update.get("qcPayload") or update,
             "updatedAt": now,
