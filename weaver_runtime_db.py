@@ -804,6 +804,10 @@ def normalize_handoff_record(record: dict[str, Any]) -> dict[str, Any]:
 
     source_payload = normalized["sourcePayload"]
     nested_source = extract_nested_payload(source_payload)
+    repair_request_id = extract_handoff_value(source_payload, "repairRequestId")
+    if graphics_request_id.startswith("weaver:repair:") and repair_request_id:
+        normalized["sourceSystem"] = "poetry_please_repair"
+        normalized["repairRequestId"] = repair_request_id
     qc_payload = normalized["qcPayload"]
     pig_payload = normalized["pigPayload"]
     payload_sources = [
@@ -1021,6 +1025,9 @@ def queue_card_record(record: dict[str, Any]) -> dict[str, Any]:
     content_type = normalize_content_type(record.get("contentType") or record.get("imageType"))
     is_rework = str(record.get("nextAction") or "").strip().lower() == "rework"
     source_payload = record.get("sourcePayload") if isinstance(record.get("sourcePayload"), dict) else {}
+    nested_source = extract_nested_payload(source_payload)
+    def repair_value(key: str) -> Any:
+        return source_payload.get(key) or nested_source.get(key) or ""
     return {
         "graphicsRequestId": record.get("graphicsRequestId") or "",
         "queueView": record.get("queueView") or "",
@@ -1036,19 +1043,19 @@ def queue_card_record(record: dict[str, Any]) -> dict[str, Any]:
         "reworkLane": content_type if is_rework else "",
         "sourceSystem": record.get("sourceSystem") or "",
         "sourceStatus": record.get("sourceStatus") or "",
-        "repairRequestId": source_payload.get("repairRequestId") or "",
-        "sourceFlagId": source_payload.get("sourceFlagId") or "",
-        "originalContentId": source_payload.get("originalContentId") or "",
-        "originalDocId": source_payload.get("originalDocId") or "",
-        "originalCollection": source_payload.get("originalCollection") or "",
-        "releaseCatalog": source_payload.get("releaseCatalog") or "",
-        "bookShortener": source_payload.get("bookShortener") or "",
-        "issueReason": source_payload.get("issueReason") or "",
-        "repairInstructions": source_payload.get("requestNote") or source_payload.get("requestedChanges") or "",
-        "originalAssetLink": source_payload.get("previousAssetUrl") or source_payload.get("assetUrl") or "",
-        "originalContent": source_payload.get("originalContent") or {},
-        "existingPigHistory": source_payload.get("existingPigHistory") or {},
-        "existingWeaverHistory": source_payload.get("existingWeaverHistory") or {},
+        "repairRequestId": repair_value("repairRequestId"),
+        "sourceFlagId": repair_value("sourceFlagId"),
+        "originalContentId": repair_value("originalContentId"),
+        "originalDocId": repair_value("originalDocId"),
+        "originalCollection": repair_value("originalCollection"),
+        "releaseCatalog": repair_value("releaseCatalog"),
+        "bookShortener": repair_value("bookShortener"),
+        "issueReason": repair_value("issueReason"),
+        "repairInstructions": repair_value("requestNote") or repair_value("requestedChanges"),
+        "originalAssetLink": repair_value("previousAssetUrl") or repair_value("assetUrl"),
+        "originalContent": repair_value("originalContent") or {},
+        "existingPigHistory": repair_value("existingPigHistory") or {},
+        "existingWeaverHistory": repair_value("existingWeaverHistory") or {},
         "sourceCompletionId": record.get("sourceCompletionId") or "",
         "revisionOf": record.get("revisionOf") or "",
         "originalGraphicsRequestId": record.get("originalGraphicsRequestId") or "",
