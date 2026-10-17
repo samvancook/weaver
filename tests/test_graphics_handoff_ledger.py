@@ -161,6 +161,7 @@ class GraphicsHandoffLedgerTest(unittest.TestCase):
         existing = connection.records[request_id]
 
         written = connection.update_handoff(request_id, {
+            "quoteText": "Correct quote",
             "sourcePayload": {
                 "quote_text": "Correct quote",
                 "sourceText": "Correct quote",
@@ -173,6 +174,8 @@ class GraphicsHandoffLedgerTest(unittest.TestCase):
         self.assertEqual(written["graphicsRequestId"], request_id)
         self.assertEqual(written["handoffStatus"], "requested")
         self.assertEqual(written["qcStatus"], "needs_revision")
+        self.assertEqual(written["quoteText"], "Correct quote")
+        self.assertEqual(written["text"], "Correct quote")
         self.assertEqual(written["sourcePayload"]["quote_text"], "Correct quote")
         self.assertEqual(written["sourcePayload"]["source_payload"]["quoteText"], "Correct quote")
         self.assertEqual(written["sourcePayload"]["source_payload"]["originalContentId"], "original-content")

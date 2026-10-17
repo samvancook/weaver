@@ -1646,6 +1646,8 @@ class FirestoreLedgerClient:
             "originalGraphicsRequestId": str(update.get("originalGraphicsRequestId") or existing.get("originalGraphicsRequestId") or ""),
             "reviewStatus": str(update.get("reviewStatus") or existing.get("reviewStatus") or ""),
             "ocrText": str(update.get("ocrText") or existing.get("ocrText") or ""),
+            "quoteText": str(update.get("quoteText") or existing.get("quoteText") or ""),
+            "text": str(update.get("text") or update.get("quoteText") or existing.get("text") or ""),
             "pigStatus": pig_status,
             "handoffStatus": handoff_status,
             "qcStatus": qc_status,
