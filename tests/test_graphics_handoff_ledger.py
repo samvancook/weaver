@@ -278,6 +278,31 @@ class GraphicsHandoffLedgerTest(unittest.TestCase):
         self.assertEqual(written["canonicalContentId"], "REPAIR:repair-canary-stable")
         self.assertEqual(connection.canonical_query_count, 0)
 
+    def test_nested_repair_payload_remains_visible_in_queue_card(self):
+        record = normalize_handoff_record({
+            "graphicsRequestId": "weaver:repair:florence",
+            "sourceSystem": "weaver",
+            "contentType": "QI",
+            "handoffStatus": "requested",
+            "pigStatus": "not_started",
+            "qcStatus": "needs_revision",
+            "quoteText": "Verified excerpt",
+            "sourcePayload": {"source_payload": {
+                "repairRequestId": "repair-florence",
+                "sourceFlagId": "flag-florence",
+                "originalContentId": "original-florence",
+                "issueReason": "Missing text",
+            }},
+        })
+        card = queue_card_record(record)
+        self.assertEqual(card["sourceSystem"], "poetry_please_repair")
+        self.assertEqual(card["repairRequestId"], "repair-florence")
+        self.assertEqual(card["sourceFlagId"], "flag-florence")
+        self.assertEqual(card["originalContentId"], "original-florence")
+        self.assertEqual(card["issueReason"], "Missing text")
+        self.assertEqual(card["graphicsRequestId"], "weaver:repair:florence")
+        self.assertTrue(card["isActionable"])
+
     def test_poetry_please_repair_ingest_is_idempotent_and_routes_by_type(self):
         connection = MemoryFirestoreLedger()
         qi_request = {
