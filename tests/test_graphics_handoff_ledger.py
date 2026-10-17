@@ -421,6 +421,49 @@ class GraphicsHandoffLedgerTest(unittest.TestCase):
         self.assertEqual(first["record"]["resolvedAt"], "2026-08-03T12:00:00Z")
         self.assertEqual(second["transition"], "none")
 
+    def test_source_corrected_manual_repair_resolves_without_return_acceptance(self):
+        connection = MemoryFirestoreLedger()
+        request = {
+            "id": "repair-source-corrected-1",
+            "status": "requested",
+            "action": "recreate",
+            "sourceFlagId": "flag-source-corrected-1",
+            "imageId": "original-source-corrected-1",
+            "contentType": "FP",
+            "author": "Test Author",
+            "book": "Test Book",
+            "title": "Test Poem",
+        }
+        imported = upsert_repair_requests(connection, {"requests": [request]})
+        self.assertEqual(imported["records"][0]["pigJobId"], "")
+        corrected = {
+            "id": request["id"],
+            "status": "resolved",
+            "statusNote": "Source text corrected from the published Catalog.",
+            "replacementAssetId": "",
+            "replacementAssetLink": "",
+        }
+        first = reconcile_repair_request(connection, {
+            "repairRequestId": request["id"],
+            "poetryPleaseRequest": corrected,
+            "replacementAssetAvailable": False,
+        })
+        second = reconcile_repair_request(connection, {
+            "repairRequestId": request["id"],
+            "poetryPleaseRequest": corrected,
+            "replacementAssetAvailable": False,
+        })
+
+        self.assertEqual(first["transition"], "resolved")
+        self.assertEqual(first["record"]["resolutionKind"], "source_corrected")
+        self.assertEqual(first["record"]["weaverRepairStatus"], "resolved")
+        self.assertEqual(first["record"].get("returnReviewStatus", ""), "")
+        self.assertFalse(first["report"]["replacementAssetUnavailable"])
+        self.assertFalse(first["report"]["poetryPleaseAcceptedWeaverNotResolved"])
+        self.assertEqual(second["transition"], "none")
+        self.assertFalse(second["report"]["weaverResolvedPoetryPleasePending"])
+        self.assertEqual(connection.handoffs, {})
+
     def test_returned_repair_records_pending_review_once(self):
         connection = MemoryFirestoreLedger()
         request = {

@@ -1347,7 +1347,14 @@ def reconcile_repair_request(connection, payload: dict[str, Any]) -> dict[str, A
     replacement_asset_link = normalize_text(
         poetry_please_request.get("replacementAssetLink") or existing.get("replacementAssetLink")
     )
-    accepted = review_status == "accepted" or poetry_please_status == "resolved"
+    source_only_resolved = bool(
+        poetry_please_status == "resolved"
+        and normalize_text(existing.get("repairDestination")) == "weaver_review"
+        and not review_status
+        and not replacement_asset_id
+        and not replacement_asset_link
+    )
+    accepted = review_status == "accepted" or (poetry_please_status == "resolved" and not source_only_resolved)
     rejected = review_status == "rejected"
     returned = poetry_please_status == "returned" or local_status in {"returned", "returned_pending_sync"}
     report = {
@@ -1356,13 +1363,31 @@ def reconcile_repair_request(connection, payload: dict[str, Any]) -> dict[str, A
         ),
         "poetryPleaseAcceptedWeaverNotResolved": bool(accepted and local_status != "resolved"),
         "weaverResolvedPoetryPleasePending": bool(
-            local_status == "resolved" and not accepted
+            local_status == "resolved" and poetry_please_status != "resolved" and not accepted
         ),
-        "replacementAssetUnavailable": payload.get("replacementAssetAvailable") is False,
+        "replacementAssetUnavailable": bool(
+            replacement_asset_link and payload.get("replacementAssetAvailable") is False
+        ),
     }
 
     transition = "none"
-    if accepted and local_status != "resolved":
+    if source_only_resolved and local_status != "resolved":
+        result = update_repair_request(connection, {
+            "repairRequestId": repair_request_id,
+            "update": {
+                "weaverRepairStatus": "resolved",
+                "poetryPleaseStatus": "resolved",
+                "resolutionKind": "source_corrected",
+                "resolvedAt": now,
+                "retryable": False,
+                "lastError": "",
+                "latestPoetryPleaseResponse": poetry_please_request,
+                "historyEvent": "poetry_please_source_corrected",
+                "historyNote": normalize_text(poetry_please_request.get("statusNote")),
+            },
+        })
+        transition = "resolved"
+    elif accepted and local_status != "resolved":
         result = update_repair_request(connection, {
             "repairRequestId": repair_request_id,
             "update": {
