@@ -13,6 +13,7 @@ COPY server.mjs ./server.mjs
 COPY weaver_progress_auth.mjs ./weaver_progress_auth.mjs
 COPY video_curation_handoff.mjs ./video_curation_handoff.mjs
 COPY video_excerpt_folding.mjs ./video_excerpt_folding.mjs
+COPY poem_key_seed.mjs ./poem_key_seed.mjs
 COPY catalog_validate.py ./catalog_validate.py
 COPY catalog_poem_text.py ./catalog_poem_text.py
 COPY excerpt_library.py ./excerpt_library.py
