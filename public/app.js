@@ -4181,9 +4181,13 @@ function buildPoetryPleaseRepairPanel(records) {
       <span class="badge badge--warn">Blocked / failed ${Number(counts.blocked || 0) + Number(counts.failed || 0)}</span>
       <span class="badge badge--muted">Resolved ${Number(counts.resolved || 0)}</span>
     </div>
+    <label for="repair-request-id">Repair request ID</label>
+    <input id="repair-request-id" type="text" autocomplete="off" placeholder="Optional: sync one exact request">
     <button id="sync-poetry-please-repairs" class="button" type="button">Sync and reconcile</button>
   `;
-  panel.querySelector("#sync-poetry-please-repairs")?.addEventListener("click", syncPoetryPleaseRepairCanary);
+  panel.querySelector("#sync-poetry-please-repairs")?.addEventListener("click", () => (
+    syncPoetryPleaseRepairCanary(panel.querySelector("#repair-request-id")?.value.trim() || "")
+  ));
   return panel;
 }
 
@@ -4229,13 +4233,13 @@ function buildPoetryPleaseRepairCard(record) {
   return card;
 }
 
-async function syncPoetryPleaseRepairCanary() {
+async function syncPoetryPleaseRepairCanary(repairRequestId = "") {
   try {
-    setStatus("Syncing one Poetry Please repair canary...");
+    setStatus(repairRequestId ? `Syncing Poetry Please repair ${repairRequestId}...` : "Syncing one Poetry Please repair canary...");
     const response = await adminFetch("/api/repair-requests/sync", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ limit: 1, allowBulk: false })
+      body: JSON.stringify({ limit: 1, allowBulk: false, ...(repairRequestId ? { repairRequestId } : {}) })
     });
     const result = await response.json();
     if (!response.ok || !result.ok) {

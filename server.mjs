@@ -1,6 +1,6 @@
 import http from "node:http";
 import { spawn } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -4268,13 +4268,18 @@ async function persistRepairStatusResponse(repairRequestId, status, response, no
   });
 }
 
-async function syncPoetryPleaseRepairRequests({ limit = 1, allowBulk = false } = {}) {
-  const reconciliation = await reconcilePoetryPleaseRepairRequests();
-  const fetched = await fetchPoetryPleaseRepairRequests();
+async function syncPoetryPleaseRepairRequests({ limit = 1, allowBulk = false, repairRequestId = "" } = {}) {
+  const exactId = cleanSheetWhitespace(repairRequestId);
+  const reconciliation = exactId
+    ? { ok: true, skipped: "exact_repair_sync" }
+    : await reconcilePoetryPleaseRepairRequests();
+  const fetched = exactId
+    ? await fetchPoetryPleaseRepairRequest(exactId)
+    : await fetchPoetryPleaseRepairRequests();
   if (!fetched.ok) {
     return {
       ok: false,
-      fetchedCount: fetched.requests.length,
+      fetchedCount: exactId ? Number(Boolean(fetched.request?.id)) : fetched.requests.length,
       createdCount: 0,
       updatedCount: 0,
       duplicateCount: 0,
@@ -4289,7 +4294,7 @@ async function syncPoetryPleaseRepairRequests({ limit = 1, allowBulk = false } =
   const bulkEnabled = cleanSheetWhitespace(process.env.WEAVER_REPAIR_BULK_ENABLED).toLowerCase() === "true";
   const requestedLimit = Math.max(1, Math.min(Number(limit || 1), 100));
   const effectiveLimit = allowBulk && bulkEnabled ? requestedLimit : 1;
-  const selected = fetched.requests.slice(0, effectiveLimit);
+  const selected = exactId ? [fetched.request] : fetched.requests.slice(0, effectiveLimit);
   const runtime = await syncWeaverRuntimeDb("upsert_repair_requests", { requests: selected });
   const statusResults = [];
   for (const accepted of (runtime.acceptedForStatusSync || [])) {
@@ -4313,11 +4318,12 @@ async function syncPoetryPleaseRepairRequests({ limit = 1, allowBulk = false } =
   const statusErrorCount = statusResults.filter(result => !result.ok).length;
   return {
     ok: Boolean(runtime.ok) && statusErrorCount === 0,
+    ...(exactId ? { repairRequestId: exactId } : {}),
     canaryMode: !(allowBulk && bulkEnabled),
     bulkEnabled,
-    fetchedCount: fetched.requests.length,
+    fetchedCount: exactId ? 1 : fetched.requests.length,
     processedCount: selected.length,
-    deferredCount: Math.max(0, fetched.requests.length - selected.length),
+    deferredCount: exactId ? 0 : Math.max(0, fetched.requests.length - selected.length),
     createdCount: Number(runtime.createdCount || 0),
     updatedCount: Number(runtime.updatedCount || 0),
     duplicateCount: Number(runtime.duplicateCount || 0),
@@ -8309,9 +8315,31 @@ const server = http.createServer(async (req, res) => {
       const parsed = JSON.parse(body || "{}");
       const result = await syncPoetryPleaseRepairRequests({
         limit: parsed.limit || 1,
-        allowBulk: parsed.allowBulk === true
+        allowBulk: parsed.allowBulk === true,
+        repairRequestId: parsed.repairRequestId
       });
       return sendJson(res, result.ok ? 200 : 502, {
+        version: `${appVersion}-service-account`,
+        ...result
+      });
+    } catch (error) {
+      return sendJson(res, 500, { ok: false, error: error.message });
+    }
+  }
+
+  if (url.pathname === "/api/repair-requests/notify" && req.method === "POST") {
+    const suppliedKey = req.headers["x-api-key"];
+    const actualKey = typeof suppliedKey === "string" ? suppliedKey : "";
+    const expectedKey = poetryPleaseApiKey || "";
+    const authorized = Boolean(expectedKey && actualKey && actualKey.length === expectedKey.length
+      && timingSafeEqual(Buffer.from(actualKey), Buffer.from(expectedKey)));
+    if (!authorized) return sendJson(res, 401, { ok: false, error: "invalid_api_key" });
+    try {
+      const parsed = JSON.parse(await readRequestBody(req) || "{}");
+      const repairRequestId = cleanSheetWhitespace(parsed.repairRequestId);
+      if (!repairRequestId) return sendJson(res, 400, { ok: false, error: "repair_request_id_required" });
+      const result = await syncPoetryPleaseRepairRequests({ repairRequestId });
+      return sendJson(res, result.ok && result.blockedCount === 0 ? 200 : 502, {
         version: `${appVersion}-service-account`,
         ...result
       });
