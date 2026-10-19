@@ -963,6 +963,31 @@ def repair_source_value(request: dict[str, Any], *keys: str) -> Any:
     return ""
 
 
+def contest_repair_context(request: dict[str, Any]) -> dict[str, str]:
+    original = request.get("originalContent")
+    if not isinstance(original, dict):
+        return {}
+    submission_id = normalize_text(original.get("sourceSubmissionId"))
+    program_id = normalize_text(original.get("sourceProgramId"))
+    source_record_id = normalize_text(original.get("sourceRecordId"))
+    source_event = normalize_text(original.get("sourceEvent"))
+    if not all((submission_id, program_id, source_event)):
+        return {}
+    if source_record_id != f"poetryplease:contest:{program_id}:{submission_id}":
+        return {}
+    if normalize_text(request.get("imageId")) != f"PP-CONTEST-QI-{submission_id}":
+        return {}
+    if normalize_text(request.get("contentType")).upper() != "QI":
+        return {}
+    return {
+        "sourceSubmissionId": submission_id,
+        "sourceProgramId": program_id,
+        "sourceRecordId": source_record_id,
+        "sourceEvent": source_event,
+        "sourceEventLabel": normalize_text(original.get("sourceEventLabel")) or source_event,
+    }
+
+
 def repair_source_text(request: dict[str, Any]) -> str:
     text = normalize_text(repair_source_value(
         request, "quoteText", "sourceText", "text", "excerpt", "fullText", "ocrText",
@@ -972,6 +997,11 @@ def repair_source_text(request: dict[str, Any]) -> str:
     original = request.get("originalContent") if isinstance(request.get("originalContent"), dict) else {}
     misc = normalize_text(original.get("misc"))
     match = re.search(r'(?:^|\s\|\s)sourceExcerpt="(.+)"\s*$', misc, re.DOTALL)
+    if match:
+        return normalize_text(match.group(1))
+    if not contest_repair_context(request):
+        return ""
+    match = re.search(r"(?:^|\s\|\s)sourceExcerpt=([\s\S]*?)(?=\s\|\s[A-Za-z][A-Za-z0-9]*=|$)", misc)
     return normalize_text(match.group(1)) if match else ""
 
 
@@ -1002,6 +1032,7 @@ def build_repair_handoff_request(
 ) -> dict[str, Any]:
     content_type = normalize_text(request.get("contentType")).upper()
     original_content = request.get("originalContent") if isinstance(request.get("originalContent"), dict) else {}
+    contest_context = contest_repair_context(request)
     source_text = repair_source_text(request)
     original_asset_link = normalize_text(repair_source_value(
         request,
@@ -1042,6 +1073,7 @@ def build_repair_handoff_request(
             "title": normalize_text(request.get("title")),
             "releaseCatalog": normalize_text(request.get("releaseCatalog")),
             "bookShortener": normalize_text(request.get("bookShortener")),
+            **contest_context,
             "quoteText": source_text,
             "sourceText": source_text,
             "previousAssetUrl": original_asset_link,
@@ -1084,6 +1116,7 @@ def upsert_repair_requests(connection, payload: dict[str, Any]) -> dict[str, Any
             content_type = normalize_text(request.get("contentType")).upper()
             destination = "pig" if content_type in PIG_REPAIR_CONTENT_TYPES else "weaver_review"
             original_content = request.get("originalContent") if isinstance(request.get("originalContent"), dict) else {}
+            contest_context = contest_repair_context(request)
             original_asset_link = normalize_text(repair_source_value(
                 request,
                 "originalAssetLink",
@@ -1103,8 +1136,8 @@ def upsert_repair_requests(connection, payload: dict[str, Any]) -> dict[str, Any
                     ("imageId", request.get("imageId")),
                     ("contentType", content_type),
                     ("author", request.get("author")),
-                    ("book", request.get("book")),
-                    ("title", request.get("title")),
+                    ("book", request.get("book") if not contest_context else "contest"),
+                    ("title", request.get("title") if not contest_context else "contest"),
                 )
                 if not normalize_text(value)
             ]
@@ -1189,6 +1222,7 @@ def upsert_repair_requests(connection, payload: dict[str, Any]) -> dict[str, Any
                 "poemTitle": normalize_text(request.get("title")),
                 "releaseCatalog": normalize_text(request.get("releaseCatalog")),
                 "bookShortener": normalize_text(request.get("bookShortener")),
+                **contest_context,
                 "issueReason": normalize_text(request.get("issueReason")),
                 "repairInstructions": normalize_text(request.get("requestNote")),
                 "originalAssetLink": original_asset_link,
