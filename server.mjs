@@ -7335,11 +7335,12 @@ async function validateCompletionEditableProjectIdentity(completion = {}) {
       || sourceRecord.contentId
       || sourceRecord.imageId,
     imageId: selectedRecord.imageId || sourceRecord.imageId,
-    quoteText: project.sourceIdentity?.normalizedText
-      || selectedRecord.quoteText
+    quoteText: selectedRecord.quoteText
       || selectedRecord.text
+      || project.controlValues?.poemText
       || sourceRecord.quoteText
       || project.poemText
+      || project.sourceIdentity?.normalizedText
   });
   const expectedRequestId = expected.graphicsRequestId;
   const projectRequestIds = [
