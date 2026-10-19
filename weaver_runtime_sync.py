@@ -963,6 +963,31 @@ def repair_source_value(request: dict[str, Any], *keys: str) -> Any:
     return ""
 
 
+def contest_repair_context(request: dict[str, Any]) -> dict[str, str]:
+    original = request.get("originalContent")
+    if not isinstance(original, dict):
+        return {}
+    submission_id = normalize_text(original.get("sourceSubmissionId"))
+    program_id = normalize_text(original.get("sourceProgramId"))
+    source_record_id = normalize_text(original.get("sourceRecordId"))
+    source_event = normalize_text(original.get("sourceEvent"))
+    if not all((submission_id, program_id, source_event)):
+        return {}
+    if source_record_id != f"poetryplease:contest:{program_id}:{submission_id}":
+        return {}
+    if normalize_text(request.get("imageId")) != f"PP-CONTEST-QI-{submission_id}":
+        return {}
+    if normalize_text(request.get("contentType")).upper() != "QI":
+        return {}
+    return {
+        "sourceSubmissionId": submission_id,
+        "sourceProgramId": program_id,
+        "sourceRecordId": source_record_id,
+        "sourceEvent": source_event,
+        "sourceEventLabel": normalize_text(original.get("sourceEventLabel")) or source_event,
+    }
+
+
 def repair_source_text(request: dict[str, Any]) -> str:
     text = normalize_text(repair_source_value(
         request, "quoteText", "sourceText", "text", "excerpt", "fullText", "ocrText",
@@ -972,6 +997,11 @@ def repair_source_text(request: dict[str, Any]) -> str:
     original = request.get("originalContent") if isinstance(request.get("originalContent"), dict) else {}
     misc = normalize_text(original.get("misc"))
     match = re.search(r'(?:^|\s\|\s)sourceExcerpt="(.+)"\s*$', misc, re.DOTALL)
+    if match:
+        return normalize_text(match.group(1))
+    if not contest_repair_context(request):
+        return ""
+    match = re.search(r"(?:^|\s\|\s)sourceExcerpt=([\s\S]*?)(?=\s\|\s[A-Za-z][A-Za-z0-9]*=|$)", misc)
     return normalize_text(match.group(1)) if match else ""
 
 
@@ -995,13 +1025,46 @@ def append_repair_history(
     return entries[-100:]
 
 
+def original_repair_editable_project(connection, request: dict[str, Any], source_text: str) -> dict[str, Any]:
+    original_content = request.get("originalContent") if isinstance(request.get("originalContent"), dict) else {}
+    misc = normalize_text(original_content.get("misc"))
+    request_match = re.search(r"(?:^|\s\|\s)weaverSourceRequestId=([^\s|]+)", misc)
+    completion_match = re.search(r"(?:^|\s\|\s)weaverSourceCompletionId=([^\s|]+)", misc)
+    if not request_match or not completion_match or not source_text:
+        return {}
+    original_id = request_match.group(1)
+    original = get_graphics_handoff(connection, original_id)
+    if not original or normalize_text(original.get("sourceCompletionId")) != completion_match.group(1):
+        return {}
+    normalize_poem = lambda value: re.sub(r"\s+", " ", normalize_text(value)).casefold()
+    if (
+        normalize_text(original.get("contentType")).upper() != normalize_text(request.get("contentType")).upper()
+        or normalize_text(original.get("author")).casefold() != normalize_text(request.get("author")).casefold()
+        or normalize_poem(original.get("quoteText") or original.get("text")) != normalize_poem(source_text)
+        or normalize_text(original.get("editableProjectValidationStatus")) != "verified"
+    ):
+        return {}
+    fields = ("pigProjectId", "editableProjectFileId", "editableProjectUrl")
+    if not all(normalize_text(original.get(field)) for field in fields):
+        return {}
+    return {
+        "originalGraphicsRequestId": original_id,
+        "revisionOf": completion_match.group(1),
+        **{field: original[field] for field in fields},
+        "editableProjectKind": normalize_text(original.get("editableProjectKind")),
+        "editableProjectSchemaVersion": original.get("editableProjectSchemaVersion") or "",
+    }
+
+
 def build_repair_handoff_request(
     request: dict[str, Any],
     repair_request_id: str,
     pig_job_id: str,
+    editable_project: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     content_type = normalize_text(request.get("contentType")).upper()
     original_content = request.get("originalContent") if isinstance(request.get("originalContent"), dict) else {}
+    contest_context = contest_repair_context(request)
     source_text = repair_source_text(request)
     original_asset_link = normalize_text(repair_source_value(
         request,
@@ -1027,6 +1090,7 @@ def build_repair_handoff_request(
         "queueView": "rework",
         "reworkReason": issue_reason or "poetry_please_flag",
         "requestedChanges": request_note or issue_reason,
+        **(editable_project or {}),
         "sourcePayload": {
             "repairRequestId": repair_request_id,
             "sourceFlagId": normalize_text(request.get("sourceFlagId")),
@@ -1042,6 +1106,7 @@ def build_repair_handoff_request(
             "title": normalize_text(request.get("title")),
             "releaseCatalog": normalize_text(request.get("releaseCatalog")),
             "bookShortener": normalize_text(request.get("bookShortener")),
+            **contest_context,
             "quoteText": source_text,
             "sourceText": source_text,
             "previousAssetUrl": original_asset_link,
@@ -1054,6 +1119,7 @@ def build_repair_handoff_request(
             "existingWeaverHistory": original_content.get("weaverHistory") or original_content.get("weaver") or {},
             "queueView": "rework",
             "nextAction": "rework",
+            **(editable_project or {}),
         },
     }
 
@@ -1084,6 +1150,7 @@ def upsert_repair_requests(connection, payload: dict[str, Any]) -> dict[str, Any
             content_type = normalize_text(request.get("contentType")).upper()
             destination = "pig" if content_type in PIG_REPAIR_CONTENT_TYPES else "weaver_review"
             original_content = request.get("originalContent") if isinstance(request.get("originalContent"), dict) else {}
+            contest_context = contest_repair_context(request)
             original_asset_link = normalize_text(repair_source_value(
                 request,
                 "originalAssetLink",
@@ -1103,8 +1170,8 @@ def upsert_repair_requests(connection, payload: dict[str, Any]) -> dict[str, Any
                     ("imageId", request.get("imageId")),
                     ("contentType", content_type),
                     ("author", request.get("author")),
-                    ("book", request.get("book")),
-                    ("title", request.get("title")),
+                    ("book", request.get("book") if not contest_context else "contest"),
+                    ("title", request.get("title") if not contest_context else "contest"),
                 )
                 if not normalize_text(value)
             ]
@@ -1117,6 +1184,10 @@ def upsert_repair_requests(connection, payload: dict[str, Any]) -> dict[str, Any
                 if missing_fields
                 else ""
             )
+            editable_project = (
+                original_repair_editable_project(connection, request, source_text)
+                if destination == "pig" and not blocked_reason else {}
+            )
             handed_off_at = normalize_text(existing.get("handedOffAt"))
             if destination == "pig" and not blocked_reason and (
                 not existing_handoff or normalize_text(existing_handoff.get("handoffStatus")) == "blocked"
@@ -1124,11 +1195,23 @@ def upsert_repair_requests(connection, payload: dict[str, Any]) -> dict[str, Any
                 pig_job_id = pig_job_id or f"weaver:repair:{hashlib.sha256(repair_request_id.encode('utf-8')).hexdigest()[:32]}"
                 handoff = upsert_graphics_handoff_request(
                     connection,
-                    build_repair_handoff_request({**request, "sourceText": source_text}, repair_request_id, pig_job_id),
+                    build_repair_handoff_request({**request, "sourceText": source_text}, repair_request_id, pig_job_id, editable_project),
                 )
                 pig_job_id = normalize_text(handoff.get("graphicsRequestId")) or pig_job_id
                 existing_handoff = handoff
                 handed_off_at = now
+            elif destination == "pig" and editable_project and existing_handoff:
+                if (
+                    normalize_text((existing_handoff.get("sourcePayload") or {}).get("repairRequestId")) == repair_request_id
+                    and normalize_text(existing_handoff.get("handoffStatus")) in {"requested", "claimed"}
+                    and not any(normalize_text(existing_handoff.get(field)) for field in (
+                        "pigProjectId", "editableProjectFileId", "editableProjectUrl",
+                    ))
+                ):
+                    existing_handoff = update_graphics_handoff(connection, pig_job_id, {
+                        **editable_project,
+                        "sourcePayload": editable_project,
+                    })
 
             handoff_in_progress = False
             if destination == "pig" and not blocked_reason and (
@@ -1189,6 +1272,7 @@ def upsert_repair_requests(connection, payload: dict[str, Any]) -> dict[str, Any
                 "poemTitle": normalize_text(request.get("title")),
                 "releaseCatalog": normalize_text(request.get("releaseCatalog")),
                 "bookShortener": normalize_text(request.get("bookShortener")),
+                **contest_context,
                 "issueReason": normalize_text(request.get("issueReason")),
                 "repairInstructions": normalize_text(request.get("requestNote")),
                 "originalAssetLink": original_asset_link,
