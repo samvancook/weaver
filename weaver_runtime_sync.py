@@ -1025,10 +1025,42 @@ def append_repair_history(
     return entries[-100:]
 
 
+def original_repair_editable_project(connection, request: dict[str, Any], source_text: str) -> dict[str, Any]:
+    original_content = request.get("originalContent") if isinstance(request.get("originalContent"), dict) else {}
+    misc = normalize_text(original_content.get("misc"))
+    request_match = re.search(r"(?:^|\s\|\s)weaverSourceRequestId=([^\s|]+)", misc)
+    completion_match = re.search(r"(?:^|\s\|\s)weaverSourceCompletionId=([^\s|]+)", misc)
+    if not request_match or not completion_match or not source_text:
+        return {}
+    original_id = request_match.group(1)
+    original = get_graphics_handoff(connection, original_id)
+    if not original or normalize_text(original.get("sourceCompletionId")) != completion_match.group(1):
+        return {}
+    normalize_poem = lambda value: re.sub(r"\s+", " ", normalize_text(value)).casefold()
+    if (
+        normalize_text(original.get("contentType")).upper() != normalize_text(request.get("contentType")).upper()
+        or normalize_text(original.get("author")).casefold() != normalize_text(request.get("author")).casefold()
+        or normalize_poem(original.get("quoteText") or original.get("text")) != normalize_poem(source_text)
+        or normalize_text(original.get("editableProjectValidationStatus")) != "verified"
+    ):
+        return {}
+    fields = ("pigProjectId", "editableProjectFileId", "editableProjectUrl")
+    if not all(normalize_text(original.get(field)) for field in fields):
+        return {}
+    return {
+        "originalGraphicsRequestId": original_id,
+        "revisionOf": completion_match.group(1),
+        **{field: original[field] for field in fields},
+        "editableProjectKind": normalize_text(original.get("editableProjectKind")),
+        "editableProjectSchemaVersion": original.get("editableProjectSchemaVersion") or "",
+    }
+
+
 def build_repair_handoff_request(
     request: dict[str, Any],
     repair_request_id: str,
     pig_job_id: str,
+    editable_project: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     content_type = normalize_text(request.get("contentType")).upper()
     original_content = request.get("originalContent") if isinstance(request.get("originalContent"), dict) else {}
@@ -1058,6 +1090,7 @@ def build_repair_handoff_request(
         "queueView": "rework",
         "reworkReason": issue_reason or "poetry_please_flag",
         "requestedChanges": request_note or issue_reason,
+        **(editable_project or {}),
         "sourcePayload": {
             "repairRequestId": repair_request_id,
             "sourceFlagId": normalize_text(request.get("sourceFlagId")),
@@ -1086,6 +1119,7 @@ def build_repair_handoff_request(
             "existingWeaverHistory": original_content.get("weaverHistory") or original_content.get("weaver") or {},
             "queueView": "rework",
             "nextAction": "rework",
+            **(editable_project or {}),
         },
     }
 
@@ -1150,6 +1184,10 @@ def upsert_repair_requests(connection, payload: dict[str, Any]) -> dict[str, Any
                 if missing_fields
                 else ""
             )
+            editable_project = (
+                original_repair_editable_project(connection, request, source_text)
+                if destination == "pig" and not blocked_reason else {}
+            )
             handed_off_at = normalize_text(existing.get("handedOffAt"))
             if destination == "pig" and not blocked_reason and (
                 not existing_handoff or normalize_text(existing_handoff.get("handoffStatus")) == "blocked"
@@ -1157,11 +1195,23 @@ def upsert_repair_requests(connection, payload: dict[str, Any]) -> dict[str, Any
                 pig_job_id = pig_job_id or f"weaver:repair:{hashlib.sha256(repair_request_id.encode('utf-8')).hexdigest()[:32]}"
                 handoff = upsert_graphics_handoff_request(
                     connection,
-                    build_repair_handoff_request({**request, "sourceText": source_text}, repair_request_id, pig_job_id),
+                    build_repair_handoff_request({**request, "sourceText": source_text}, repair_request_id, pig_job_id, editable_project),
                 )
                 pig_job_id = normalize_text(handoff.get("graphicsRequestId")) or pig_job_id
                 existing_handoff = handoff
                 handed_off_at = now
+            elif destination == "pig" and editable_project and existing_handoff:
+                if (
+                    normalize_text((existing_handoff.get("sourcePayload") or {}).get("repairRequestId")) == repair_request_id
+                    and normalize_text(existing_handoff.get("handoffStatus")) in {"requested", "claimed"}
+                    and not any(normalize_text(existing_handoff.get(field)) for field in (
+                        "pigProjectId", "editableProjectFileId", "editableProjectUrl",
+                    ))
+                ):
+                    existing_handoff = update_graphics_handoff(connection, pig_job_id, {
+                        **editable_project,
+                        "sourcePayload": editable_project,
+                    })
 
             handoff_in_progress = False
             if destination == "pig" and not blocked_reason and (
