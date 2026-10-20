@@ -67,6 +67,8 @@ const elements = {
   graphicsFolderImportResults: document.getElementById("graphics-folder-import-results"),
   refreshExcerptHandoffs: document.getElementById("refresh-excerpt-handoffs"),
   retryFailedExcerptHandoffs: document.getElementById("retry-failed-excerpt-handoffs"),
+  retryExcerptSourceId: document.getElementById("retry-excerpt-source-id"),
+  retryOneExcerptHandoff: document.getElementById("retry-one-excerpt-handoff"),
   excerptHandoffSummary: document.getElementById("excerpt-handoff-summary"),
   exportGraphicsSheet: document.getElementById("export-graphics-sheet"),
   submitGraphicsQc: document.getElementById("submit-graphics-qc"),
@@ -1117,8 +1119,11 @@ async function requestMergedBookRecords(sourceExcerpts) {
   return { ok: true, records };
 }
 
+let pendingBookRefreshPromise = null;
+
 function refreshBookCountsInBackground() {
-  requestReviewApi("/api/review/pending-records")
+  if (pendingBookRefreshPromise) return pendingBookRefreshPromise;
+  pendingBookRefreshPromise = requestReviewApi("/api/review/pending-records")
     .then(data => {
       if (!data.ok) return;
       const records = Array.isArray(data.records) ? data.records : [];
@@ -1126,7 +1131,11 @@ function refreshBookCountsInBackground() {
     })
     .catch(() => {
       // Background refresh is best-effort only.
+    })
+    .finally(() => {
+      pendingBookRefreshPromise = null;
     });
+  return pendingBookRefreshPromise;
 }
 
 function refreshCorrectionBooksInBackground() {
@@ -3415,6 +3424,15 @@ async function saveReviewsSequentially(changedUpdates) {
 
 async function loadBooks(options = {}) {
   const preserveSelection = options.preserveSelection !== false;
+  const reportLoaded = (summaries, version) => {
+    if (getSelectedReviewFilter() === "videos") {
+      const videos = getVisibleReviewBookSummaries();
+      const events = new Set(videos.map(video => video.event));
+      setStatus(`Loaded ${events.size} events and ${videos.length} videos. Backend ${version}.`);
+      return;
+    }
+    setStatus(`Loaded ${summaries.length} books. Backend ${version}.`, summaries.slice(0, 10));
+  };
 
   try {
     setStatus("Loading book titles...");
@@ -3435,18 +3453,12 @@ async function loadBooks(options = {}) {
     const allBookSummaries = applyPendingBookData(records, {
       preserveSelection,
     });
-    setStatus(
-      `Loaded ${allBookSummaries.length} books. Backend ${data.version || "unknown"}.`,
-      allBookSummaries.slice(0, 10)
-    );
+    reportLoaded(allBookSummaries, data.version || "unknown");
 
     loadCatalogValidation(records)
       .then(() => {
         const refreshedSummaries = applyPendingBookData(records, { preserveSelection: true });
-        setStatus(
-          `Loaded ${refreshedSummaries.length} books. Backend ${data.version || "unknown"}.`,
-          refreshedSummaries.slice(0, 10)
-        );
+        reportLoaded(refreshedSummaries, data.version || "unknown");
       })
       .catch(() => {
         // Keep the queue usable even if validation refresh fails.
@@ -4130,6 +4142,38 @@ async function retryFailedExcerptHandoffs() {
   }
 }
 
+async function retryOneExcerptHandoff() {
+  const sourceId = String(elements.retryExcerptSourceId?.value || "").trim();
+  if (!sourceId) {
+    setStatus("Enter one EXC source record ID.");
+    return;
+  }
+  const recordId = sourceId.startsWith("weaver-exc-") ? sourceId : `weaver-exc-${sourceId}`;
+  try {
+    setStatus(`Retrying ${recordId}...`);
+    const response = await adminFetch("/api/excerpts/handoffs/retry", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ recordIds: [recordId], statuses: ["failed"] })
+    });
+    const result = await response.json();
+    if (!response.ok || !result.ok) {
+      throw new Error(result.error || `EXC retry returned ${response.status}`);
+    }
+    if (Number(result.retriedCount || 0) !== 1) {
+      setStatus(`No failed EXC handoff found for ${recordId}.`);
+      return;
+    }
+    await loadExcerptHandoffs();
+    const outcome = result.poetryPlease?.results?.find(item => item.recordId === recordId);
+    setStatus(outcome?.ok
+      ? `EXC handoff sent: ${recordId} to Poetry Please item ${outcome.poetryPleaseItemId || "(ID missing)"}.`
+      : `EXC handoff failed: ${outcome?.error || result.poetryPlease?.error || "unknown error"}.`);
+  } catch (error) {
+    setStatus(`EXC handoff retry failed: ${error.message}`);
+  }
+}
+
 async function loadGraphicsRecords() {
   const mode = getSelectedGraphicsMode();
   const bookKey = elements.graphicsBookSelect?.value || "";
@@ -4258,6 +4302,12 @@ async function loadExcerpts() {
     reviewVisibleCount = getReviewBatchSize();
     reviewShowAdditionalPulls = getSelectedReviewFilter() === "videos";
     reviewPinnedRowOrder = [];
+    if (getSelectedReviewFilter() === "videos") {
+      renderCurrentExcerpts();
+      setStatus(`Loaded ${currentExcerpts.length} excerpts for "${bookTitle}".`);
+      void loadCatalogValidation(currentExcerpts);
+      return;
+    }
     await loadCatalogValidation(currentExcerpts);
     renderCurrentExcerpts();
     setStatus(`Loaded ${currentExcerpts.length} excerpts for "${bookTitle}".`);
@@ -6679,7 +6729,9 @@ async function submitReview() {
     sourceExcerpts: currentExcerpts,
     collectUpdates: collectUpdates,
     bookKey,
-    reloadRequest: () => requestMergedBookRecords(currentExcerpts),
+    reloadRequest: () => getSelectedReviewFilter() === "videos"
+      ? requestReviewApi("/api/review/pending-records")
+      : requestMergedBookRecords(currentExcerpts),
     afterSaveOptimistic: changedUpdates => {
       const savedSourceRows = new Set(changedUpdates.map(update => Number(update.sourceRow)));
       currentPendingRecords = currentPendingRecords.filter(record => !savedSourceRows.has(Number(record.sourceRow)));
@@ -6795,10 +6847,18 @@ async function submitExcerptSet({
   }
 
   const updates = collectUpdates();
-  const changedUpdates = filterChangedUpdates(updates, sourceExcerpts);
+  const changedUpdates = filterChangedUpdates(
+    updates.filter(update => normalizeDecision(update.reviewDecision)),
+    sourceExcerpts
+  );
 
   if (!changedUpdates.length) {
     setStatus("No changed decisions to submit.");
+    return;
+  }
+
+  if (changedUpdates.some(update => !Number.isInteger(update.sourceRow) || update.sourceRow < 2)) {
+    setStatus("A review row is no longer available. Click Refresh Books, then Load Excerpts before submitting.");
     return;
   }
 
@@ -6932,6 +6992,7 @@ elements.previewGraphicsFolderImport?.addEventListener("click", previewGraphicsF
 elements.applyGraphicsFolderImport?.addEventListener("click", applyGraphicsFolderImport);
 elements.refreshExcerptHandoffs?.addEventListener("click", loadExcerptHandoffs);
 elements.retryFailedExcerptHandoffs?.addEventListener("click", retryFailedExcerptHandoffs);
+elements.retryOneExcerptHandoff?.addEventListener("click", retryOneExcerptHandoff);
 elements.graphicsFolderImportResults?.addEventListener("change", event => {
   if (
     (event.target instanceof HTMLInputElement && event.target.type === "radio") ||

@@ -63,11 +63,12 @@ def get_poems(book_title: str) -> dict:
             return {"ok": False, "error": "Book not found in catalog."}
 
         poems = fetch_poems_for_book(cursor, int(book_status["canonical_book_id"]))
+        is_provisional = book_status.get("effective_status") == "provisional_source"
         titles = sorted(
             {
                 clean_title(poem["title"] or "")
                 for poem in poems
-                if is_probable_poem_title(poem["title"] or "")
+                if clean_title(poem["title"] or "") and (is_provisional or is_probable_poem_title(poem["title"] or ""))
             },
             key=str.lower,
         )
