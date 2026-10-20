@@ -1399,6 +1399,10 @@ class FirestoreLedgerClient:
         graphics_request_id = str(graphics_request_id or "").strip()
         if not graphics_request_id:
             return None
+        if graphics_request_id.startswith("weaver:repair:"):
+            repair = self.decode_document(self.request("GET", self.document_url(graphics_request_id)))
+            if repair:
+                return repair
         alias = self.get_raw_document(
             FIRESTORE_HANDOFF_ALIASES_COLLECTION,
             hashlib.sha256(graphics_request_id.encode("utf-8")).hexdigest(),

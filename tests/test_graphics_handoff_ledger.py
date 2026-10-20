@@ -3,6 +3,7 @@ import sqlite3
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -137,6 +138,21 @@ class RepairIdentityFirestoreLedger(FirestoreLedgerClient):
 
 
 class GraphicsHandoffLedgerTest(unittest.TestCase):
+    def test_repair_direct_document_wins_over_stale_original_alias(self):
+        connection = FirestoreLedgerClient("test-project")
+        repair_id = "weaver:repair:stable-canary"
+        original_id = "weaver:qi:original"
+        with (
+            patch.object(connection, "request", return_value={"graphicsRequestId": repair_id}) as request,
+            patch.object(connection, "decode_document", side_effect=lambda document: document),
+            patch.object(connection, "get_raw_document", return_value={"canonicalGraphicsRequestId": original_id}) as alias,
+        ):
+            record = connection.get_handoff(repair_id)
+
+        self.assertEqual(record["graphicsRequestId"], repair_id)
+        request.assert_called_once_with("GET", connection.document_url(repair_id))
+        alias.assert_not_called()
+
     def test_repair_text_patch_keeps_existing_identity_and_nested_payload(self):
         connection = RepairIdentityFirestoreLedger()
         request_id = "weaver:repair:existing"
@@ -630,6 +646,30 @@ class GraphicsHandoffLedgerTest(unittest.TestCase):
         self.assertEqual(connection.handoff_update_calls, [pig_job_id])
         self.assertEqual(second["transition"], "none")
         self.assertEqual(connection.handoff_calls.count(pig_job_id), 1)
+
+        connection.handoffs[pig_job_id].update({
+            "handoffStatus": "sent_to_weaver_qc",
+            "pigStatus": "uploaded",
+            "qcStatus": "pending",
+        })
+        replay = reconcile_repair_request(connection, {
+            "repairRequestId": "repair-rejected-1",
+            "poetryPleaseRequest": poetry_please_request,
+            "replacementAssetAvailable": True,
+        })
+        self.assertEqual(replay["transition"], "reopened")
+        self.assertEqual(connection.handoff_update_calls, [pig_job_id, pig_job_id])
+        self.assertEqual(connection.handoffs[pig_job_id]["handoffStatus"], "requested")
+
+        connection.handoffs[pig_job_id]["graphicsRequestId"] = "weaver:qi:original"
+        mismatch = reconcile_repair_request(connection, {
+            "repairRequestId": "repair-rejected-1",
+            "poetryPleaseRequest": poetry_please_request,
+            "replacementAssetAvailable": True,
+        })
+        self.assertFalse(mismatch["ok"])
+        self.assertEqual(mismatch["error"], "repair_handoff_identity_mismatch")
+        self.assertEqual(connection.handoff_update_calls, [pig_job_id, pig_job_id])
 
     def test_qc_card_preserves_structured_drive_validation_error(self):
         error = {
