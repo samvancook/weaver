@@ -454,6 +454,8 @@
           <div class="toolbar">
             <button id="refresh-excerpt-handoffs" class="button button--secondary" type="button">Refresh EXC Handoffs</button>
             <button id="retry-failed-excerpt-handoffs" class="button button--secondary" type="button">Retry Failed EXC</button>
+            <input id="retry-excerpt-source-id" type="text" aria-label="EXC source record ID" placeholder="Source record ID" autocomplete="off">
+            <button id="retry-one-excerpt-handoff" class="button button--secondary" type="button">Retry One EXC</button>
           </div>
           <div id="excerpt-handoff-summary" class="excerpt-list">
             <p class="empty-state">Load the EXC handoff summary to monitor queued, failed, and sent excerpt exports.</p>
@@ -580,6 +582,6 @@
     </main>
   </div>
 
-  <script src="/app.js?v=20261015-repair-view"></script>
+  <script src="/app.js?v=20261020-reconcile"></script>
 </body>
 </html>

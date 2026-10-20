@@ -5110,24 +5110,27 @@ function buildPoetryPleaseExcerptRecord(record) {
   const canonicalSourceRecordId = contentType === "FP"
     ? canonicalFullPoemSourceRecordId(record)
     : intakeSourceRecordId;
+  const sourceVideoUrl = cleanSheetWhitespace(record.sourceVideoUrl || handoffPayload.sourceVideoUrl);
+  const sourceVideoFileId = cleanSheetWhitespace(record.sourceVideoFileId || handoffPayload.sourceVideoFileId)
+    || extractGoogleDriveFileId(sourceVideoUrl);
+  const videoLinkedExcerpt = contentType === "EXC" && !!sourceVideoFileId;
   if (!recordId || !cleanSheetWhitespace(excerpt)) {
     return null;
   }
-  if (!bookShortener || !releaseCatalog || (contentType === "FP" && !canonicalSourceRecordId)) {
+  if ((!videoLinkedExcerpt && (!bookShortener || !releaseCatalog))
+      || (videoLinkedExcerpt && !canonicalSourceRecordId)
+      || (contentType === "FP" && !canonicalSourceRecordId)) {
     return {
       invalid: true,
       recordId,
       error: `Missing required publishing metadata: ${[
-        !bookShortener ? "bookShortener" : "",
-        !releaseCatalog ? "releaseCatalog" : "",
+        !videoLinkedExcerpt && !bookShortener ? "bookShortener" : "",
+        !videoLinkedExcerpt && !releaseCatalog ? "releaseCatalog" : "",
+        videoLinkedExcerpt && !canonicalSourceRecordId ? "sourceRecordId" : "",
         contentType === "FP" && !canonicalSourceRecordId ? "poemTitle" : ""
       ].filter(Boolean).join(", ")}`
     };
   }
-
-  const sourceVideoUrl = cleanSheetWhitespace(record.sourceVideoUrl || handoffPayload.sourceVideoUrl);
-  const sourceVideoFileId = cleanSheetWhitespace(record.sourceVideoFileId || handoffPayload.sourceVideoFileId)
-    || extractGoogleDriveFileId(sourceVideoUrl);
 
   return {
     contentType,
@@ -5199,6 +5202,16 @@ async function handoffApprovedExcerptsToPoetryPlease(records = []) {
     try {
       if (record.sourceVideoFileId) {
         const canonicalVideoId = poetryPleaseVideoIdForSourceFile(record.sourceVideoFileId, videoGates);
+        if (!canonicalVideoId && record.contentType === "EXC") {
+          errorCount += 1;
+          results.push({
+            recordId: record.recordId,
+            ok: false,
+            error: "source_video_not_imported",
+            response: { ok: false, error: "source_video_not_imported" }
+          });
+          continue;
+        }
         if (canonicalVideoId) record.sourceContentId = canonicalVideoId;
       }
       const response = await fetch(`${poetryPleaseApiUrl.replace(/\/$/, "")}/internal/weaverImport`, {
@@ -5214,12 +5227,13 @@ async function handoffApprovedExcerptsToPoetryPlease(records = []) {
       });
 
       const result = await response.json().catch(() => ({}));
-      if (!response.ok || !result.ok) {
+      const failedItem = Array.isArray(result.results) ? result.results.find(item => item.ok === false) : null;
+      if (!response.ok || !result.ok || Number(result.errorCount || 0) > 0 || failedItem) {
         errorCount += 1;
         results.push({
           recordId: record.recordId,
           ok: false,
-          error: result.error || `Poetry Please EXC handoff failed with ${response.status}`,
+          error: result.error || failedItem?.error || `Poetry Please EXC handoff failed with ${response.status}`,
           response: result
         });
         continue;

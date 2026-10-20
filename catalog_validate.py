@@ -302,7 +302,7 @@ def validate_record(
         result["status"] = "epub_not_present"
         return result
 
-    if book_status["effective_status"] != "catalog_ok":
+    if book_status["effective_status"] not in {"catalog_ok", "provisional_source"}:
         result["status"] = "catalog_unavailable"
         return result
 

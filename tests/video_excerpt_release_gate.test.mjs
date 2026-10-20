@@ -27,3 +27,48 @@ test("only approved video gates release their exact source files", () => {
   assert.equal(isVideoExcerptReleased({ intakeMode: "video", sourceVideoFileId: "" }, allowed), false);
   assert.equal(isVideoExcerptReleased({ intakeMode: "book", sourceVideoFileId: "" }, allowed), true);
 });
+
+const handoffStart = source.indexOf("function buildPoetryPleaseExcerptRecord(");
+const handoffEnd = source.indexOf("async function handoffApprovedExcerptsToPoetryPlease(", handoffStart);
+assert.ok(handoffStart >= 0 && handoffEnd > handoffStart);
+const { buildPoetryPleaseExcerptRecord } = runInNewContext(
+  `${source.slice(handoffStart, handoffEnd)}\n({ buildPoetryPleaseExcerptRecord })`,
+  {
+    cleanSheetWhitespace: value => String(value || "").trim(),
+    normalizeExcerptTransferText: value => String(value || "").trim(),
+    normalizeExcerptContentType: value => String(value || "").toUpperCase(),
+    extractGoogleDriveFileId: value => String(value || "").match(/\/d\/([^/]+)/)?.[1] || "",
+    normalizeCurationRating: () => "",
+    normalizeOptionalCurationScore: () => null,
+    canonicalFullPoemSourceRecordId: () => "",
+    resolveExcerptPoemKey: () => ({ poemKey: null, poemKeySource: null })
+  }
+);
+
+test("video-linked excerpts may omit book metadata without weakening book imports", () => {
+  const base = {
+    contentType: "EXC",
+    recordId: "weaver:row-1",
+    sourceRecordId: "weaver:source-1",
+    author: "Poet",
+    poemTitle: "Poem",
+    excerpt: "Selected lines"
+  };
+  const video = buildPoetryPleaseExcerptRecord({
+    ...base,
+    sourceVideoUrl: "https://drive.google.com/file/d/video-file/view",
+    sourceEvent: "BPL Charm City 2026"
+  });
+  assert.equal(video.invalid, undefined);
+  assert.equal(video.sourceRecordId, base.sourceRecordId);
+  assert.equal(video.sourceVideoFileId, "video-file");
+  assert.equal(video.bookShortener, "");
+  assert.equal(video.releaseCatalog, "");
+
+  const book = buildPoetryPleaseExcerptRecord(base);
+  assert.equal(book.invalid, true);
+  assert.match(book.error, /bookShortener, releaseCatalog/);
+  const missingSource = buildPoetryPleaseExcerptRecord({ ...base, sourceRecordId: "", sourceVideoFileId: "video-file" });
+  assert.equal(missingSource.invalid, true);
+  assert.match(missingSource.error, /sourceRecordId/);
+});
