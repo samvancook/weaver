@@ -1454,6 +1454,24 @@ def reconcile_repair_request(connection, payload: dict[str, Any]) -> dict[str, A
         ),
     }
 
+    pig_job_id = normalize_text(existing.get("pigJobId") or existing.get("weaverJobId")) if rejected else ""
+    repair_handoff = get_graphics_handoff(connection, pig_job_id) if pig_job_id else None
+    if rejected and (
+        not repair_handoff
+        or normalize_text(repair_handoff.get("graphicsRequestId")) != pig_job_id
+    ):
+        return {"ok": False, "error": "repair_handoff_identity_mismatch", "report": report}
+    already_reopened = bool(
+        rejected
+        and local_status == "waiting_on_pig"
+        and normalize_text(existing.get("returnReviewStatus")).lower() == "rejected"
+        and normalize_text(existing.get("returnReviewNote")) == review_note
+        and normalize_text(repair_handoff.get("handoffStatus")) == "requested"
+        and normalize_text(repair_handoff.get("pigStatus")) == "not_started"
+        and normalize_text(repair_handoff.get("qcStatus")) == "needs_revision"
+        and normalize_text(repair_handoff.get("queueView")) == "rework"
+    )
+
     transition = "none"
     if source_only_resolved and local_status != "resolved":
         result = update_repair_request(connection, {
@@ -1492,18 +1510,7 @@ def reconcile_repair_request(connection, payload: dict[str, Any]) -> dict[str, A
             },
         })
         transition = "resolved"
-    elif rejected and not (
-        local_status == "waiting_on_pig"
-        and normalize_text(existing.get("returnReviewStatus")).lower() == "rejected"
-        and normalize_text(existing.get("returnReviewNote")) == review_note
-    ):
-        pig_job_id = normalize_text(existing.get("pigJobId") or existing.get("weaverJobId"))
-        if not pig_job_id:
-            return {
-                "ok": False,
-                "error": "repair_pig_job_id_missing",
-                "report": report,
-            }
+    elif rejected and not already_reopened:
         prior_replacements = [
             item for item in (existing.get("replacementHistory") or [])
             if isinstance(item, dict)
@@ -1550,6 +1557,8 @@ def reconcile_repair_request(connection, payload: dict[str, Any]) -> dict[str, A
             },
         })
         transition = "reopened"
+    elif rejected:
+        result = {"ok": True, "record": existing}
     else:
         observed_update = {
             "poetryPleaseStatus": poetry_please_status,
