@@ -6,6 +6,7 @@ import hashlib
 import re
 import os
 import sys
+from datetime import datetime
 from typing import Any
 
 from weaver_runtime_db import (
@@ -444,19 +445,22 @@ def sync_qc_reviews(connection, payload: dict[str, Any]) -> dict[str, Any]:
         decision = normalize_text(review.get("qcDecision")).lower()
         if request_id:
             revision_reject = decision == "reject" and is_revision_reject(review)
-            handoff = upsert_graphics_handoff_request(connection, {
-                "graphicsRequestId": request_id,
-                "sourceSystem": "weaver",
-                "sourceStatus": "qc_review",
-                "contentType": content_type,
-                "imageType": content_type,
-                "sourceCompletionId": completion_id,
-                "sourcePayload": review,
-                "handoffStatus": "sent_to_weaver_qc",
-                "pigStatus": "uploaded",
-                "qcStatus": "pending",
-            })
-            ledger_request_id = normalize_text(handoff.get("graphicsRequestId")) or request_id
+            if storage_target == "firestore":
+                ledger_request_id = completion_request_id
+            else:
+                handoff = upsert_graphics_handoff_request(connection, {
+                    "graphicsRequestId": request_id,
+                    "sourceSystem": "weaver",
+                    "sourceStatus": "qc_review",
+                    "contentType": content_type,
+                    "imageType": content_type,
+                    "sourceCompletionId": completion_id,
+                    "sourcePayload": review,
+                    "handoffStatus": "sent_to_weaver_qc",
+                    "pigStatus": "uploaded",
+                    "qcStatus": "pending",
+                })
+                ledger_request_id = normalize_text(handoff.get("graphicsRequestId")) or request_id
             update_graphics_handoff(connection, ledger_request_id, {
                 "contentType": content_type,
                 "imageType": content_type,
@@ -1425,6 +1429,15 @@ def reconcile_repair_request(connection, payload: dict[str, Any]) -> dict[str, A
     review_note = normalize_text(poetry_please_request.get("returnReviewNote"))
     review_at = poetry_please_request.get("returnReviewedAt") or ""
     review_by = normalize_text(poetry_please_request.get("returnReviewedBy"))
+    returned_at = normalize_text(existing.get("returnedAt"))
+    if review_status == "rejected" and local_status in {"returned", "returned_pending_sync"}:
+        try:
+            current_return = datetime.fromisoformat(returned_at.replace("Z", "+00:00"))
+            reviewed = datetime.fromisoformat(normalize_text(review_at).replace("Z", "+00:00"))
+            if reviewed < current_return:
+                review_status, review_note, review_at, review_by = "pending", "", "", ""
+        except (ValueError, TypeError):
+            review_status, review_note, review_at, review_by = "pending", "", "", ""
     replacement_asset_id = normalize_text(
         poetry_please_request.get("replacementAssetId") or existing.get("replacementAssetId")
     )

@@ -4879,6 +4879,10 @@ async function returnRepairToPoetryPlease(repairReturn) {
       update: {
         weaverRepairStatus: "returned",
         returnedAt: new Date().toISOString(),
+        returnReviewStatus: "pending",
+        returnReviewNote: "",
+        returnReviewedAt: "",
+        returnReviewedBy: "",
         weaverJobId: structured.weaverJobId,
         returnedPigJobId: structured.pigJobId,
         retryable: false,

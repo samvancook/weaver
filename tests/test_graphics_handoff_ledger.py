@@ -116,6 +116,9 @@ class MemoryFirestoreLedger(FirestoreLedgerClient):
         self.documents[("graphicsCompletions", completion_id)] = dict(completion)
         return dict(completion)
 
+    def insert_graphics_qc_review(self, review):
+        return dict(review)
+
 
 class RepairIdentityFirestoreLedger(FirestoreLedgerClient):
     def __init__(self):
@@ -616,6 +619,7 @@ class GraphicsHandoffLedgerTest(unittest.TestCase):
             "repairRequestId": "repair-rejected-1",
             "update": {
                 "weaverRepairStatus": "returned",
+                "returnedAt": "2026-08-03T12:00:00Z",
                 "replacementAssetId": "replacement-rejected-1",
                 "replacementAssetLink": "https://example.com/rejected.png",
             },
@@ -625,6 +629,7 @@ class GraphicsHandoffLedgerTest(unittest.TestCase):
             "status": "returned",
             "returnReviewStatus": "rejected",
             "returnReviewNote": "Attribution still needs correction.",
+            "returnReviewedAt": "2026-08-03T12:05:00Z",
         }
 
         first = reconcile_repair_request(connection, {
@@ -670,6 +675,71 @@ class GraphicsHandoffLedgerTest(unittest.TestCase):
         self.assertFalse(mismatch["ok"])
         self.assertEqual(mismatch["error"], "repair_handoff_identity_mismatch")
         self.assertEqual(connection.handoff_update_calls, [pig_job_id, pig_job_id])
+
+    def test_old_rejection_does_not_reopen_new_return(self):
+        connection = MemoryFirestoreLedger()
+        imported = upsert_repair_requests(connection, {"requests": [{
+            "id": "repair-return-again",
+            "status": "requested",
+            "action": "recreate",
+            "imageId": "original-image",
+            "contentType": "FPI",
+            "author": "Test Author",
+            "book": "Test Book",
+            "title": "Test Poem",
+            "originalContent": {"imageUrl": "https://example.com/original.png"},
+        }]})
+        update_repair_request(connection, {
+            "repairRequestId": "repair-return-again",
+            "update": {
+                "weaverRepairStatus": "returned",
+                "returnedAt": "2026-08-03T12:00:00Z",
+                "replacementAssetId": "new-replacement",
+                "replacementAssetLink": "https://example.com/new.png",
+            },
+        })
+
+        result = reconcile_repair_request(connection, {
+            "repairRequestId": "repair-return-again",
+            "poetryPleaseRequest": {
+                "status": "returned",
+                "returnReviewStatus": "rejected",
+                "returnReviewNote": "Old replacement was rejected",
+                "returnReviewedAt": "2026-08-02T12:00:00Z",
+                "replacementAssetId": "new-replacement",
+                "replacementAssetLink": "https://example.com/new.png",
+            },
+            "replacementAssetAvailable": True,
+        })
+
+        self.assertEqual(result["record"]["weaverRepairStatus"], "returned")
+        self.assertEqual(result["record"]["returnReviewStatus"], "pending")
+        self.assertEqual(connection.handoff_update_calls, [])
+        self.assertEqual(connection.handoffs[imported["records"][0]["pigJobId"]]["handoffStatus"], "requested")
+
+    def test_firestore_qc_approves_completion_request_without_alias_upsert(self):
+        connection = MemoryFirestoreLedger()
+        request_id = "weaver:repair:qc-test"
+        completion_id = "pig-qc-test"
+        connection.handoffs[request_id] = {"graphicsRequestId": request_id}
+        connection.documents[("graphicsCompletions", completion_id)] = {
+            "id": completion_id,
+            "graphicsRequestId": request_id,
+        }
+
+        result = sync_qc_reviews(connection, {"reviews": [{
+            "storageTarget": "firestore",
+            "graphicsRequestId": request_id,
+            "pigCompletionId": completion_id,
+            "contentType": "QI",
+            "qcDecision": "approve",
+        }]})
+
+        self.assertEqual(result["written"], 1)
+        self.assertEqual(connection.handoff_calls, [])
+        self.assertEqual(connection.handoff_update_calls, [request_id])
+        self.assertEqual(connection.handoffs[request_id]["handoffStatus"], "approved")
+        self.assertEqual(connection.handoffs[request_id]["qcStatus"], "approved")
 
     def test_qc_card_preserves_structured_drive_validation_error(self):
         error = {
