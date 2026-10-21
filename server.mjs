@@ -87,6 +87,21 @@ const PRIORITY_VIDEO_SETS = new Map([
   ["mn-writers-respond-loft", { id: "mn-writers-respond-loft", label: "MN Writers Respond @ The Loft", folderId: "1eKj0DFq1Qflks0LDtqhZX7iCinl9O0ib" }],
   ["mpmu-2026-finals", { id: "mpmu-2026-finals", label: "MPMU 2026 Finals", folderId: "1zaFfA8AodYcvzg1fB32g7vBvjzUvN2vk" }],
   ["ollie-schminkey-action-cam", { id: "ollie-schminkey-action-cam", label: "Ollie Schminkey - Action Cam", folderId: "1ATxYkZP4tlgoaXzbbrSJsC_XeU0pGIJ_" }],
+  ["pages-matam-san-diego-2026-labc", {
+    id: "pages-matam-san-diego-2026-labc",
+    label: "PAGES Matam in San Diego - 2026",
+    eventName: "PAGES Matam in San Diego - 2026",
+    folderId: "1thHVjqRxU1xsrm9sCNdnOQ26Ndx84g-d",
+    bookTitle: "Living at Baggage Claim",
+    releaseCatalog: "Fall 2026",
+    requireReleaseConfirmation: true,
+    includeFileIds: [
+      "14NdOdzkV1F4dScR2QYk8k20WTAlyJF2g",
+      "1eoqefV0zfkzR9fEZ8Zr4HFY5rsGVw-FA",
+      "1Te0zeh7tmd820BBoUw2HOcDCbkBMjGwH",
+      "1MwOqcF4HWhB2ukcs58mzbbRU2xunipTO"
+    ]
+  }],
   ["publishers-poetry-slam-2026-camera-y", {
     id: "publishers-poetry-slam-2026-camera-y",
     label: "Publisher's Poetry Slam 2026 - Camera Y",
@@ -117,6 +132,7 @@ function getPriorityVideoReleaseStatus(fileName, set = null, fileId = "") {
   const name = cleanSheetWhitespace(fileName);
   if (/\bno\s+video\s+release\b/i.test(name)) return "no_video_release";
   if (/\bopt\s*out\b/i.test(name)) return "opted_out";
+  if (set?.requireReleaseConfirmation) return "release_unverified";
   return "";
 }
 
@@ -2248,13 +2264,17 @@ function parsePriorityVideoFileName(fileName) {
   };
 }
 
+function isPriorityVideoFileIncluded(file, set) {
+  const fileId = cleanSheetWhitespace(file?.id);
+  if (Array.isArray(set?.includeFileIds) && !set.includeFileIds.includes(fileId)) return false;
+  return !set?.excludeNoPoem || !PRIORITY_VIDEO_NO_POEM_PATTERN.test(cleanSheetWhitespace(file?.name));
+}
+
 async function loadPriorityVideoSet(prioritySetId, reviewerEmail = "") {
   const set = PRIORITY_VIDEO_SETS.get(cleanSheetWhitespace(prioritySetId));
   if (!set) throw new Error("Unknown priority video set.");
   const sourceMedia = await getVideoFolderMediaType(set.folderId);
-  const files = (await listDriveFolderVideoFiles(set.folderId)).filter(file => (
-    !set.excludeNoPoem || !PRIORITY_VIDEO_NO_POEM_PATTERN.test(cleanSheetWhitespace(file.name))
-  ));
+  const files = (await listDriveFolderVideoFiles(set.folderId)).filter(file => isPriorityVideoFileIncluded(file, set));
   const allReviewResult = await syncWeaverRuntimeDb("get_curation_reviews", { prioritySetId: set.id });
   const allReviews = reconcileVideoReviews(
     files,
@@ -2290,6 +2310,8 @@ async function loadPriorityVideoSet(prioritySetId, reviewerEmail = "") {
     const videoReleaseStatus = getPriorityVideoReleaseStatus(file.name, set, file.id);
     return {
       ...parsePriorityVideoFileName(file.name),
+      bookTitle: cleanSheetWhitespace(set.bookTitle),
+      releaseCatalog: cleanSheetWhitespace(set.releaseCatalog),
       videoUrl: cleanSheetWhitespace(file.webViewLink) || `https://drive.google.com/file/d/${encodeURIComponent(file.id)}/view`,
       eventName: set.eventName || set.label,
       prioritySetId: set.id,
@@ -2329,9 +2351,7 @@ async function getPriorityVideoSetAvailability(reviewerEmail = "") {
   return {
     ok: true,
     sets: sets.map((set, index) => {
-      const files = fileResults[index].filter(file => (
-        !set.excludeNoPoem || !PRIORITY_VIDEO_NO_POEM_PATTERN.test(cleanSheetWhitespace(file.name))
-      ));
+      const files = fileResults[index].filter(file => isPriorityVideoFileIncluded(file, set));
       const setReviews = reconcileVideoReviews(files, reviews.filter(record => (
         cleanSheetWhitespace(record.prioritySetId) === set.id && cleanSheetWhitespace(record.rating)
       )));
@@ -2366,9 +2386,7 @@ async function loadPriorityVideoProgress() {
     syncWeaverRuntimeDb("get_curation_reviews", {}),
     Promise.all(sets.map(async set => ({
       set,
-      files: (await listDriveFolderVideoFiles(set.folderId)).filter(file => (
-        !set.excludeNoPoem || !PRIORITY_VIDEO_NO_POEM_PATTERN.test(cleanSheetWhitespace(file.name))
-      ))
+      files: (await listDriveFolderVideoFiles(set.folderId)).filter(file => isPriorityVideoFileIncluded(file, set))
     })))
   ]);
   const reviews = Array.isArray(reviewResult?.records) ? reviewResult.records : [];
@@ -2456,9 +2474,7 @@ async function loadPriorityVideoAssignmentExport(reviewerEmail, prioritySetId = 
     syncWeaverRuntimeDb("get_curation_reviews", {}),
     Promise.all(sets.map(async set => ({
       set,
-      files: (await listDriveFolderVideoFiles(set.folderId)).filter(file => (
-        !set.excludeNoPoem || !PRIORITY_VIDEO_NO_POEM_PATTERN.test(cleanSheetWhitespace(file.name))
-      ))
+      files: (await listDriveFolderVideoFiles(set.folderId)).filter(file => isPriorityVideoFileIncluded(file, set))
     })))
   ]);
   const reviews = Array.isArray(reviewResult?.records) ? reviewResult.records : [];
@@ -2481,9 +2497,7 @@ async function getVideoCurationCandidates(prioritySetId = "") {
     : Array.from(PRIORITY_VIDEO_SETS.values());
   const candidatesBySet = await Promise.all(sets.map(async set => {
     const sourceMedia = await getVideoFolderMediaType(set.folderId);
-    const files = (await listDriveFolderVideoFiles(set.folderId)).filter(file => (
-      !set.excludeNoPoem || !PRIORITY_VIDEO_NO_POEM_PATTERN.test(cleanSheetWhitespace(file.name))
-    ));
+    const files = (await listDriveFolderVideoFiles(set.folderId)).filter(file => isPriorityVideoFileIncluded(file, set));
     const reviewsResult = await syncWeaverRuntimeDb("get_curation_reviews", {
       prioritySetId: set.id
     });
@@ -2701,7 +2715,7 @@ async function savePriorityVideoReview(payload = {}) {
   const folderFiles = await listDriveFolderVideoFiles(set.folderId);
   const file = folderFiles.find(candidate => (
     cleanSheetWhitespace(candidate.id) === sourceFileId
-    && (!set.excludeNoPoem || !PRIORITY_VIDEO_NO_POEM_PATTERN.test(cleanSheetWhitespace(candidate.name)))
+    && isPriorityVideoFileIncluded(candidate, set)
   ));
   if (!file) {
     throw new Error("The selected video is not in the requested priority set.");
