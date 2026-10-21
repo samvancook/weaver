@@ -56,10 +56,25 @@ test("scoreboard keeps reviewed videos below threshold and links every excerpt",
   assert.match(server, /if \(!reviews\.length && !existingGate\) return null/);
   assert.match(server, /return candidate;\s*\}\)\.filter\(Boolean\)/);
   assert.match(server, /selectedExcerptRecordIds: candidate\.excerptRecordIds/);
-  assert.match(server, /const gate = \{ \.\.\.candidate\.gate, selectedExcerptRecordIds: candidate\.excerptRecordIds \}/);
+  assert.match(server, /const gate = \{ \.\.\.candidate\.gate, selectedExcerptRecordIds: candidate\.excerptRecordIds, publishableAssetMediaType \}/);
   assert.doesNotMatch(app, /data-excerpt-id/);
   assert.match(app, /candidate\.ratings/);
   assert.match(app, /candidate\.baseScore/);
+});
+
+test("LABC intake keeps the four supplied files review-only until release verification", () => {
+  const set = server.match(/\["pages-matam-san-diego-2026-labc", \{([\s\S]*?)\n  \}\]/);
+  assert.ok(set);
+  assert.match(set[1], /eventName: "PAGES Matam in San Diego - 2026"/);
+  assert.match(set[1], /bookTitle: "Living at Baggage Claim"/);
+  assert.match(set[1], /requireReleaseConfirmation: true/);
+  for (const fileId of [
+    "14NdOdzkV1F4dScR2QYk8k20WTAlyJF2g",
+    "1eoqefV0zfkzR9fEZ8Zr4HFY5rsGVw-FA",
+    "1Te0zeh7tmd820BBoUw2HOcDCbkBMjGwH",
+    "1MwOqcF4HWhB2ukcs58mzbbRU2xunipTO"
+  ]) assert.ok(set[1].includes(fileId));
+  assert.match(server, /if \(candidate\.publicationRestricted\) throw new Error\("A publication-restricted source cannot be sent to Poetry Please\."\)/);
 });
 
 test("empty imported numeric scores are not displayed or averaged as zero", () => {
