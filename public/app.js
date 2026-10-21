@@ -1474,8 +1474,8 @@ function applyGatheringVideoPlaylistItem(item, { preserveQuote = false } = {}) {
   if (elements.gatheringVideoTitle) {
     elements.gatheringVideoTitle.value = item.poemTitle || "";
   }
-  if (elements.gatheringVideoBook) {
-    elements.gatheringVideoBook.value = item.bookTitle || "";
+  if (elements.gatheringVideoBook && item.bookTitle) {
+    elements.gatheringVideoBook.value = item.bookTitle;
   }
   if (elements.gatheringVideoReleaseWarning) {
     elements.gatheringVideoReleaseWarning.hidden = !item.publicationRestricted;
