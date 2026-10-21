@@ -1474,10 +1474,13 @@ function applyGatheringVideoPlaylistItem(item, { preserveQuote = false } = {}) {
   if (elements.gatheringVideoTitle) {
     elements.gatheringVideoTitle.value = item.poemTitle || "";
   }
+  if (elements.gatheringVideoBook) {
+    elements.gatheringVideoBook.value = item.bookTitle || "";
+  }
   if (elements.gatheringVideoReleaseWarning) {
     elements.gatheringVideoReleaseWarning.hidden = !item.publicationRestricted;
     elements.gatheringVideoReleaseWarning.textContent = item.publicationRestricted
-      ? `Internal review only: ${item.videoReleaseStatus === "opted_out" ? "the performer opted out" : "no video release is on file"}. Do not publish or distribute this footage.`
+      ? `Internal review only: ${item.videoReleaseStatus === "opted_out" ? "the performer opted out" : item.videoReleaseStatus === "release_unverified" ? "video release clearance has not been verified" : "no video release is on file"}. Do not publish or distribute this footage.`
       : "";
   }
   if (!preserveQuote && elements.gatheringVideoQuote) {
@@ -1503,6 +1506,7 @@ function normalizeVideoPlaylistItem(rawItem, eventName) {
   return {
     author: cleanSheetWhitespace(rawItem?.author),
     poemTitle: cleanSheetWhitespace(rawItem?.poemTitle),
+    bookTitle: cleanSheetWhitespace(rawItem?.bookTitle),
     videoUrl: String(rawItem?.videoUrl || "").trim(),
     eventName: cleanSheetWhitespace(rawItem?.eventName || eventName),
     formResponseUrl: String(rawItem?.formResponseUrl || "").trim(),
