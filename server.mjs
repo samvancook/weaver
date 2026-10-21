@@ -2563,8 +2563,8 @@ async function getVideoCurationCandidates(prioritySetId = "") {
         eventReleaseCatalog: cleanSheetWhitespace(firstReview.eventReleaseCatalog) || cleanSheetWhitespace(set.eventReleaseCatalog),
         author: cleanSheetWhitespace(firstReview.author),
         poemTitle: cleanSheetWhitespace(firstReview.poemTitle),
-        bookTitle: cleanSheetWhitespace(firstReview.bookTitle),
-        releaseCatalog: cleanSheetWhitespace(firstReview.releaseCatalog) || cleanSheetWhitespace(bookMeta?.releaseCatalog),
+        bookTitle: cleanSheetWhitespace(firstReview.bookTitle) || cleanSheetWhitespace(set.bookTitle),
+        releaseCatalog: cleanSheetWhitespace(firstReview.releaseCatalog) || cleanSheetWhitespace(set.releaseCatalog) || cleanSheetWhitespace(bookMeta?.releaseCatalog),
         releaseStatus,
         publicationRestricted: Boolean(releaseStatus),
         baseScore: Number(baseScore.toFixed(2)),
@@ -2642,6 +2642,7 @@ async function handoffVideoCurationGate(payload = {}) {
   const candidates = await getVideoCurationCandidates(prioritySetId);
   const candidate = candidates.candidates.find(item => item.prioritySetId === prioritySetId && item.sourceFileId === sourceFileId);
   if (!candidate?.gate) throw new Error("Save the video gate before sending it to Poetry Please.");
+  if (candidate.publicationRestricted) throw new Error("A publication-restricted source cannot be sent to Poetry Please.");
   if (!candidate.excerptRecordIds.length) throw new Error("At least one excerpt must be pulled before sending this video to Poetry Please.");
   const finalAssetUrl = cleanSheetWhitespace(candidate.gate.publishableAssetUrl);
   const publishableAssetMediaType = candidate.sourceMediaType === "FV"
