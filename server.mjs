@@ -94,7 +94,7 @@ const PRIORITY_VIDEO_SETS = new Map([
     folderId: "1thHVjqRxU1xsrm9sCNdnOQ26Ndx84g-d",
     bookTitle: "Living at Baggage Claim",
     releaseCatalog: "Fall 2026",
-    requireReleaseConfirmation: true,
+    requireUsageApprovalEvidence: true,
     includeFileIds: [
       "14NdOdzkV1F4dScR2QYk8k20WTAlyJF2g",
       "1eoqefV0zfkzR9fEZ8Zr4HFY5rsGVw-FA",
@@ -132,7 +132,7 @@ function getPriorityVideoReleaseStatus(fileName, set = null, fileId = "") {
   const name = cleanSheetWhitespace(fileName);
   if (/\bno\s+video\s+release\b/i.test(name)) return "no_video_release";
   if (/\bopt\s*out\b/i.test(name)) return "opted_out";
-  if (set?.requireReleaseConfirmation) return "release_unverified";
+  if (set?.requireUsageApprovalEvidence) return "usage_approval_document_unlinked";
   return "";
 }
 

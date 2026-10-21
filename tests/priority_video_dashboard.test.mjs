@@ -62,12 +62,12 @@ test("scoreboard keeps reviewed videos below threshold and links every excerpt",
   assert.match(app, /candidate\.baseScore/);
 });
 
-test("LABC intake keeps the four supplied files review-only until release verification", () => {
+test("LABC intake keeps the four supplied files review-only until approval evidence is linked", () => {
   const set = server.match(/\["pages-matam-san-diego-2026-labc", \{([\s\S]*?)\n  \}\]/);
   assert.ok(set);
   assert.match(set[1], /eventName: "PAGES Matam in San Diego - 2026"/);
   assert.match(set[1], /bookTitle: "Living at Baggage Claim"/);
-  assert.match(set[1], /requireReleaseConfirmation: true/);
+  assert.match(set[1], /requireUsageApprovalEvidence: true/);
   for (const fileId of [
     "14NdOdzkV1F4dScR2QYk8k20WTAlyJF2g",
     "1eoqefV0zfkzR9fEZ8Zr4HFY5rsGVw-FA",

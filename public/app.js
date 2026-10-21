@@ -1480,7 +1480,7 @@ function applyGatheringVideoPlaylistItem(item, { preserveQuote = false } = {}) {
   if (elements.gatheringVideoReleaseWarning) {
     elements.gatheringVideoReleaseWarning.hidden = !item.publicationRestricted;
     elements.gatheringVideoReleaseWarning.textContent = item.publicationRestricted
-      ? `Internal review only: ${item.videoReleaseStatus === "opted_out" ? "the performer opted out" : item.videoReleaseStatus === "release_unverified" ? "video release clearance has not been verified" : "no video release is on file"}. Do not publish or distribute this footage.`
+      ? `Internal review only: ${item.videoReleaseStatus === "opted_out" ? "the performer opted out" : item.videoReleaseStatus === "usage_approval_document_unlinked" ? "written author and filmmaker approval was reported, but its source has not been linked in Weaver" : "no video release is on file"}. Do not publish or distribute this footage.`
       : "";
   }
   if (!preserveQuote && elements.gatheringVideoQuote) {
