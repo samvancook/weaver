@@ -13,20 +13,6 @@ def clean_title(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "").strip())
 
 
-def is_probable_poem_title(text: str) -> bool:
-    title = clean_title(text)
-    if not title:
-        return False
-    if len(title) > 140:
-      return False
-    if len(title.split()) > 18:
-      return False
-    sentence_like_marks = title.count(".") + title.count("?") + title.count("!")
-    if sentence_like_marks >= 2:
-      return False
-    return True
-
-
 def get_intake_books() -> dict:
     books = []
     for row in load_book_status_rows():
@@ -63,12 +49,11 @@ def get_poems(book_title: str) -> dict:
             return {"ok": False, "error": "Book not found in catalog."}
 
         poems = fetch_poems_for_book(cursor, int(book_status["canonical_book_id"]))
-        is_provisional = book_status.get("effective_status") == "provisional_source"
         titles = sorted(
             {
                 clean_title(poem["title"] or "")
                 for poem in poems
-                if clean_title(poem["title"] or "") and (is_provisional or is_probable_poem_title(poem["title"] or ""))
+                if clean_title(poem["title"] or "")
             },
             key=str.lower,
         )
