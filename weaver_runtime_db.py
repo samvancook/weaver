@@ -1417,11 +1417,27 @@ class FirestoreLedgerClient:
         return self.decode_document(self.request("GET", self.document_url(graphics_request_id)))
 
     def get_handoffs(self, graphics_request_ids: list[str]) -> list[dict[str, Any]]:
-        records: list[dict[str, Any]] = []
+        requested = {str(value or "").strip() for value in graphics_request_ids}
+        requested.discard("")
+        if not requested:
+            return []
+        by_id = {
+            str(record.get("graphicsRequestId") or "").strip(): record
+            for record in self.list_handoffs()
+        }
+        aliases = {}
+        if requested.difference(by_id):
+            aliases = {
+                str(record.get("graphicsRequestId") or "").strip():
+                str(record.get("canonicalGraphicsRequestId") or "").strip()
+                for record in self.list_raw_documents(FIRESTORE_HANDOFF_ALIASES_COLLECTION)
+            }
+        records = []
         for request_id in graphics_request_ids:
-            record = self.get_handoff(request_id)
+            request_id = str(request_id or "").strip()
+            record = by_id.get(request_id) or by_id.get(aliases.get(request_id, ""))
             if record:
-                records.append(compact_handoff_record(record))
+                records.append({**compact_handoff_record(record), "graphicsRequestId": request_id})
         return records
 
     def list_handoffs(self, page_size: int = 500) -> list[dict[str, Any]]:
