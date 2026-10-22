@@ -39,7 +39,7 @@ def import_book_payload(payload: dict, database: Path) -> dict:
     require(len(poems) == int(book["poem_count"]) == int(status["catalog_poem_count"]), "Poem count mismatch")
     require(len(poems) > 0, "No poems to import")
     require(len({poem["id"] for poem in poems}) == len(poems), "Duplicate poem IDs")
-    require(len({poem["title"] for poem in poems}) == len(poems), "Duplicate poem titles")
+    # Catalog poem IDs identify source rows. A book may legitimately reuse a title.
     require(all(poem["book_title"] == title for poem in poems), "Poem book identity mismatch")
     require(all(poem["source_format"] == book["source_format"] for poem in poems), "Poem source mismatch")
     require(all(poem["title"].strip() and (poem.get("served_text") or poem.get("text")) for poem in poems), "Blank title or text")
