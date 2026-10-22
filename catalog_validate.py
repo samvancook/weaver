@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sqlite3
 import sys
@@ -12,7 +13,7 @@ from excerpt_library import DEFAULT_DB_PATH as EXCERPT_LIBRARY_DB_PATH
 from excerpt_library import find_library_excerpt_match
 
 DEFAULT_DB_PATH = Path(__file__).resolve().parent / "data" / "formal_catalog.db"
-DB_PATH = DEFAULT_DB_PATH
+DB_PATH = Path(os.environ.get("WEAVER_CATALOG_DB", DEFAULT_DB_PATH))
 
 
 def normalize(text: str | None) -> str:

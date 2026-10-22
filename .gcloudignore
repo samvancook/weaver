@@ -19,6 +19,9 @@
 !excerpt_library.py
 !excerpt_library_text.py
 !intake_catalog_lookup.py
+!import_main_catalog_book.py
+!prepare_catalog_overlay.py
+!start-weaver.sh
 !graphics_qi_lookup.py
 !weaver_runtime_db.py
 !weaver_runtime_sync.py

@@ -19,6 +19,9 @@ COPY catalog_poem_text.py ./catalog_poem_text.py
 COPY excerpt_library.py ./excerpt_library.py
 COPY excerpt_library_text.py ./excerpt_library_text.py
 COPY intake_catalog_lookup.py ./intake_catalog_lookup.py
+COPY import_main_catalog_book.py ./import_main_catalog_book.py
+COPY prepare_catalog_overlay.py ./prepare_catalog_overlay.py
+COPY start-weaver.sh ./start-weaver.sh
 COPY graphics_qi_lookup.py ./graphics_qi_lookup.py
 COPY weaver_runtime_db.py ./weaver_runtime_db.py
 COPY weaver_runtime_sync.py ./weaver_runtime_sync.py
@@ -29,4 +32,4 @@ ENV PORT=8080
 
 EXPOSE 8080
 
-CMD ["npm", "start"]
+CMD ["sh", "./start-weaver.sh"]

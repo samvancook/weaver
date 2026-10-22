@@ -2,6 +2,7 @@
 
 ## Established
 
+- Weaver's book intake has two separate inputs. The publishing-order Sheet provides book metadata and suggestions; catalog-backed poem titles and validation come from `data/formal_catalog.db`. A book appearing in suggestions does not prove its poems are available.
 - `unreliable narrator` / `UN` is the canonical identity. Do not recreate `all the ugly bits` / `ATUB` as a separate book.
 - Weaver's hosted intake reads this repository's `data/formal_catalog.db`. The local poetry-catalog database and the workbench branch are inputs for reconciliation, not hosted truth.
 - The hosted catalog currently keeps `unreliable narrator` as `set_aside`; do not make it selectable merely by importing poem text.
@@ -9,6 +10,24 @@
 - The repository catalog database also contains no old-name or old-shortener match.
 - No Poetry Please record was deleted, renamed, or otherwise changed by this work. The signed-in production Content Library search on 2026-09-24 returned 137 records for `unreliable narrator`, all with that book: 22 EXC, 50 FP, 11 FPI, and 54 QI. Searches for `all the ugly bits` and `ATUB` each returned no matching content.
 - Poetry Please's canonical repository lookup has one `unreliable narrator` / `UN` book entry with `all the ugly bits` as a `titleKeys` alias. The alias is an input compatibility key: old-title imports resolve to canonical UN metadata and product links. Keep it until historical/external inputs are audited; it is not a separate live book or public display title.
+
+## New-book intake path and BBFR gap (2026-10-22)
+
+Previously deployed path: identify the authoritative EPUB or DOCX and its edition; extract and reconcile book identity, poem titles, text, and source provenance into the repository's tracked `data/formal_catalog.db`; deploy a new Weaver image; then read back `/api/intake/options` and `/api/intake/catalog/poems?bookTitle=...` from the live service. `catalog_validate.py` and `intake_catalog_lookup.py` read that bundled SQLite file. `.gcloudignore`, `.dockerignore`, and `Dockerfile` include it in the deployment image. The publishing-order Sheet supplies metadata, not poem text. Firestore's Weaver operational ledger is a separate store. A runtime overlay that imports selected approved books from the main Catalog is under implementation to remove new manuscript text from Git history; do not describe it as live until deployed and read back.
+
+Observed BBFR state on 2026-10-22: the live publishing-order suggestions include `BLACK BOX FLIGHT RECORDER` by Aishatu Ado (`BBFR`, Spring 2027), but the live catalog-backed book list excludes it and its poem endpoint returns `Book not found in catalog.` The main [Button Poetry Catalog service](https://button-poetry-catalog-350789123099.us-central1.run.app/books/BBFR) now identifies a `catalog_ok` DOCX edition, `BBFR - Ado - 10142026 - Final Proofing.docx`, with 26 poems. A validated runtime-overlay import of those 26 poems is prepared in this repository checkout; local SQLite readback matches all 26 source titles and exact served texts. **Live Weaver remains unresolved until deployment and live readback.** `WG` / `Worm Girl` is present in publishing-order suggestions but the main Catalog currently returns `Book not found` for both names, so it cannot be imported yet.
+
+The main Catalog response includes `poem_key` values for BBFR, but Weaver's current `catalog_poems` table has no key column and the bundled 2026-10-15 poem-key seed does not include BBFR. The book/poem lookup can work after deployment, while stable poem-key propagation remains a separate schema and seed-refresh task. The public Weaver GitHub repository currently tracks `data/formal_catalog.db`; publishing a refreshed copy there would expose manuscript-derived poem text. The new overlay path downloads approved books into a private ephemeral database at Weaver startup without committing new poem texts to Git. Verify this runtime dependency and its restart behavior before calling the live path complete.
+
+Make the next import repeatable:
+
+1. Record the source file link, edition/version, author/title/shortener, publication status, and permission to use the text before extraction. Locate the authoritative catalog source rather than inferring it from the publishing-order row.
+2. Use one documented import command or script to build or update Weaver's runtime catalog from that source. The repository historically had one-off reconciliation scripts and a bundled database; the new overlay is a first targeted import path, not yet a general intake service.
+3. Produce a review report showing source sections against imported poem count and titles, duplicate titles, empty or implausible text, and excluded non-poem sections. Require an explicit status decision: an intentionally `set_aside` edition must not appear as selectable merely because text was extracted.
+4. Check `book_status`, `catalog_books`, and `catalog_poems` locally, including exact author/title/shortener and sample poem text. Then deploy the changed catalog artifact and verify the actual live revision, catalog book option, poem count, and representative titles/text through live endpoints. Record the source ID, catalog artifact hash, deployment revision, and readback in the handoff.
+5. Show a distinct `metadata only / no catalog poems` state in Weaver when a publishing-order book has no catalog identity, so selecting BBFR does not lead to a generic `Book not found` surprise. Add a freshness or coverage check that compares upcoming publishing-order books with packaged catalog identities and flags missing sources before excerpt work begins.
+
+Open decisions: whether catalog import should remain a repository build artifact or move to a managed shared store; who reviews extraction and activates each edition. The main Catalog service is live, but Weaver's own poem lookup still uses its bundled SQLite snapshot until code and deployment change that architecture.
 
 ## Next
 
