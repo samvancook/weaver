@@ -4158,14 +4158,14 @@ async function retryOneExcerptHandoff() {
     const response = await adminFetch("/api/excerpts/handoffs/retry", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ recordIds: [recordId], statuses: ["failed"] })
+      body: JSON.stringify({ recordIds: [recordId], statuses: ["failed", "queued"] })
     });
     const result = await response.json();
     if (!response.ok || !result.ok) {
       throw new Error(result.error || `EXC retry returned ${response.status}`);
     }
     if (Number(result.retriedCount || 0) !== 1) {
-      setStatus(`No failed EXC handoff found for ${recordId}.`);
+      setStatus(`No failed or queued EXC handoff found for ${recordId}.`);
       return;
     }
     await loadExcerptHandoffs();
