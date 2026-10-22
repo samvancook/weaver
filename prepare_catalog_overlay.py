@@ -39,11 +39,14 @@ def prepare() -> list[dict]:
     shutil.copy2(DEFAULT_DB_PATH, RUNTIME_DB)
     imported = []
     for shortener in BOOKS:
-        payload = fetch_book(shortener)
-        if payload is None:
-            print(f"Catalog overlay: {shortener} absent from main Catalog", file=sys.stderr)
-            continue
-        imported.append(import_book_payload(payload, RUNTIME_DB))
+        try:
+            payload = fetch_book(shortener)
+            if payload is None:
+                print(f"Catalog overlay: {shortener} absent from main Catalog", file=sys.stderr)
+                continue
+            imported.append(import_book_payload(payload, RUNTIME_DB))
+        except Exception as error:
+            print(f"Catalog overlay: {shortener} skipped after import error: {error}", file=sys.stderr)
     with sqlite3.connect(RUNTIME_DB) as connection:
         if connection.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
             raise RuntimeError("Catalog overlay integrity check failed")

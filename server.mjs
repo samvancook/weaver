@@ -5827,10 +5827,18 @@ async function getPigGraphicsRequests(filterMode = "all", { includeCompleted = f
       .map(buildGraphicsHandoffLedgerRequest)
       .filter(request => cleanSheetWhitespace(request.graphicsRequestId));
     if (queueLedgerRequests.length) {
-      await syncWeaverRuntimeDb("upsert_handoff_requests", { requests: queueLedgerRequests }).catch(() => null);
       const ledgerByRequestId = await getRuntimeGraphicsHandoffState(
         queueLedgerRequests.map(request => request.graphicsRequestId)
       );
+      const newRequests = queueLedgerRequests.filter(request =>
+        !ledgerByRequestId[cleanSheetWhitespace(request.graphicsRequestId)]
+      );
+      if (newRequests.length) {
+        await syncWeaverRuntimeDb("upsert_handoff_requests", { requests: newRequests }).catch(() => null);
+        Object.assign(ledgerByRequestId, await getRuntimeGraphicsHandoffState(
+          newRequests.map(request => request.graphicsRequestId)
+        ));
+      }
       records = records.filter(record => {
         const ledger = ledgerByRequestId[cleanSheetWhitespace(record.graphicsRequestId)];
         if (!ledger) return true;
