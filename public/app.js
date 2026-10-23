@@ -5873,10 +5873,15 @@ function buildGraphicsCard(record) {
       <span class="excerpt-card__author">${escapeHtml(displayAuthor || "Unknown author")}</span>
     </div>
     <blockquote class="excerpt-card__quote">${escapeHtml(quoteText)}</blockquote>
-    ${(isQcMode || isHandoffMode || isMismatchMode) && assetPreviewUrl ? `
-      <figure class="graphics-preview">
-        <img class="graphics-preview__image" src="${escapeAttribute(assetPreviewUrl)}" alt="Existing graphic preview for ${escapeAttribute(record.poemTitle || "this excerpt")}" loading="lazy" />
-      </figure>
+    ${(isQcMode || isHandoffMode || isMismatchMode) && (assetPreviewUrl || record.assetSet?.length) ? `
+      ${(Array.isArray(record.assetSet) && record.assetSet.length ? record.assetSet : [{ assetUrl: record.assetLinkUrl, assetPreviewUrl }]).map((asset, index) => `
+        <figure class="graphics-preview">
+          ${record.assetSet?.length ? `<figcaption>Card ${index + 1} of ${record.assetSet.length}${asset.role === "prompt" ? " · prompt" : ""}</figcaption>` : ""}
+          <a href="${escapeAttribute(asset.assetUrl || asset.assetPreviewUrl || "")}" target="_blank" rel="noopener noreferrer">
+            <img class="graphics-preview__image" src="${escapeAttribute(asset.assetPreviewUrl || asset.assetUrl || "")}" alt="Card ${index + 1} for ${escapeAttribute(record.poemTitle || "this excerpt")}" loading="lazy" />
+          </a>
+        </figure>
+      `).join("")}
     ` : ""}
     ${isQcMode && assetFolderUrl && !assetPreviewUrl ? `<p class="hint">P.I.G. returned a Drive folder for this rework, not a directly previewable image file.</p>` : ""}
     ${isQcMode && isReworkCompletion ? `<p class="hint">This graphic is a returned rework from P.I.G. It is back in Weaver for a fresh QC decision.</p>` : ""}

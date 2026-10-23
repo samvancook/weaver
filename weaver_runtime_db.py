@@ -130,6 +130,7 @@ def build_graphics_qc_queue_card(completion: dict[str, Any]) -> dict[str, Any]:
         "assetPreviewUrl": str(
             completion.get("assetPreviewUrl") or payload.get("assetPreviewUrl") or asset_url
         ).strip(),
+        "assetSet": payload.get("assetSet") if isinstance(payload.get("assetSet"), list) else [],
         "pigProjectId": pig_project_id,
         "editableProjectFileId": editable_project_file_id,
         "editableProjectUrl": editable_project_url,
@@ -2789,6 +2790,7 @@ def build_pending_graphics_qc_records_from_ledger(connection: Any) -> list[dict[
             "quoteText": str(payload.get("quoteText") or ""),
             "assetLinkUrl": asset_url,
             "assetPreviewUrl": asset_preview_url,
+            "assetSet": payload.get("assetSet") if isinstance(payload.get("assetSet"), list) else [],
             "completedAt": str(completion.get("completedAt") or payload.get("completedAt") or ""),
             "graphicsQcDecision": "",
             "graphicsQcNote": "",

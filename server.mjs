@@ -1886,6 +1886,22 @@ function assertPigCompletionFileAsset(completion) {
   if (isDriveFolderAssetUrl(assetUrl) || isDriveFolderAssetUrl(assetPreviewUrl)) {
     throw new Error('P.I.G. completion assetUrl/assetPreviewUrl must point to the specific image file, not a Drive folder.');
   }
+  if (completion.assetSet !== undefined) {
+    const assets = completion.assetSet;
+    if (!Array.isArray(assets) || assets.length < 2 || assets.length > 20) {
+      throw new Error('P.I.G. assetSet must contain 2–20 ordered image files.');
+    }
+    assets.forEach((asset, index) => {
+      if (Number(asset?.index) !== index + 1 || !cleanSheetWhitespace(asset?.assetFileId)
+        || !cleanSheetWhitespace(asset?.assetUrl) || !cleanSheetWhitespace(asset?.assetPreviewUrl)
+        || isDriveFolderAssetUrl(asset.assetUrl) || isDriveFolderAssetUrl(asset.assetPreviewUrl)) {
+        throw new Error(`P.I.G. card ${index + 1} must have an ordered file-level asset and preview.`);
+      }
+    });
+    if (assetUrl !== cleanSheetWhitespace(assets[0].assetUrl)) {
+      throw new Error('P.I.G. primary asset must be card 1 of the assetSet.');
+    }
+  }
 }
 
 function buildPigCompletionRowValues(completion, existingRow = []) {
@@ -1902,6 +1918,9 @@ function buildPigCompletionRowValues(completion, existingRow = []) {
   let productionNotes = String(completion.productionNotes || completion.notes || "");
   if (contentType && !/^\s*(content type|image type)\s*:/im.test(productionNotes)) {
     productionNotes = `${productionNotes}${productionNotes.trim() ? "\n" : ""}Content Type: ${contentType}`;
+  }
+  if (Array.isArray(completion.assetSet)) {
+    productionNotes = `${productionNotes}${productionNotes.trim() ? "\n" : ""}Card set JSON: ${JSON.stringify(completion.assetSet)}`;
   }
 
   return [
@@ -1942,6 +1961,12 @@ function buildPigQcRecordFromSheetRow(row, index, canonicalBookAuthorMap = null)
   const sourceRecordId = cleanSheetWhitespace(row[PIG_COMPLETION_COLUMNS.sourceRecordId - 1]);
   const sourceSheetRow = parseInt(row[PIG_COMPLETION_COLUMNS.sourceSheetRow - 1], 10) || "";
   const productionNotes = String(row[PIG_COMPLETION_COLUMNS.productionNotes - 1] || "");
+  const assetSetMatch = productionNotes.match(/(?:^|\n)Card set JSON: (\[[^\n]*\])/);
+  let assetSet = [];
+  if (assetSetMatch) {
+    try { assetSet = JSON.parse(assetSetMatch[1]); } catch { assetSet = []; }
+  }
+  const displayNotes = productionNotes.replace(/(?:^|\n)Card set JSON: \[[^\n]*\]/, "").trim();
   const noteMeta = parseIntakeMetadataFromNotes(productionNotes);
   const completedAt = cleanSheetWhitespace(row[PIG_COMPLETION_COLUMNS.completedAt - 1]);
   const sourceTool = cleanSheetWhitespace(row[PIG_COMPLETION_COLUMNS.sourceTool - 1]) || "P.I.G.";
@@ -1963,7 +1988,8 @@ function buildPigQcRecordFromSheetRow(row, index, canonicalBookAuthorMap = null)
     poemTitle,
     bookTitle,
     quoteText,
-    notes: productionNotes ? `${sourceTool}: ${productionNotes}` : `Returned by ${sourceTool}`,
+    notes: displayNotes ? `${sourceTool}: ${displayNotes}` : `Returned by ${sourceTool}`,
+    assetSet,
     approved: "Y",
     created: "Y",
     workflowStatus: isReworkCompletion ? "Rework returned by P.I.G." : "Returned by P.I.G.",
@@ -5677,6 +5703,8 @@ function buildGraphicsReworkRequestRecord(completion) {
     requestedChanges,
     previousAssetUrl: cleanSheetWhitespace(completion.assetLinkUrl),
     previousAssetPreviewUrl: cleanSheetWhitespace(completion.assetPreviewUrl),
+    previousAssetSet: completion.assetSet || [],
+    assetSet: completion.assetSet || [],
     assetUrl: cleanSheetWhitespace(completion.assetLinkUrl),
     assetPreviewUrl: cleanSheetWhitespace(completion.assetPreviewUrl),
     handoffStatus: "rework_requested",
@@ -6790,6 +6818,7 @@ async function upsertPigCompletedGraphics(completions) {
   const validatedCompletions = [];
   const editableProjectValidationWarnings = [];
   for (const completion of completions) {
+    assertPigCompletionFileAsset(completion);
     try {
       validatedCompletions.push(await validateCompletionEditableProjectIdentity(completion));
     } catch (error) {
