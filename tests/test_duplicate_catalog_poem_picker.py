@@ -48,6 +48,7 @@ class DuplicateCatalogPoemPickerTest(unittest.TestCase):
                 self.assertFalse(catalog_poem_text.lookup_poem_text("Example Book", "Shared Title")["ok"])
                 with sqlite3.connect(database) as connection, \
                      patch.object(catalog_validate, "fetch_book_status", return_value={**book, "effective_status": "catalog_ok"}), \
+                     patch.object(catalog_validate, "fetch_readable_book", return_value=None), \
                      patch.object(catalog_validate, "load_author_alias_map", return_value={}):
                     connection.row_factory = sqlite3.Row
                     record = {
