@@ -257,13 +257,20 @@ def validate_record(
     author = record.get("author") or ""
     poem_title = record.get("title") or ""
     snippets = candidate_snippets(record.get("excerptText"))
+    local_book_status = fetch_book_status(cursor, book_title)
     live_book = None
-    if record.get("recordId") == "gathering-preview":
+    needs_live_book = (
+        record.get("recordId") == "gathering-preview"
+        or bool((record.get("poemKey") or record.get("poem_key") or "").strip())
+        or not local_book_status
+        or local_book_status["effective_status"] not in {"catalog_ok", "provisional_source"}
+    )
+    if needs_live_book:
         try:
             live_book = fetch_readable_book(book_title)
         except (OSError, ValueError):
             pass
-    book_status = live_book["status"] if live_book else fetch_book_status(cursor, book_title)
+    book_status = live_book["status"] if live_book else local_book_status
 
     result = {
         "recordId": record.get("recordId"),

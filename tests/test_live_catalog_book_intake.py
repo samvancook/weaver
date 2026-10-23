@@ -35,7 +35,9 @@ class LiveCatalogBookIntakeTest(unittest.TestCase):
             self.assertEqual(preview["text"], text)
         with sqlite3.connect(":memory:") as connection, \
              patch.object(catalog_validate, "fetch_readable_book", return_value=live), \
-             patch.object(catalog_validate, "fetch_book_status", side_effect=AssertionError("stale status used")), \
+             patch.object(catalog_validate, "fetch_book_status", return_value={
+                 **live["status"], "effective_status": "set_aside"
+             }), \
              patch.object(catalog_validate, "load_author_alias_map", return_value={}):
             result = catalog_validate.validate_record(connection.cursor(), {
                 "recordId": "gathering-preview", "sourceRow": 0, "bookTitle": title,
@@ -43,6 +45,12 @@ class LiveCatalogBookIntakeTest(unittest.TestCase):
                 "excerptText": "A distinct beginning followed by enough words",
             })
             self.assertEqual(result["status"], "catalog_match")
+            saved = catalog_validate.validate_record(connection.cursor(), {
+                "recordId": "weaver:row-2", "sourceRow": 2, "bookTitle": title,
+                "author": "Matt Mason", "title": poem_title, "poemKey": "BPP-00001",
+                "excerptText": "A distinct beginning followed by enough words",
+            })
+            self.assertEqual(saved["status"], "catalog_match")
 
 
 if __name__ == "__main__":

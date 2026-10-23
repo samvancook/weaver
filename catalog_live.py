@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from functools import lru_cache
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -39,6 +40,7 @@ def list_readable_books() -> list[dict]:
     ]
 
 
+@lru_cache(maxsize=128)
 def fetch_readable_book(title_or_shortener: str) -> dict | None:
     path = "/books/" + urllib.parse.quote(title_or_shortener, safe="")
     path += "?include_poems=true&poem_limit=1000"
