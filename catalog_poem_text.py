@@ -13,11 +13,21 @@ from catalog_validate import (
     normalize,
     title_aliases,
 )
+from catalog_live import fetch_readable_book
 
 
 def lookup_poem_text(book_title: str, poem_title: str, excerpt_text: str = "", poem_key: str = "") -> dict:
     if not book_title:
         return {"ok": False, "error": "bookTitle is required."}
+
+    try:
+        live = fetch_readable_book(book_title)
+    except (OSError, ValueError):
+        live = "unavailable"
+    if live != "unavailable":
+        if not live:
+            return {"ok": False, "error": "Book has no readable poems in the current Catalog."}
+        return choose_poem(live["status"], live["poems"], poem_title, excerpt_text, poem_key)
 
     connection = sqlite3.connect(DB_PATH)
     connection.row_factory = sqlite3.Row
@@ -28,6 +38,12 @@ def lookup_poem_text(book_title: str, poem_title: str, excerpt_text: str = "", p
           return {"ok": False, "error": "Book not found in catalog."}
 
       poems = fetch_poems_for_book(cursor, int(book_status["canonical_book_id"]))
+      return choose_poem(book_status, poems, poem_title, excerpt_text, poem_key)
+    finally:
+      connection.close()
+
+
+def choose_poem(book_status: dict, poems: list[dict], poem_title: str, excerpt_text: str, poem_key: str) -> dict:
       if poem_key:
           selected = next((poem for poem in poems if poem["poem_key"] == poem_key), None)
           if not selected or (poem_title and normalize(selected["title"]) != normalize(poem_title)):
@@ -97,8 +113,6 @@ def lookup_poem_text(book_title: str, poem_title: str, excerpt_text: str = "", p
           "text": best_match["text"],
           "wordCount": best_match["word_count"],
       }
-    finally:
-      connection.close()
 
 
 def main() -> int:
