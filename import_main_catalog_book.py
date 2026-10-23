@@ -39,6 +39,8 @@ def import_book_payload(payload: dict, database: Path) -> dict:
     require(len(poems) == int(book["poem_count"]) == int(status["catalog_poem_count"]), "Poem count mismatch")
     require(len(poems) > 0, "No poems to import")
     require(len({poem["id"] for poem in poems}) == len(poems), "Duplicate poem IDs")
+    poem_keys = [poem.get("poem_key") for poem in poems if poem.get("poem_key")]
+    require(len(poem_keys) == len(set(poem_keys)), "Duplicate poem keys")
     # Catalog poem IDs identify source rows. A book may legitimately reuse a title.
     require(all(poem["book_title"] == title for poem in poems), "Poem book identity mismatch")
     require(all(poem["source_format"] == book["source_format"] for poem in poems), "Poem source mismatch")
@@ -48,6 +50,8 @@ def import_book_payload(payload: dict, database: Path) -> dict:
     try:
         connection.execute("PRAGMA foreign_keys = ON")
         with connection:
+            if "poem_key" not in {column[1] for column in connection.execute("PRAGMA table_info(catalog_poems)")}:
+                connection.execute("ALTER TABLE catalog_poems ADD COLUMN poem_key TEXT")
             require(not connection.execute("SELECT 1 FROM canonical_books WHERE id = ? OR lower(title) = lower(?) OR lower(book_shortener) = lower(?)", (book_id, title, status["book_shortener"])).fetchone(), "Book identity already exists")
             require(not connection.execute("SELECT 1 FROM catalog_books WHERE id = ? OR slug = ?", (catalog_book_id, book["slug"])).fetchone(), "Catalog edition already exists")
             poem_ids = [int(poem["id"]) for poem in poems]
@@ -83,10 +87,10 @@ def import_book_payload(payload: dict, database: Path) -> dict:
             )
             connection.executemany(
                 """INSERT INTO catalog_poems
-                   (id,catalog_book_id,title,text,character_count,word_count,extraction_method)
-                   VALUES (?,?,?,?,?,?,?)""",
+                   (id,catalog_book_id,title,text,character_count,word_count,extraction_method,poem_key)
+                   VALUES (?,?,?,?,?,?,?,?)""",
                 [(int(poem["id"]),catalog_book_id,poem["title"],poem.get("served_text") or poem["text"],
-                  poem["character_count"],poem["word_count"],poem["extraction_method"]) for poem in poems],
+                  poem["character_count"],poem["word_count"],poem["extraction_method"],poem.get("poem_key")) for poem in poems],
             )
             require(connection.execute("PRAGMA foreign_key_check").fetchall() == [], "Foreign-key check failed")
         return {"title": title, "bookShortener": status["book_shortener"], "poemCount": len(poems), "sourcePath": book["source_path"]}

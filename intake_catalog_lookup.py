@@ -13,6 +13,27 @@ def clean_title(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "").strip())
 
 
+def display_poem_options(poems: list[dict]) -> list[dict]:
+    rows = [poem for poem in poems if clean_title(poem["title"] or "")]
+    counts: dict[str, int] = {}
+    for poem in rows:
+        title = clean_title(poem["title"])
+        counts[title] = counts.get(title, 0) + 1
+    seen: dict[str, int] = {}
+    roman = ("I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X")
+    options = []
+    for poem in rows:
+        title = clean_title(poem["title"])
+        seen[title] = seen.get(title, 0) + 1
+        suffix = roman[seen[title] - 1] if seen[title] <= len(roman) else str(seen[title])
+        options.append({
+            "title": title,
+            "label": f"{title} ({suffix})" if counts[title] > 1 else title,
+            "poemKey": poem["poem_key"] or "",
+        })
+    return sorted(options, key=lambda option: option["title"].lower())
+
+
 def get_intake_books() -> dict:
     books = []
     for row in load_book_status_rows():
@@ -49,6 +70,7 @@ def get_poems(book_title: str) -> dict:
             return {"ok": False, "error": "Book not found in catalog."}
 
         poems = fetch_poems_for_book(cursor, int(book_status["canonical_book_id"]))
+        poem_options = display_poem_options(poems)
         titles = sorted(
             {
                 clean_title(poem["title"] or "")
@@ -63,7 +85,27 @@ def get_poems(book_title: str) -> dict:
             "author": book_status["author"],
             "primarySourceFormat": book_status.get("primary_source_format") or "",
             "poems": titles,
+            "poemOptions": poem_options,
         }
+    finally:
+        connection.close()
+
+
+def verify_poem_selection(book_title: str, poem_title: str, poem_key: str) -> dict:
+    if not book_title or not poem_title or not poem_key:
+        return {"ok": False, "error": "Book, poem title, and poem key are required."}
+    connection = sqlite3.connect(DB_PATH)
+    connection.row_factory = sqlite3.Row
+    try:
+        cursor = connection.cursor()
+        book_status = fetch_book_status(cursor, book_title)
+        if not book_status:
+            return {"ok": False, "error": "Book not found in catalog."}
+        poems = fetch_poems_for_book(cursor, int(book_status["canonical_book_id"]))
+        selected = next((poem for poem in poems if poem["poem_key"] == poem_key), None)
+        if not selected or clean_title(selected["title"]) != clean_title(poem_title):
+            return {"ok": False, "error": "Selected poem key does not match this book and title."}
+        return {"ok": True}
     finally:
         connection.close()
 
@@ -75,6 +117,12 @@ def main() -> int:
         result = get_intake_books()
     elif action == "poems":
         result = get_poems(str(payload.get("bookTitle") or ""))
+    elif action == "verify":
+        result = verify_poem_selection(
+            str(payload.get("bookTitle") or ""),
+            str(payload.get("poemTitle") or ""),
+            str(payload.get("poemKey") or ""),
+        )
     else:
         result = {"ok": False, "error": "Unsupported action."}
     json.dump(result, sys.stdout)

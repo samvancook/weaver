@@ -15,7 +15,7 @@ from catalog_validate import (
 )
 
 
-def lookup_poem_text(book_title: str, poem_title: str, excerpt_text: str = "") -> dict:
+def lookup_poem_text(book_title: str, poem_title: str, excerpt_text: str = "", poem_key: str = "") -> dict:
     if not book_title:
         return {"ok": False, "error": "bookTitle is required."}
 
@@ -28,6 +28,21 @@ def lookup_poem_text(book_title: str, poem_title: str, excerpt_text: str = "") -
           return {"ok": False, "error": "Book not found in catalog."}
 
       poems = fetch_poems_for_book(cursor, int(book_status["canonical_book_id"]))
+      if poem_key:
+          selected = next((poem for poem in poems if poem["poem_key"] == poem_key), None)
+          if not selected or (poem_title and normalize(selected["title"]) != normalize(poem_title)):
+              return {"ok": False, "error": "Selected poem key does not match this book and title."}
+          return {
+              "ok": True,
+              "bookTitle": book_status["title"],
+              "author": book_status["author"],
+              "poemTitle": selected["title"],
+              "poemKey": selected["poem_key"],
+              "text": selected["text"],
+              "wordCount": selected["word_count"],
+          }
+      if len([poem for poem in poems if normalize(poem["title"]) == normalize(poem_title)]) > 1:
+          return {"ok": False, "error": "This title names more than one poem. Choose I or II in Weaver."}
       requested_aliases = title_aliases(poem_title)
       requested_normalized = normalize(poem_title)
       excerpt_snippets = candidate_snippets(excerpt_text)
@@ -78,6 +93,7 @@ def lookup_poem_text(book_title: str, poem_title: str, excerpt_text: str = "") -
           "bookTitle": book_status["title"],
           "author": book_status["author"],
           "poemTitle": best_match["title"],
+          "poemKey": best_match["poem_key"],
           "text": best_match["text"],
           "wordCount": best_match["word_count"],
       }
@@ -91,6 +107,7 @@ def main() -> int:
         str(payload.get("bookTitle") or ""),
         str(payload.get("poemTitle") or ""),
         str(payload.get("excerptText") or ""),
+        str(payload.get("poemKey") or ""),
     )
     json.dump(result, sys.stdout)
     return 0
