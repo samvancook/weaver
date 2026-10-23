@@ -11,6 +11,7 @@ from pathlib import Path
 
 from excerpt_library import DEFAULT_DB_PATH as EXCERPT_LIBRARY_DB_PATH
 from excerpt_library import find_library_excerpt_match
+from catalog_live import fetch_readable_book
 
 DEFAULT_DB_PATH = Path(__file__).resolve().parent / "data" / "formal_catalog.db"
 DB_PATH = Path(os.environ.get("WEAVER_CATALOG_DB", DEFAULT_DB_PATH))
@@ -256,7 +257,13 @@ def validate_record(
     author = record.get("author") or ""
     poem_title = record.get("title") or ""
     snippets = candidate_snippets(record.get("excerptText"))
-    book_status = fetch_book_status(cursor, book_title)
+    live_book = None
+    if record.get("recordId") == "gathering-preview":
+        try:
+            live_book = fetch_readable_book(book_title)
+        except (OSError, ValueError):
+            pass
+    book_status = live_book["status"] if live_book else fetch_book_status(cursor, book_title)
 
     result = {
         "recordId": record.get("recordId"),
@@ -309,7 +316,7 @@ def validate_record(
         result["status"] = "catalog_unavailable"
         return result
 
-    poems = fetch_poems_for_book(cursor, int(book_status["canonical_book_id"]))
+    poems = live_book["poems"] if live_book else fetch_poems_for_book(cursor, int(book_status["canonical_book_id"]))
     if not poems:
         result["status"] = "catalog_unavailable"
         return result

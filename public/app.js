@@ -2188,7 +2188,7 @@ function updateGatheringCatalogPreviewState() {
   }
 }
 
-function setGatheringBookManualMode(bookTitle) {
+function setGatheringBookManualMode(bookTitle, lookupError = "") {
   populateDatalist(elements.gatheringBookPoemOptions, []);
   currentGatheringBookPoems = [];
   currentGatheringPoemOptions = [];
@@ -2204,7 +2204,9 @@ function setGatheringBookManualMode(bookTitle) {
     if (publishingBook && elements.gatheringBookAuthor && !elements.gatheringBookAuthor.value.trim()) {
       elements.gatheringBookAuthor.value = publishingBook.author || "";
     }
-    if (publishingBook) {
+    if (lookupError) {
+      elements.gatheringBookSourceHint.textContent = `${cleanedBookTitle} could not be checked against the live Catalog right now. You can enter the poem title and quote manually, or try Refresh Intake Options.`;
+    } else if (publishingBook) {
       const catalogLabel = publishingBook.releaseCatalog || "Publishing order";
       elements.gatheringBookSourceHint.textContent = `${cleanedBookTitle} is coming from the publishing-order sheet (${catalogLabel}) and does not have a readable catalog source in Weaver yet. Author is prefilled when available; enter the poem title manually.`;
     } else if (cleanedBookTitle && isLegacySuggested) {
@@ -2257,16 +2259,17 @@ async function handleGatheringBookSelectionChange({ preserveTitle = false } = {}
   if (elements.gatheringBookTitle) {
     elements.gatheringBookTitle.placeholder = "Start typing to filter catalog poem titles";
   }
+  let lookupError = "";
   try {
     await loadGatheringPoemsForBook(lookupTitle, { preserveTitle });
     if (currentGatheringBookPoems.length) {
       return;
     }
-  } catch (_error) {
-    // Fall through to manual mode if the live catalog lookup fails.
+  } catch (error) {
+    if (!/no readable poems/i.test(error.message)) lookupError = error.message;
   }
   if (!preserveTitle && elements.gatheringBookTitle) elements.gatheringBookTitle.value = "";
-  setGatheringBookManualMode(bookTitle);
+  setGatheringBookManualMode(bookTitle, lookupError);
 }
 
 function resetGatheringForm() {
