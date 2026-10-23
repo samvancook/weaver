@@ -178,7 +178,8 @@ const SHEET_SOURCE_CONFIG = {
     validationPrimarySourceFormat: 61,
     excerptPoetryPleaseStatus: 62,
     excerptPoetryPleaseUpdatedAt: 63,
-    excerptPoetryPleaseNote: 64
+    excerptPoetryPleaseNote: 64,
+    poemKey: 65
   }
 };
 const PIG_COMPLETION_COLUMNS = {
@@ -357,7 +358,7 @@ function invalidateQueueSnapshots() {
 
 async function getSourceSheetValuesCached() {
   await ensureExcerptPoetryPleaseColumnsServer();
-  const range = `'${sourceSheetName.replace(/'/g, "''")}'!A2:BL`;
+  const range = `'${sourceSheetName.replace(/'/g, "''")}'!A2:BM`;
   return getCachedQueueSnapshot(SOURCE_SHEET_CACHE_KEY, () => fetchSheetValuesServer(range));
 }
 const PIG_COMPLETION_HEADERS = [[
@@ -1848,13 +1849,13 @@ async function ensureExcerptPoetryPleaseColumnsServer() {
 
   const sheetId = targetSheet.properties.sheetId;
   const currentColumnCount = Number(targetSheet.properties.gridProperties?.columnCount || 0);
-  if (currentColumnCount < SHEET_SOURCE_CONFIG.columnMap.excerptPoetryPleaseNote) {
+  if (currentColumnCount < SHEET_SOURCE_CONFIG.columnMap.poemKey) {
     await sheetBatchUpdateServer([
       {
         appendDimension: {
           sheetId,
           dimension: "COLUMNS",
-          length: SHEET_SOURCE_CONFIG.columnMap.excerptPoetryPleaseNote - currentColumnCount
+          length: SHEET_SOURCE_CONFIG.columnMap.poemKey - currentColumnCount
         }
       }
     ]);
@@ -1862,8 +1863,8 @@ async function ensureExcerptPoetryPleaseColumnsServer() {
 
   await batchUpdateSheetValuesServer([
     {
-      range: `'${sourceSheetName.replace(/'/g, "''")}'!BJ1:BL1`,
-      values: [["excerpt_poetry_please_status", "excerpt_poetry_please_updated_at", "excerpt_poetry_please_note"]]
+      range: `'${sourceSheetName.replace(/'/g, "''")}'!BJ1:BM1`,
+      values: [["excerpt_poetry_please_status", "excerpt_poetry_please_updated_at", "excerpt_poetry_please_note", "catalog_poem_key"]]
     }
   ]);
 }
@@ -3281,6 +3282,7 @@ function buildPendingRecordFromSheetRow(row, index, canonicalBookAuthorMap = nul
     intakeLabel: cleanSheetWhitespace(row[2]),
     author: resolveGraphicsAuthor(row[config.author - 1] || rawVideoAuthor, bookTitle, canonicalBookAuthorMap),
     title: (row[config.title - 1] || rawVideoTitle).toString(),
+    poemKey: cleanSheetWhitespace(row[config.poemKey - 1]),
     bookTitle,
     excerptText,
     releaseCatalog: noteMeta.releaseCatalog || cleanSheetWhitespace(bookMeta?.releaseCatalog),
@@ -3368,7 +3370,7 @@ function buildApprovedExcerptExportRecordFromSheetRow(row, index, canonicalBookA
     sourceKind: "weaver",
     sourceRecordId,
     sourceRow,
-    ...resolveExcerptPoemKey(null, null, excerptText),
+    ...resolveExcerptPoemKey(row[config.poemKey - 1], "catalog", excerptText),
     sourceApprovedAt: normalizedTimestamp,
     sourceUpdatedAt: normalizedTimestamp,
     sourceEvent,
@@ -3917,6 +3919,8 @@ function buildExcerptRuntimeRecord(payload = {}, { sourceRow = 0, createdAt = ""
     submittedBy: cleanSheetWhitespace(payload.email || payload.submittedBy),
     author: cleanSheetWhitespace(payload.author),
     poemTitle: cleanSheetWhitespace(payload.title || payload.poemTitle),
+    poemKey: cleanSheetWhitespace(payload.poemKey),
+    poemKeySource: cleanSheetWhitespace(payload.poemKey) ? "catalog" : "",
     bookTitle: cleanSheetWhitespace(payload.bookTitle),
     excerptText: String(payload.quote || payload.excerptText || "").trim(),
     sourceEvent: cleanSheetWhitespace(payload.eventName || payload.sourceEvent),
@@ -3973,6 +3977,19 @@ async function shadowExcerptRecordsToRuntime(records) {
 }
 
 async function appendExcerptGatheringRow(payload = {}) {
+  const selectedPoemKey = cleanSheetWhitespace(payload.mode).toLowerCase() === "book"
+    ? cleanSheetWhitespace(payload.poemKey)
+    : "";
+  if (selectedPoemKey) {
+    const selection = await runIntakeCatalogLookup({
+      action: "verify",
+      bookTitle: payload.bookTitle,
+      poemTitle: payload.title,
+      poemKey: selectedPoemKey
+    });
+    if (!selection?.ok) throw new Error(selection?.error || "Catalog poem selection is invalid.");
+    await ensureExcerptPoetryPleaseColumnsServer();
+  }
   const sourceRecordId = cleanSheetWhitespace(payload.recordId || payload.sourceRecordId)
     || `weaver:${randomUUID()}`;
   let approvedMatch = null;
@@ -3996,6 +4013,7 @@ async function appendExcerptGatheringRow(payload = {}) {
   }
   const normalizedPayload = {
     ...payload,
+    poemKey: selectedPoemKey,
     recordId: sourceRecordId,
     ...(cleanSheetWhitespace(payload.mode).toLowerCase() === "video" ? {
       reviewDecision: "",
@@ -4042,6 +4060,12 @@ async function appendExcerptGatheringRow(payload = {}) {
       writes.unshift({
         range: `'${sourceSheetName.replace(/'/g, "''")}'!${toA1Column(config.recordId)}${rowNumber}`,
         values: [[sourceRecordId]]
+      });
+    }
+    if (selectedPoemKey) {
+      writes.push({
+        range: `'${sourceSheetName.replace(/'/g, "''")}'!${toA1Column(config.poemKey)}${rowNumber}`,
+        values: [[selectedPoemKey]]
       });
     }
     if (approvedMatch) {
@@ -7805,7 +7829,7 @@ function runCatalogValidation(records) {
   });
 }
 
-function runCatalogPoemLookup(bookTitle, poemTitle, excerptText) {
+function runCatalogPoemLookup(bookTitle, poemTitle, excerptText, poemKey = "") {
   return new Promise((resolve, reject) => {
     const child = spawn("python3", [path.join(__dirname, "catalog_poem_text.py")], {
       env: {
@@ -7834,7 +7858,7 @@ function runCatalogPoemLookup(bookTitle, poemTitle, excerptText) {
       }
     });
 
-    child.stdin.write(JSON.stringify({ bookTitle, poemTitle, excerptText }));
+    child.stdin.write(JSON.stringify({ bookTitle, poemTitle, excerptText, poemKey }));
     child.stdin.end();
   });
 }
@@ -9207,7 +9231,8 @@ const server = http.createServer(async (req, res) => {
       const bookTitle = url.searchParams.get("bookTitle") || "";
       const poemTitle = url.searchParams.get("poemTitle") || "";
       const excerptText = url.searchParams.get("excerptText") || "";
-      const result = await runCatalogPoemLookup(bookTitle, poemTitle, excerptText);
+      const poemKey = url.searchParams.get("poemKey") || "";
+      const result = await runCatalogPoemLookup(bookTitle, poemTitle, excerptText, poemKey);
       const html = result.ok
         ? `<!DOCTYPE html>
 <html lang="en">

@@ -184,6 +184,7 @@ let currentIntakePublishingBooks = [];
 let currentIntakePublishingBooksByKey = new Map();
 let currentContributorAccess = null;
 let currentGatheringBookPoems = [];
+let currentGatheringPoemOptions = [];
 let currentGatheringCatalogBook = null;
 let currentGatheringBatchRows = [];
 let currentGatheringVideoPlaylist = null;
@@ -2103,6 +2104,7 @@ async function loadGatheringPoemsForBook(bookTitle, { preserveTitle = false } = 
   if (!cleanedBookTitle || !elements.gatheringBookTitle) {
     populateDatalist(elements.gatheringBookPoemOptions, []);
     currentGatheringBookPoems = [];
+    currentGatheringPoemOptions = [];
     currentGatheringCatalogBook = null;
     if (elements.gatheringBookSourceHint) {
       elements.gatheringBookSourceHint.textContent = "Select a book to load poem titles from a catalog-backed source, or keep going manually when no catalog source is available.";
@@ -2113,15 +2115,18 @@ async function loadGatheringPoemsForBook(bookTitle, { preserveTitle = false } = 
 
   const previousValue = preserveTitle ? elements.gatheringBookTitle.value.trim() : "";
   const data = await requestReviewApi("/api/intake/catalog/poems", { bookTitle: cleanedBookTitle });
-  const poems = Array.isArray(data.poems) ? data.poems : [];
+  const poems = Array.isArray(data.poemOptions)
+    ? data.poemOptions
+    : (Array.isArray(data.poems) ? data.poems.map(title => ({ title, label: title, poemKey: "" })) : []);
   currentGatheringCatalogBook = {
     title: data.bookTitle || cleanedBookTitle,
     author: data.author || "",
     primarySourceFormat: data.primarySourceFormat || ""
   };
-  currentGatheringBookPoems = poems;
-  populateDatalist(elements.gatheringBookPoemOptions, poems);
-  if (previousValue && poems.includes(previousValue)) {
+  currentGatheringPoemOptions = poems;
+  currentGatheringBookPoems = poems.map(poem => poem.label);
+  populateDatalist(elements.gatheringBookPoemOptions, currentGatheringBookPoems);
+  if (previousValue && currentGatheringBookPoems.includes(previousValue)) {
     elements.gatheringBookTitle.value = previousValue;
   } else if (!preserveTitle) {
     elements.gatheringBookTitle.value = "";
@@ -2133,9 +2138,23 @@ async function loadGatheringPoemsForBook(bookTitle, { preserveTitle = false } = 
     elements.gatheringBookAuthor.value = data.author || "";
   }
   if (elements.gatheringBookSourceHint) {
-    elements.gatheringBookSourceHint.textContent = `${data.primarySourceFormat || "Catalog"} source connected. ${poems.length} poem titles loaded for ${data.bookTitle || cleanedBookTitle}. You can read the poem in Weaver and also type a manual poem title if needed.`;
+    elements.gatheringBookSourceHint.textContent = `${data.primarySourceFormat || "Catalog"} source connected. ${poems.length} poems loaded for ${data.bookTitle || cleanedBookTitle}. You can read the poem in Weaver and also type a manual poem title if needed.`;
   }
   updateGatheringCatalogPreviewState();
+}
+
+function selectedGatheringCatalogPoem() {
+  const label = elements.gatheringBookTitle?.value.trim() || "";
+  return currentGatheringPoemOptions.find(poem => poem.label === label) || null;
+}
+
+function requireUnambiguousGatheringPoem() {
+  const value = elements.gatheringBookTitle?.value.trim() || "";
+  const selected = selectedGatheringCatalogPoem();
+  if (!selected && currentGatheringPoemOptions.filter(poem => poem.title === value).length > 1) {
+    throw new Error("This title names two poems. Choose the I or II option from the list.");
+  }
+  return selected;
 }
 
 function updateGatheringCatalogPreviewState() {
@@ -2172,6 +2191,7 @@ function updateGatheringCatalogPreviewState() {
 function setGatheringBookManualMode(bookTitle) {
   populateDatalist(elements.gatheringBookPoemOptions, []);
   currentGatheringBookPoems = [];
+  currentGatheringPoemOptions = [];
   currentGatheringCatalogBook = null;
   if (elements.gatheringBookTitle) {
     elements.gatheringBookTitle.placeholder = "Type poem title manually";
@@ -2756,7 +2776,8 @@ function buildGatheringPayload() {
 
   if (mode === "book") {
     const author = elements.gatheringBookAuthor?.value.trim() || "";
-    const title = elements.gatheringBookTitle?.value.trim() || "";
+    const selectedPoem = requireUnambiguousGatheringPoem();
+    const title = selectedPoem?.title || elements.gatheringBookTitle?.value.trim() || "";
     const quote = elements.gatheringBookQuote?.value.trim() || "";
     const bookTitle = elements.gatheringBookBook?.value.trim() || "";
     const notes = elements.gatheringBookNotes?.value.trim() || "";
@@ -2775,6 +2796,7 @@ function buildGatheringPayload() {
       email,
       author,
       title,
+      poemKey: selectedPoem?.poemKey || "",
       quote,
       bookTitle,
       notes: combinedNotes
@@ -2904,7 +2926,14 @@ async function submitGathering() {
 
 function openGatheringCatalogPoem() {
   const bookTitle = elements.gatheringBookBook?.value.trim() || "";
-  const poemTitle = elements.gatheringBookTitle?.value.trim() || "";
+  let selectedPoem;
+  try {
+    selectedPoem = requireUnambiguousGatheringPoem();
+  } catch (error) {
+    setStatus(error.message);
+    return;
+  }
+  const poemTitle = selectedPoem?.title || elements.gatheringBookTitle?.value.trim() || "";
   const excerptText = elements.gatheringBookQuote?.value.trim() || "";
   if (!bookTitle || !poemTitle) {
     setStatus("Choose a catalog-backed book and poem before opening catalog context.");
@@ -2915,6 +2944,7 @@ function openGatheringCatalogPoem() {
   const url = new URL("/catalog-poem", window.location.origin);
   url.searchParams.set("bookTitle", bookTitle);
   url.searchParams.set("poemTitle", poemTitle);
+  if (selectedPoem?.poemKey) url.searchParams.set("poemKey", selectedPoem.poemKey);
   if (excerptText) {
     url.searchParams.set("excerptText", excerptText);
   }
@@ -2940,6 +2970,7 @@ async function confirmGatheringBookQuoteAgainstCatalog(payload) {
           sourceRow: 0,
           author: payload.author,
           title: payload.title,
+          poemKey: payload.poemKey || "",
           bookTitle: payload.bookTitle,
           excerptText: payload.quote
         }]

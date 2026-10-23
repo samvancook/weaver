@@ -207,12 +207,14 @@ def fetch_book_status(_cursor: sqlite3.Cursor, book_title: str) -> dict | None:
 
 
 def fetch_poems_for_book(cursor: sqlite3.Cursor, canonical_book_id: int) -> list[dict]:
+    key_column = "cp.poem_key" if "poem_key" in {column[1] for column in cursor.execute("PRAGMA table_info(catalog_poems)")} else "NULL AS poem_key"
     return cursor.execute(
-        """
-        SELECT cp.title, cp.text, cp.word_count, cb.title AS book_title, cb.author
+        f"""
+        SELECT cp.id, {key_column}, cp.title, cp.text, cp.word_count, cb.title AS book_title, cb.author
         FROM catalog_poems cp
         JOIN catalog_books cb ON cb.id = cp.catalog_book_id
         WHERE cb.canonical_book_id = ?
+        ORDER BY cp.id
         """,
         (canonical_book_id,),
     ).fetchall()
@@ -311,6 +313,12 @@ def validate_record(
     if not poems:
         result["status"] = "catalog_unavailable"
         return result
+    selected_poem_key = (record.get("poemKey") or record.get("poem_key") or "").strip()
+    if selected_poem_key:
+        poems = [poem for poem in poems if poem["poem_key"] == selected_poem_key]
+        if len(poems) != 1:
+            result["status"] = "poem_key_not_found"
+            return result
 
     normalized_poem_title = normalize_title(poem_title)
     query_excerpt_raw = preserve_excerpt_text(record.get("excerptText"))
