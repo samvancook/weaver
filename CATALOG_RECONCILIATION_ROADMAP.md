@@ -1,5 +1,16 @@
 # Catalog Identity and Reconciliation Roadmap
 
+## Current Weaver book-intake reliability plan (2026-10-23)
+
+This section supersedes the older bundled-database statements below. Merged PRs #39 and #40 use the current live Catalog for book options, poem choices, keyed poem text, and validation of saved keyed excerpts. The bundled SQLite database is a fallback during a Catalog lookup failure. Production read-only checks after those releases found Roads, A Choir of Honest Killers, WG, and BBFR available; 108 of 108 advertised Catalog-backed books returned nonempty poem choices. These checks did not submit an excerpt or prove a Sheet write reached review.
+
+1. Add `scripts/check-book-intake-release.mjs` to the release runbook. It checks Catalog-backed book choice, keyed poem view, review queue read, and graphics queue read without changing data. Run it against the deployed revision after each release and record its output. It is a diagnostic, not a deploy trigger.
+2. Add a controlled end-to-end submission canary with a stable excerpt ID and exact Sheet-row/review-queue readback. Make retries idempotent before automating this check. Do not use a real poem merely to make a synthetic test pass.
+3. Separate Catalog unavailability from a genuinely absent source in editor messages; log the failing dependency and request ID for operators. Keep the editor flow as it is unless a failure requires action.
+4. Replace the Catalog `%` search workaround in `catalog_live.py` when Catalog supplies a supported, paginated listing/status endpoint. Catalog owns that API contract. Weaver should record the Catalog revision and use stable `poem_key` for duplicate titles.
+
+The earlier source-import and status observations below are dated history; do not use them as the current live state without a fresh check.
+
 ## Established
 
 - Weaver's book intake has two separate inputs. The publishing-order Sheet provides book metadata and suggestions; catalog-backed poem titles and validation come from `data/formal_catalog.db`. A book appearing in suggestions does not prove its poems are available.
