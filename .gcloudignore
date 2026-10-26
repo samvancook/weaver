@@ -15,6 +15,7 @@
 !video_excerpt_folding.mjs
 !poem_key_seed.mjs
 !catalog_validate.py
+!catalog_live.py
 !catalog_poem_text.py
 !excerpt_library.py
 !excerpt_library_text.py
