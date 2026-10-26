@@ -2098,7 +2098,7 @@ async function loadGatheringOptions({ force = false } = {}) {
     ? " Publishing-order titles are temporarily unavailable until that sheet is shared with Weaver."
     : "";
   const catalogStatusNote = data.catalogLookupStatus === "cached_fallback"
-    ? " Live Catalog is temporarily unavailable; showing cached book choices. Please retry before relying on poem text."
+    ? ` Live Catalog is temporarily unavailable; showing cached book choices. Please retry before relying on poem text.${data.catalogRequestId ? ` Reference: ${data.catalogRequestId}.` : ""}`
     : "";
   setStatus(`Loaded ${data.authors?.length || 0} legacy author suggestions, ${currentIntakeLegacyBooks.length} legacy book suggestions, ${currentIntakePublishingBooks.length} publishing-order books, and ${currentIntakeCatalogBooks.length} catalog-backed books for intake.${publishingStatusNote}${catalogStatusNote}`);
 }
