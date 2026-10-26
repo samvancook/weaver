@@ -3948,17 +3948,33 @@ async function findExistingBookIntakeRow(recordId, payload) {
   const rowNumber = matches[0];
   const [saved = []] = await fetchSheetValuesServer(
     `'${sourceSheetName.replace(/'/g, "''")}'!A${rowNumber}:BM${rowNumber}`);
-  const same = cleanSheetWhitespace(saved[1]) === cleanSheetWhitespace(payload.email)
-    && cleanSheetWhitespace(saved[2]).toLowerCase() === "add a quote from a book"
-    && cleanSheetWhitespace(saved[config.author - 1]) === cleanSheetWhitespace(payload.author)
+  const expectedFront = buildExcerptGatheringAppendRow({ ...payload, recordId }).slice(0, 9);
+  const same = cleanSheetWhitespace(saved[config.author - 1]) === cleanSheetWhitespace(payload.author)
     && cleanSheetWhitespace(saved[config.title - 1]) === cleanSheetWhitespace(payload.title)
     && String(saved[config.excerpt - 1] || "").trim() === String(payload.quote || "").trim()
     && cleanSheetWhitespace(saved[config.bookTitle - 1]) === cleanSheetWhitespace(payload.bookTitle)
-    && String(saved[8] || "").trim() === String(payload.notes || "").trim()
+    && [1, 2, 3, 5, 6, 7, 8].every(index =>
+      !String(saved[index] || "").trim()
+      || String(saved[index]).trim() === String(expectedFront[index] || "").trim())
     && (!cleanSheetWhitespace(payload.poemKey)
       || !cleanSheetWhitespace(saved[config.poemKey - 1])
       || cleanSheetWhitespace(saved[config.poemKey - 1]) === cleanSheetWhitespace(payload.poemKey));
   if (!same) throw new Error(`Excerpt record ID ${recordId} already belongs to different content.`);
+  const missingFront = [1, 2, 3, 5, 6, 7].some(index => !String(saved[index] || "").trim())
+    || (String(payload.notes || "").trim() && !String(saved[8] || "").trim());
+  if (missingFront) {
+    expectedFront[0] = saved[0] || expectedFront[0];
+    await batchUpdateSheetValuesServer([{
+      range: `'${sourceSheetName.replace(/'/g, "''")}'!A${rowNumber}:I${rowNumber}`,
+      values: [expectedFront]
+    }]);
+    const [repaired = []] = await fetchSheetValuesServer(
+      `'${sourceSheetName.replace(/'/g, "''")}'!A${rowNumber}:I${rowNumber}`);
+    if (![1, 2, 3, 5, 6, 7].every(index =>
+      String(repaired[index] || "").trim() === String(expectedFront[index] || "").trim())) {
+      throw new Error(`Excerpt record ID ${recordId} front columns could not be repaired.`);
+    }
+  }
   if (cleanSheetWhitespace(payload.poemKey) && !cleanSheetWhitespace(saved[config.poemKey - 1])) {
     await batchUpdateSheetValuesServer([{
       range: `'${sourceSheetName.replace(/'/g, "''")}'!${toA1Column(config.poemKey)}${rowNumber}`,
