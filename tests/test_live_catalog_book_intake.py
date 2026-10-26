@@ -8,6 +8,13 @@ import intake_catalog_lookup
 
 
 class LiveCatalogBookIntakeTest(unittest.TestCase):
+    def test_catalog_outage_is_not_reported_as_missing_book(self):
+        with patch.object(intake_catalog_lookup, "fetch_readable_book", side_effect=OSError("offline")), \
+             patch.object(intake_catalog_lookup, "fetch_book_status", return_value=None):
+            result = intake_catalog_lookup.get_poems("Roads")
+            self.assertFalse(result["ok"])
+            self.assertIn("temporarily unavailable", result["error"])
+
     def test_newly_readable_book_overrides_stale_local_status(self):
         title = "Roads"
         poem_title = "A newly readable poem"
