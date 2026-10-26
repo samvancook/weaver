@@ -1584,6 +1584,19 @@ function getRequestCorrelationId(req) {
   return headerValue || `weaver-${randomUUID()}`;
 }
 
+function sendBookIntakeError(req, res, operation, error, statusCode = 500) {
+  const requestId = getRequestCorrelationId(req);
+  console.error(JSON.stringify({
+    event: "book_intake_error", requestId, operation,
+    message: String(error?.message || error).slice(0, 500)
+  }));
+  return sendJson(res, statusCode, {
+    ok: false,
+    error: `${error?.message || "Book intake is temporarily unavailable."} Reference: ${requestId}`,
+    requestId
+  });
+}
+
 function escapeHtml(text) {
   return String(text || "")
     .replaceAll("&", "&amp;")
@@ -8253,24 +8266,26 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === "/api/intake/options" && req.method === "GET") {
     try {
       const result = await getExcerptGatheringOptionsFromSheets();
+      if (result.catalogLookupStatus === "cached_fallback") {
+        result.catalogRequestId = getRequestCorrelationId(req);
+        console.warn(JSON.stringify({ event: "book_catalog_fallback",
+          requestId: result.catalogRequestId, operation: "intake_options" }));
+      }
       return sendJson(res, 200, result);
     } catch (error) {
-      return sendJson(res, 500, {
-        ok: false,
-        error: error.message
-      });
+      return sendBookIntakeError(req, res, "intake_options", error);
     }
   }
 
   if (url.pathname === "/api/intake/catalog/poems" && req.method === "GET") {
     try {
       const result = await getExcerptGatheringPoemsForBook(url.searchParams.get("bookTitle") || "");
+      if (result.ok === false && /temporarily unavailable/i.test(result.error || "")) {
+        return sendBookIntakeError(req, res, "catalog_poems", new Error(result.error), 503);
+      }
       return sendJson(res, 200, result);
     } catch (error) {
-      return sendJson(res, 500, {
-        ok: false,
-        error: error.message
-      });
+      return sendBookIntakeError(req, res, "catalog_poems", error);
     }
   }
 
@@ -8290,10 +8305,7 @@ const server = http.createServer(async (req, res) => {
         : await loadVideoPlaylistFromFormUrl(url.searchParams.get("formUrl") || "");
       return sendJson(res, 200, result);
     } catch (error) {
-      return sendJson(res, 500, {
-        ok: false,
-        error: error.message
-      });
+      return sendJson(res, 500, { ok: false, error: error.message });
     }
   }
 
@@ -8376,10 +8388,7 @@ const server = http.createServer(async (req, res) => {
       invalidateQueueSnapshots();
       return sendJson(res, 200, result);
     } catch (error) {
-      return sendJson(res, 500, {
-        ok: false,
-        error: error.message
-      });
+      return sendBookIntakeError(req, res, "intake_submit", error);
     }
   }
 
