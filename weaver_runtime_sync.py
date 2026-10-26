@@ -154,7 +154,7 @@ def sync_completions(connection, payload: dict[str, Any]) -> dict[str, Any]:
     completions = payload.get("completions") or []
     written = 0
     request_ids: list[str] = []
-    repair_returns: list[dict[str, str]] = []
+    repair_returns: list[dict[str, Any]] = []
 
     for completion in completions:
         request_id = normalize_text(completion.get("requestId") or completion.get("graphicsRequestId"))
@@ -230,6 +230,8 @@ def sync_completions(connection, payload: dict[str, Any]) -> dict[str, Any]:
             "handoffStatus": "sent_to_weaver_qc",
             "qcStatus": "pending",
             "assetUrl": completion.get("assetUrl") or completion.get("assetLinkUrl") or completion.get("driveUrl"),
+            "assetSet": completion.get("assetSet") or [],
+            "affectedCardIndex": completion.get("affectedCardIndex"),
             "assetPreviewUrl": completion.get("assetPreviewUrl") or completion.get("previewUrl") or completion.get("thumbnailUrl"),
             "assetFileId": completion.get("assetFileId") or completion.get("driveFileId") or completion.get("fileId"),
             "driveFileId": completion.get("driveFileId") or completion.get("assetFileId") or completion.get("fileId"),
@@ -271,12 +273,27 @@ def sync_completions(connection, payload: dict[str, Any]) -> dict[str, Any]:
             or completion.get("imageId")
         )
         if repair_request_id and replacement_asset_link:
+            existing_repair = connection.get_raw_document(
+                FIRESTORE_REPAIR_REQUESTS_COLLECTION, repair_document_id(repair_request_id)
+            ) or {}
+            replacement_context = {
+                "assetSet": completion.get("assetSet") or [],
+                "affectedCardIndex": completion.get("affectedCardIndex") or completion_payload.get("affectedCardIndex") or existing_repair.get("affectedCardIndex"),
+                "contentType": content_type,
+                "sourceRecordId": existing_repair.get("sourceRecordId") or completion.get("sourceRecordId") or "",
+                "sourceRequestId": existing_repair.get("sourceRequestId") or "",
+                "sourceCompletionId": existing_repair.get("sourceCompletionId") or "",
+                "pigProjectId": completion.get("pigProjectId") or "",
+                "editableProjectFileId": completion.get("editableProjectFileId") or completion.get("projectFileId") or "",
+                "editableProjectUrl": completion.get("editableProjectUrl") or "",
+            }
             repair_update = update_repair_request(connection, {
                 "repairRequestId": repair_request_id,
                 "update": {
                     "weaverRepairStatus": "returned_pending_sync",
                     "replacementAssetId": replacement_asset_id,
                     "replacementAssetLink": replacement_asset_link,
+                    **replacement_context,
                     "replacementPigCompletionId": normalize_text(
                         completion.get("completionId") or completion.get("id")
                     ),
@@ -291,6 +308,7 @@ def sync_completions(connection, payload: dict[str, Any]) -> dict[str, Any]:
                     "repairRequestId": repair_request_id,
                     "replacementAssetId": replacement_asset_id,
                     "replacementAssetLink": replacement_asset_link,
+                    **replacement_context,
                     "weaverJobId": request_id,
                     "pigJobId": normalize_text(
                         completion.get("pigJobId")
@@ -1034,17 +1052,18 @@ def original_repair_editable_project(connection, request: dict[str, Any], source
     misc = normalize_text(original_content.get("misc"))
     request_match = re.search(r"(?:^|\s\|\s)weaverSourceRequestId=([^\s|]+)", misc)
     completion_match = re.search(r"(?:^|\s\|\s)weaverSourceCompletionId=([^\s|]+)", misc)
-    if not request_match or not completion_match or not source_text:
+    original_id = normalize_text(request.get("sourceRequestId") or original_content.get("sourceRequestId")) or (request_match.group(1) if request_match else "")
+    completion_id = normalize_text(request.get("sourceCompletionId") or original_content.get("sourceCompletionId")) or (completion_match.group(1) if completion_match else "")
+    if not original_id or not completion_id:
         return {}
-    original_id = request_match.group(1)
     original = get_graphics_handoff(connection, original_id)
-    if not original or normalize_text(original.get("sourceCompletionId")) != completion_match.group(1):
+    if not original or normalize_text(original.get("sourceCompletionId")) != completion_id:
         return {}
     normalize_poem = lambda value: re.sub(r"\s+", " ", normalize_text(value)).casefold()
     if (
         normalize_text(original.get("contentType")).upper() != normalize_text(request.get("contentType")).upper()
         or normalize_text(original.get("author")).casefold() != normalize_text(request.get("author")).casefold()
-        or normalize_poem(original.get("quoteText") or original.get("text")) != normalize_poem(source_text)
+        or (source_text and normalize_poem(original.get("quoteText") or original.get("text")) != normalize_poem(source_text))
         or normalize_text(original.get("editableProjectValidationStatus")) != "verified"
     ):
         return {}
@@ -1053,7 +1072,7 @@ def original_repair_editable_project(connection, request: dict[str, Any], source
         return {}
     return {
         "originalGraphicsRequestId": original_id,
-        "revisionOf": completion_match.group(1),
+        "revisionOf": completion_id,
         **{field: original[field] for field in fields},
         "editableProjectKind": normalize_text(original.get("editableProjectKind")),
         "editableProjectSchemaVersion": original.get("editableProjectSchemaVersion") or "",
@@ -1081,7 +1100,9 @@ def build_repair_handoff_request(
     ))
     issue_reason = normalize_text(request.get("issueReason"))
     request_note = normalize_text(request.get("requestNote"))
+    card_context = repair_card_context(request)
     return {
+        **card_context,
         "graphicsRequestId": pig_job_id,
         "sourceSystem": "poetry_please_repair",
         "sourceStatus": "repair_requested",
@@ -1096,6 +1117,7 @@ def build_repair_handoff_request(
         "requestedChanges": request_note or issue_reason,
         **(editable_project or {}),
         "sourcePayload": {
+            **card_context,
             "repairRequestId": repair_request_id,
             "sourceFlagId": normalize_text(request.get("sourceFlagId")),
             "originalContentId": normalize_text(request.get("imageId")),
@@ -1125,6 +1147,27 @@ def build_repair_handoff_request(
             "nextAction": "rework",
             **(editable_project or {}),
         },
+    }
+
+
+def repair_card_context(request: dict[str, Any]) -> dict[str, Any]:
+    original = request.get("originalContent") if isinstance(request.get("originalContent"), dict) else {}
+    assets = request.get("assetSet") if isinstance(request.get("assetSet"), list) else original.get("assetSet") or []
+    if not isinstance(assets, list) or len(assets) > 20 or any(
+        not isinstance(asset, dict) or asset.get("index") != index
+        for index, asset in enumerate(assets, 1)
+    ):
+        raise ValueError("assetSet must be an ordered list of up to 20 cards")
+    affected = request.get("affectedCardIndex", original.get("affectedCardIndex"))
+    if affected is not None and (isinstance(affected, bool) or not isinstance(affected, int) or not 1 <= affected <= len(assets)):
+        raise ValueError("affectedCardIndex must be a 1-based index into assetSet")
+    return {
+        "assetSet": assets,
+        "previousAssetSet": assets,
+        "affectedCardIndex": affected,
+        **{key: normalize_text(request.get(key) or original.get(key)) for key in (
+            "sourceRecordId", "sourceRequestId", "sourceCompletionId",
+        )},
     }
 
 
@@ -1264,6 +1307,8 @@ def upsert_repair_requests(connection, payload: dict[str, Any]) -> dict[str, Any
             event = "repair_imported" if not existing else "repair_metadata_updated"
             record = {
                 **existing,
+                **repair_card_context(request),
+                **({"assetSet": existing.get("assetSet") or []} if existing.get("replacementAssetId") else {}),
                 "id": document_id,
                 "poetryPleaseRepairRequestId": repair_request_id,
                 "sourceFlagId": normalize_text(request.get("sourceFlagId")),
@@ -1529,6 +1574,8 @@ def reconcile_repair_request(connection, payload: dict[str, Any]) -> dict[str, A
             if isinstance(item, dict)
         ]
         prior_replacement = {
+            "assetSet": existing.get("assetSet") or [],
+            "affectedCardIndex": existing.get("affectedCardIndex"),
             "assetId": normalize_text(existing.get("replacementAssetId")),
             "assetLink": normalize_text(existing.get("replacementAssetLink")),
             "pigCompletionId": normalize_text(existing.get("replacementPigCompletionId")),
@@ -1539,6 +1586,9 @@ def reconcile_repair_request(connection, payload: dict[str, Any]) -> dict[str, A
             if not prior_replacements or prior_replacements[-1] != prior_replacement:
                 prior_replacements.append(prior_replacement)
         update_graphics_handoff(connection, pig_job_id, {
+            "assetSet": existing.get("assetSet") or repair_handoff.get("assetSet") or [],
+            "previousAssetSet": existing.get("assetSet") or repair_handoff.get("assetSet") or [],
+            "affectedCardIndex": poetry_please_request.get("affectedCardIndex") or existing.get("affectedCardIndex"),
             "handoffStatus": "requested",
             "pigStatus": "not_started",
             "qcStatus": "needs_revision",

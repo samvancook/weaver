@@ -131,6 +131,8 @@ def build_graphics_qc_queue_card(completion: dict[str, Any]) -> dict[str, Any]:
             completion.get("assetPreviewUrl") or payload.get("assetPreviewUrl") or asset_url
         ).strip(),
         "assetSet": payload.get("assetSet") if isinstance(payload.get("assetSet"), list) else [],
+        "affectedCardIndex": payload.get("affectedCardIndex"),
+        "sourceRecordId": str(payload.get("sourceRecordId") or ""),
         "pigProjectId": pig_project_id,
         "editableProjectFileId": editable_project_file_id,
         "editableProjectUrl": editable_project_url,
@@ -819,6 +821,9 @@ def normalize_handoff_record(record: dict[str, Any]) -> dict[str, Any]:
         pig_payload,
         extract_nested_payload(pig_payload),
     ]
+    for field in ("assetSet", "previousAssetSet", "affectedCardIndex"):
+        if not normalized.get(field):
+            normalized[field] = next((source[field] for source in payload_sources if source.get(field)), [] if field != "affectedCardIndex" else None)
     quote_text = str(normalized.get("quoteText") or extract_handoff_text(source_payload) or "").strip()
     if not quote_text and nested_source:
         quote_text = extract_handoff_text(nested_source)
@@ -1073,6 +1078,9 @@ def queue_card_record(record: dict[str, Any]) -> dict[str, Any]:
         "editableProjectValidationError": record.get("editableProjectValidationError") or {},
         "assetUrl": record.get("assetUrl") or "",
         "assetPreviewUrl": record.get("assetPreviewUrl") or "",
+        "assetSet": record.get("assetSet") or repair_value("assetSet") or [],
+        "previousAssetSet": record.get("previousAssetSet") or repair_value("previousAssetSet") or record.get("assetSet") or [],
+        "affectedCardIndex": record.get("affectedCardIndex") or repair_value("affectedCardIndex") or None,
         "previousAssetUrl": record.get("previousAssetUrl") or record.get("assetUrl") or "",
         "previousAssetPreviewUrl": record.get("previousAssetPreviewUrl") or record.get("assetPreviewUrl") or "",
         "reworkReason": record.get("reworkReason") or "",
@@ -1684,6 +1692,9 @@ class FirestoreLedgerClient:
             "handoffStatus": handoff_status,
             "qcStatus": qc_status,
             "assetUrl": asset_url,
+            "assetSet": update.get("assetSet") if isinstance(update.get("assetSet"), list) else existing.get("assetSet") or [],
+            "previousAssetSet": update.get("previousAssetSet") if isinstance(update.get("previousAssetSet"), list) else existing.get("previousAssetSet") or [],
+            "affectedCardIndex": update.get("affectedCardIndex") or existing.get("affectedCardIndex"),
             "assetPreviewUrl": first_durable_value(update.get("assetPreviewUrl"), update.get("previewUrl"), update.get("thumbnailUrl"), existing.get("assetPreviewUrl")),
             "assetFileId": first_durable_value(update.get("assetFileId"), update.get("driveFileId"), update.get("fileId"), existing.get("assetFileId"), existing.get("driveFileId")),
             "driveFileId": first_durable_value(update.get("driveFileId"), update.get("assetFileId"), update.get("fileId"), existing.get("driveFileId"), existing.get("assetFileId")),

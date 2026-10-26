@@ -2109,6 +2109,8 @@ function overlayRuntimeHandoffState(record, handoffStateByRequestId = null) {
     aestheticIssue: cleanSheetWhitespace(qcPayload.aestheticIssue || record.aestheticIssue),
     assetLinkUrl: cleanSheetWhitespace(handoff.assetUrl) || record.assetLinkUrl,
     assetPreviewUrl: cleanSheetWhitespace(handoff.assetPreviewUrl) || record.assetPreviewUrl,
+    assetSet: handoff.assetSet?.length ? handoff.assetSet : (pigPayload.assetSet || record.assetSet || []),
+    affectedCardIndex: handoff.affectedCardIndex || record.affectedCardIndex,
     pigProjectId: cleanSheetWhitespace(
       handoff.pigProjectId || pigPayload.pigProjectId || record.pigProjectId,
     ),
@@ -4453,15 +4455,32 @@ function buildPoetryPleaseGraphicRecord(record) {
   if (!contentType) {
     throw new Error(`Approved graphic ${cleanSheetWhitespace(record.graphicsRequestId) || "without an ID"} is missing contentType`);
   }
+  if (!["QI", "FPI"].includes(contentType)) {
+    throw new Error(`Unsupported approved graphic contentType: ${contentType}`);
+  }
+
+  const graphicIdentity = {
+    contentType,
+    sourceSystem: "weaver",
+    sourceRecordId: cleanSheetWhitespace(record.sourceRecordId || record.sourceIdentity?.sourceRecordId || record.contentId || record.recordId),
+    sourceIdentity: record.sourceIdentity || {},
+    pigProjectId: cleanSheetWhitespace(record.pigProjectId),
+    editableProjectFileId: cleanSheetWhitespace(record.editableProjectFileId || record.projectFileId),
+    editableProjectUrl: cleanSheetWhitespace(record.editableProjectUrl),
+    ...(Array.isArray(record.assetSet) && record.assetSet.length ? { assetSet: record.assetSet } : {})
+  };
 
   if (contentType === "FPI") {
     const fpiSourceRecordId = bookShortener && cleanSheetWhitespace(record.poemTitle || record.title)
       ? `${bookShortener}-FPI-${slugToken(record.poemTitle || record.title)}`
       : cleanSheetWhitespace(record.sourceRecordId || record.recordId) || `pig:${cleanSheetWhitespace(record.pigCompletionId)}`;
     return {
+      ...graphicIdentity,
       contentType: "FPI",
       sourceSystem: "weaver",
-      sourceRecordId: fpiSourceRecordId,
+      sourceRecordId: graphicIdentity.assetSet?.length > 1
+        ? (graphicIdentity.sourceRecordId || fpiSourceRecordId)
+        : fpiSourceRecordId,
       bookShortener,
       author: String(record.author || ""),
       book: String(record.bookTitle || ""),
@@ -4483,8 +4502,9 @@ function buildPoetryPleaseGraphicRecord(record) {
   }
 
   return {
+    ...graphicIdentity,
     source: "weaver_qc_approved_graphic",
-    imageType: "QI",
+    imageType: contentType,
     sourceCompletionId: cleanSheetWhitespace(record.pigCompletionId),
     sourceRequestId: cleanSheetWhitespace(record.graphicsRequestId),
     title: String(record.poemTitle || ""),
@@ -4743,7 +4763,16 @@ async function updatePoetryPleaseRepairStatus(repairRequestId, status, note = ""
           ["replacementAssetId", "replacementAssetLink", "weaverJobId", "pigJobId"]
             .map(key => [key, cleanSheetWhitespace(structured[key])])
             .filter(([, value]) => value)
-        )
+        ),
+        ...(Array.isArray(structured.assetSet) && structured.assetSet.length ? { assetSet: structured.assetSet } : {}),
+        ...(Number.isInteger(structured.affectedCardIndex) ? { affectedCardIndex: structured.affectedCardIndex } : {}),
+        ...(structured.contentType ? { contentType: structured.contentType } : {}),
+        ...(structured.sourceRecordId ? { sourceRecordId: structured.sourceRecordId } : {}),
+        ...(structured.sourceRequestId ? { sourceRequestId: structured.sourceRequestId } : {}),
+        ...(structured.sourceCompletionId ? { sourceCompletionId: structured.sourceCompletionId } : {}),
+        ...(structured.pigProjectId ? { pigProjectId: structured.pigProjectId } : {}),
+        ...(structured.editableProjectFileId ? { editableProjectFileId: structured.editableProjectFileId } : {}),
+        ...(structured.editableProjectUrl ? { editableProjectUrl: structured.editableProjectUrl } : {})
       }),
       signal: AbortSignal.timeout(15000)
     }
@@ -4759,6 +4788,15 @@ async function updatePoetryPleaseRepairStatus(repairRequestId, status, note = ""
 
 function buildStructuredRepairReturn(record = {}) {
   return {
+    assetSet: Array.isArray(record.assetSet) ? record.assetSet : [],
+    affectedCardIndex: record.affectedCardIndex,
+    contentType: cleanSheetWhitespace(record.contentType),
+    sourceRecordId: cleanSheetWhitespace(record.sourceRecordId),
+    sourceRequestId: cleanSheetWhitespace(record.sourceRequestId),
+    sourceCompletionId: cleanSheetWhitespace(record.sourceCompletionId),
+    pigProjectId: cleanSheetWhitespace(record.pigProjectId),
+    editableProjectFileId: cleanSheetWhitespace(record.editableProjectFileId),
+    editableProjectUrl: cleanSheetWhitespace(record.editableProjectUrl),
     replacementAssetId: cleanSheetWhitespace(record.replacementAssetId),
     replacementAssetLink: cleanSheetWhitespace(record.replacementAssetLink),
     weaverJobId: cleanSheetWhitespace(record.weaverJobId || record.pigJobId),
@@ -4982,12 +5020,7 @@ async function syncPoetryPleaseRepairRequests({ repairRequestId = "", limit = 1,
 }
 
 async function returnRepairToPoetryPlease(repairReturn) {
-  const structured = {
-    replacementAssetId: cleanSheetWhitespace(repairReturn.replacementAssetId),
-    replacementAssetLink: cleanSheetWhitespace(repairReturn.replacementAssetLink),
-    weaverJobId: cleanSheetWhitespace(repairReturn.weaverJobId || repairReturn.pigJobId),
-    pigJobId: cleanSheetWhitespace(repairReturn.pigCompletionId || repairReturn.pigJobId)
-  };
+  const structured = buildStructuredRepairReturn(repairReturn);
   if (!structured.replacementAssetId || !structured.replacementAssetLink) {
     return {
       repairRequestId: repairReturn.repairRequestId,
@@ -5054,6 +5087,9 @@ async function handoffApprovedGraphicsToPoetryPlease(records = []) {
     if (!contentType) {
       throw new Error(`Approved graphic ${cleanSheetWhitespace(record.graphicsRequestId) || "without an ID"} is missing contentType`);
     }
+    if (!["QI", "FPI"].includes(contentType)) {
+      throw new Error(`Unsupported approved graphic contentType: ${contentType}`);
+    }
     if (!byContentType.has(contentType)) byContentType.set(contentType, []);
     byContentType.get(contentType).push(record);
   });
@@ -5067,6 +5103,7 @@ async function handoffApprovedGraphicsToPoetryPlease(records = []) {
     const requestBody = contentType === "FPI"
       ? {
           records: Array.from(new Map(groupedRecords.map(record => ({
+            ...record,
             contentType: "FPI",
             sourceSystem: cleanSheetWhitespace(record.sourceSystem || "weaver"),
             sourceRecordId: cleanSheetWhitespace(record.sourceRecordId),
@@ -5780,6 +5817,7 @@ function buildGraphicsReworkRequestRecord(completion) {
     previousAssetPreviewUrl: cleanSheetWhitespace(completion.assetPreviewUrl),
     previousAssetSet: completion.assetSet || [],
     assetSet: completion.assetSet || [],
+    affectedCardIndex: completion.affectedCardIndex,
     assetUrl: cleanSheetWhitespace(completion.assetLinkUrl),
     assetPreviewUrl: cleanSheetWhitespace(completion.assetPreviewUrl),
     handoffStatus: "rework_requested",
