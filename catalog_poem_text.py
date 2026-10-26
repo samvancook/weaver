@@ -35,7 +35,7 @@ def lookup_poem_text(book_title: str, poem_title: str, excerpt_text: str = "", p
       cursor = connection.cursor()
       book_status = fetch_book_status(cursor, book_title)
       if not book_status:
-          return {"ok": False, "error": "Book not found in catalog."}
+          return {"ok": False, "error": "Catalog lookup is temporarily unavailable. Try again shortly."}
 
       poems = fetch_poems_for_book(cursor, int(book_status["canonical_book_id"]))
       return choose_poem(book_status, poems, poem_title, excerpt_text, poem_key)

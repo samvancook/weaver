@@ -3839,6 +3839,7 @@ async function getExcerptGatheringOptionsFromSheets() {
     }),
     books: toUniqueSortedValues(books),
     catalogBooks,
+    catalogLookupStatus: catalogResult?.catalogLookupStatus || "unknown",
     publishingBooks,
     publishingBooksError,
     fixPartOptions: [
@@ -3887,6 +3888,14 @@ function buildExcerptGatheringAppendRow(payload = {}) {
     row[6] = quote;
     row[7] = cleanSheetWhitespace(payload.bookTitle);
     row[8] = String(payload.notes || "").trim();
+    // Write the retry identity in the append itself. A later column update can
+    // fail or time out without making the newly inserted row undiscoverable.
+    while (row.length < SHEET_SOURCE_CONFIG.columnMap.bookTitle) row.push("");
+    row[SHEET_SOURCE_CONFIG.columnMap.recordId - 1] = cleanSheetWhitespace(payload.recordId);
+    row[SHEET_SOURCE_CONFIG.columnMap.author - 1] = author;
+    row[SHEET_SOURCE_CONFIG.columnMap.title - 1] = title;
+    row[SHEET_SOURCE_CONFIG.columnMap.excerpt - 1] = quote;
+    row[SHEET_SOURCE_CONFIG.columnMap.bookTitle - 1] = cleanSheetWhitespace(payload.bookTitle);
     return row;
   }
 
@@ -3925,6 +3934,38 @@ function buildExcerptGatheringAppendRow(payload = {}) {
   }
 
   throw new Error("Unsupported excerpt gathering mode.");
+}
+
+async function findExistingBookIntakeRow(recordId, payload) {
+  if (!recordId) return 0;
+  const config = SHEET_SOURCE_CONFIG.columnMap;
+  const range = `'${sourceSheetName.replace(/'/g, "''")}'!Y2:AC`;
+  const rows = await fetchSheetValuesServer(range);
+  const matches = rows.flatMap((row, index) =>
+    cleanSheetWhitespace(row[0]) === recordId ? [index + SHEET_SOURCE_CONFIG.startRow] : []);
+  if (matches.length > 1) throw new Error(`Duplicate excerpt record ID ${recordId} needs operator review.`);
+  if (!matches.length) return 0;
+  const rowNumber = matches[0];
+  const [saved = []] = await fetchSheetValuesServer(
+    `'${sourceSheetName.replace(/'/g, "''")}'!A${rowNumber}:BM${rowNumber}`);
+  const same = cleanSheetWhitespace(saved[1]) === cleanSheetWhitespace(payload.email)
+    && cleanSheetWhitespace(saved[2]).toLowerCase() === "add a quote from a book"
+    && cleanSheetWhitespace(saved[config.author - 1]) === cleanSheetWhitespace(payload.author)
+    && cleanSheetWhitespace(saved[config.title - 1]) === cleanSheetWhitespace(payload.title)
+    && String(saved[config.excerpt - 1] || "").trim() === String(payload.quote || "").trim()
+    && cleanSheetWhitespace(saved[config.bookTitle - 1]) === cleanSheetWhitespace(payload.bookTitle)
+    && String(saved[8] || "").trim() === String(payload.notes || "").trim()
+    && (!cleanSheetWhitespace(payload.poemKey)
+      || !cleanSheetWhitespace(saved[config.poemKey - 1])
+      || cleanSheetWhitespace(saved[config.poemKey - 1]) === cleanSheetWhitespace(payload.poemKey));
+  if (!same) throw new Error(`Excerpt record ID ${recordId} already belongs to different content.`);
+  if (cleanSheetWhitespace(payload.poemKey) && !cleanSheetWhitespace(saved[config.poemKey - 1])) {
+    await batchUpdateSheetValuesServer([{
+      range: `'${sourceSheetName.replace(/'/g, "''")}'!${toA1Column(config.poemKey)}${rowNumber}`,
+      values: [[cleanSheetWhitespace(payload.poemKey)]]
+    }]);
+  }
+  return rowNumber;
 }
 
 function buildExcerptRuntimeRecord(payload = {}, { sourceRow = 0, createdAt = "" } = {}) {
@@ -4003,6 +4044,19 @@ async function shadowExcerptRecordsToRuntime(records) {
 }
 
 async function appendExcerptGatheringRow(payload = {}) {
+  const mode = cleanSheetWhitespace(payload.mode).toLowerCase();
+  const sourceRecordId = cleanSheetWhitespace(payload.recordId || payload.sourceRecordId)
+    || `weaver:${randomUUID()}`;
+  if (mode === "book") {
+    const existingRow = await findExistingBookIntakeRow(sourceRecordId, payload);
+    if (existingRow) {
+      const runtimeDb = await shadowExcerptRecordsToRuntime([
+        buildExcerptRuntimeRecord({ ...payload, recordId: sourceRecordId }, { sourceRow: existingRow })
+      ]);
+      return { ok: true, version: `${appVersion}-service-account`, rowNumber: existingRow,
+        recordId: sourceRecordId, intakeMode: mode, alreadySaved: true, runtimeDb };
+    }
+  }
   const selectedPoemKey = cleanSheetWhitespace(payload.mode).toLowerCase() === "book"
     ? cleanSheetWhitespace(payload.poemKey)
     : "";
@@ -4016,8 +4070,6 @@ async function appendExcerptGatheringRow(payload = {}) {
     if (!selection?.ok) throw new Error(selection?.error || "Catalog poem selection is invalid.");
     await ensureExcerptPoetryPleaseColumnsServer();
   }
-  const sourceRecordId = cleanSheetWhitespace(payload.recordId || payload.sourceRecordId)
-    || `weaver:${randomUUID()}`;
   let approvedMatch = null;
   if (cleanSheetWhitespace(payload.mode).toLowerCase() === "video") {
     try {
@@ -4056,11 +4108,11 @@ async function appendExcerptGatheringRow(payload = {}) {
     } : {})
   };
   const rowValues = buildExcerptGatheringAppendRow(normalizedPayload);
-  const response = await appendSheetValuesServer(`'${sourceSheetName.replace(/'/g, "''")}'!A:S`, [rowValues]);
+  const response = await appendSheetValuesServer(
+    `'${sourceSheetName.replace(/'/g, "''")}'!A:${mode === "book" ? "AC" : "S"}`, [rowValues]);
   const updatedRange = cleanSheetWhitespace(response?.updates?.updatedRange || "");
   const rowMatch = updatedRange.match(/![A-Z]+(\d+):/);
   const rowNumber = rowMatch ? Number(rowMatch[1]) : 0;
-  const mode = cleanSheetWhitespace(payload.mode).toLowerCase();
 
   if (rowNumber && (mode === "book" || mode === "video")) {
     const config = SHEET_SOURCE_CONFIG.columnMap;
@@ -4111,6 +4163,13 @@ async function appendExcerptGatheringRow(payload = {}) {
       );
     }
     await batchUpdateSheetValuesServer(writes);
+  }
+
+  if (mode === "book") {
+    const confirmedRow = await findExistingBookIntakeRow(sourceRecordId, normalizedPayload);
+    if (!rowNumber || confirmedRow !== rowNumber) {
+      throw new Error("Excerpt Sheet write could not be confirmed by record ID. Retry this submission.");
+    }
   }
 
   const runtimeDb = await shadowExcerptRecordsToRuntime([

@@ -187,6 +187,7 @@ let currentGatheringBookPoems = [];
 let currentGatheringPoemOptions = [];
 let currentGatheringCatalogBook = null;
 let currentGatheringBatchRows = [];
+let pendingBookSubmission = null;
 let currentGatheringVideoPlaylist = null;
 let googleSheetsTokenClient = null;
 let googleSheetsAccessToken = "";
@@ -2096,7 +2097,10 @@ async function loadGatheringOptions({ force = false } = {}) {
   const publishingStatusNote = data.publishingBooksError
     ? " Publishing-order titles are temporarily unavailable until that sheet is shared with Weaver."
     : "";
-  setStatus(`Loaded ${data.authors?.length || 0} legacy author suggestions, ${currentIntakeLegacyBooks.length} legacy book suggestions, ${currentIntakePublishingBooks.length} publishing-order books, and ${currentIntakeCatalogBooks.length} catalog-backed books for intake.${publishingStatusNote}`);
+  const catalogStatusNote = data.catalogLookupStatus === "cached_fallback"
+    ? " Live Catalog is temporarily unavailable; showing cached book choices. Please retry before relying on poem text."
+    : "";
+  setStatus(`Loaded ${data.authors?.length || 0} legacy author suggestions, ${currentIntakeLegacyBooks.length} legacy book suggestions, ${currentIntakePublishingBooks.length} publishing-order books, and ${currentIntakeCatalogBooks.length} catalog-backed books for intake.${publishingStatusNote}${catalogStatusNote}`);
 }
 
 async function loadGatheringPoemsForBook(bookTitle, { preserveTitle = false } = {}) {
@@ -2310,6 +2314,7 @@ function resetGatheringForm() {
 
 function resetGatheringAfterSubmit(mode) {
   if (mode === "book") {
+    pendingBookSubmission = null;
     if (elements.gatheringBookQuote) elements.gatheringBookQuote.value = "";
     if (elements.gatheringBookNotes) elements.gatheringBookNotes.value = "";
     if (elements.gatheringBookReaction) elements.gatheringBookReaction.value = "";
@@ -2745,8 +2750,10 @@ async function submitGatheringBatch() {
     let savedCount = 0;
     const batchBookTitle = elements.gatheringBatchBook?.value.trim() || "the selected book";
     for (const row of currentGatheringBatchRows) {
+      row.recordId ||= `weaver:${crypto.randomUUID()}`;
       await postReviewApi("/api/intake/submit", {
         mode: "book",
+        recordId: row.recordId,
         email,
         author: row.author,
         title: row.title,
@@ -2868,6 +2875,12 @@ async function submitGathering() {
   try {
     const payload = buildGatheringPayload();
     if (payload.mode === "book") {
+      const signature = JSON.stringify([payload.email, payload.author, payload.title,
+        payload.quote, payload.bookTitle, payload.poemKey || "", payload.notes || ""]);
+      if (pendingBookSubmission?.signature !== signature) {
+        pendingBookSubmission = { signature, recordId: `weaver:${crypto.randomUUID()}` };
+      }
+      payload.recordId = pendingBookSubmission.recordId;
       const shouldContinue = await confirmGatheringBookQuoteAgainstCatalog(payload);
       if (!shouldContinue) {
         setStatus("Excerpt submission canceled so you can review the poem text.");

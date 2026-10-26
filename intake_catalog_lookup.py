@@ -37,10 +37,12 @@ def display_poem_options(poems: list[dict]) -> list[dict]:
 
 def get_intake_books() -> dict:
     books = []
+    lookup_status = "live"
     try:
         status_rows = list_readable_books()
     except (OSError, ValueError):
         status_rows = load_book_status_rows()
+        lookup_status = "cached_fallback"
     for row in status_rows:
         source_format = (row.get("primary_source_format") or "").strip().lower()
         effective_status = (row.get("effective_status") or "").strip().lower()
@@ -59,7 +61,7 @@ def get_intake_books() -> dict:
         )
 
     books.sort(key=lambda book: ((book["title"] or "").lower(), (book["author"] or "").lower()))
-    return {"ok": True, "books": books}
+    return {"ok": True, "books": books, "catalogLookupStatus": lookup_status}
 
 
 def get_poems(book_title: str) -> dict:
@@ -90,7 +92,7 @@ def get_poems(book_title: str) -> dict:
         cursor = connection.cursor()
         book_status = fetch_book_status(cursor, book_title)
         if not book_status:
-            return {"ok": False, "error": "Book not found in catalog."}
+            return {"ok": False, "error": "Catalog lookup is temporarily unavailable. Try again shortly."}
 
         poems = fetch_poems_for_book(cursor, int(book_status["canonical_book_id"]))
         poem_options = display_poem_options(poems)
@@ -135,7 +137,7 @@ def verify_poem_selection(book_title: str, poem_title: str, poem_key: str) -> di
         cursor = connection.cursor()
         book_status = fetch_book_status(cursor, book_title)
         if not book_status:
-            return {"ok": False, "error": "Book not found in catalog."}
+            return {"ok": False, "error": "Catalog lookup is temporarily unavailable. Try again shortly."}
         poems = fetch_poems_for_book(cursor, int(book_status["canonical_book_id"]))
         selected = next((poem for poem in poems if poem["poem_key"] == poem_key), None)
         if not selected or clean_title(selected["title"]) != clean_title(poem_title):
