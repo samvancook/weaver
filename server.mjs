@@ -2123,6 +2123,7 @@ function overlayRuntimeHandoffState(record, handoffStateByRequestId = null) {
     assetLinkUrl: cleanSheetWhitespace(handoff.assetUrl) || record.assetLinkUrl,
     assetPreviewUrl: cleanSheetWhitespace(handoff.assetPreviewUrl) || record.assetPreviewUrl,
     assetSet: handoff.assetSet?.length ? handoff.assetSet : (pigPayload.assetSet || record.assetSet || []),
+    syntheticTest: handoff.sourcePayload?.syntheticTest === true || pigPayload.syntheticTest === true || record.syntheticTest === true,
     affectedCardIndex: handoff.affectedCardIndex || record.affectedCardIndex,
     pigProjectId: cleanSheetWhitespace(
       handoff.pigProjectId || pigPayload.pigProjectId || record.pigProjectId,
@@ -4480,6 +4481,7 @@ function buildPoetryPleaseGraphicRecord(record) {
     pigProjectId: cleanSheetWhitespace(record.pigProjectId),
     editableProjectFileId: cleanSheetWhitespace(record.editableProjectFileId || record.projectFileId),
     editableProjectUrl: cleanSheetWhitespace(record.editableProjectUrl),
+    ...(record.syntheticTest === true ? { syntheticTest: true } : {}),
     ...(Array.isArray(record.assetSet) && record.assetSet.length ? { assetSet: record.assetSet } : {})
   };
 

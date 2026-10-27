@@ -49,6 +49,25 @@ for (const contentType of ["QI", "FPI"]) {
   });
 }
 
+test("synthetic canary stays marked through QC overlay and Poetry Please export", () => {
+  const context = loadFunctions(["overlayRuntimeHandoffState", "buildPoetryPleaseGraphicRecord"], {
+    normalizePoetryPleaseContentType: (value, fallback) => value || fallback
+  });
+  const record = context.overlayRuntimeHandoffState({
+    graphicsRequestId: "canary-request", contentType: "QI", assetLinkUrl: assets[0].assetUrl,
+    sourceRecordId: "canary-source", pigCompletionId: "canary-completion"
+  }, {
+    "canary-request": {
+      qcStatus: "approved", assetUrl: assets[0].assetUrl, assetSet: assets,
+      pigPayload: { syntheticTest: true, assetSet: assets }
+    }
+  });
+  assert.equal(record.syntheticTest, true);
+  const exported = context.buildPoetryPleaseGraphicRecord(record);
+  assert.equal(exported.syntheticTest, true);
+  assert.deepEqual(exported.assetSet, assets);
+});
+
 test("FPI outbound import retains all cards and editable identity after its payload mapping", async () => {
   let posted;
   const context = loadFunctions(["handoffApprovedGraphicsToPoetryPlease"], {
