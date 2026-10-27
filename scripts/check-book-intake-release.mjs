@@ -2,6 +2,7 @@
 // Read-only production check. Never submits an excerpt or changes a queue.
 const base = (process.env.WEAVER_URL || "https://weaver.buttonpoetry.com").replace(/\/$/, "");
 const book = process.env.WEAVER_CHECK_BOOK || "Roads";
+const releaseCatalog = process.env.WEAVER_CHECK_RELEASE_CATALOG || "Spring 2027";
 const timeoutMs = 20000;
 
 async function request(path, options = {}) {
@@ -21,6 +22,9 @@ try {
   const options = await (await request("/api/intake/options")).json();
   assert(options.ok && Array.isArray(options.catalogBooks), "Catalog book options unavailable");
   assert(options.catalogBooks.some(row => row.title === book), `${book} is absent from Catalog-backed options`);
+  const releaseReadiness = (options.publishingBookReadiness || [])
+    .filter(row => row.releaseCatalog === releaseCatalog)
+    .map(row => ({ title: row.title, bookShortener: row.bookShortener, status: row.status }));
 
   const poemPath = `/api/intake/catalog/poems?bookTitle=${encodeURIComponent(book)}`;
   const poems = await (await request(poemPath)).json();
@@ -40,6 +44,7 @@ try {
   await request("/graphics-handoff/queue");
 
   console.log(JSON.stringify({ok: true, base, book, catalogBooks: options.catalogBooks.length,
+    releaseCatalog, releaseReadiness,
     poemOptions: poems.poemOptions.length, previewPoemKey: selected.poemKey || null,
     reviewQueue: "readable", graphicsQueue: "readable", sheetSubmission: "not tested"}, null, 2));
 } catch (error) {

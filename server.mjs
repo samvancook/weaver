@@ -8,6 +8,8 @@ import { buildReviewerProgressExport, buildWeaverVideoImport, classifyDriveFolde
 import { verifyProgressExportCaller } from "./weaver_progress_auth.mjs";
 import { findApprovedTextExcerptMatch } from "./video_excerpt_folding.mjs";
 import { poemKeyForExcerptText, POEM_KEY_SEED_SOURCE } from "./poem_key_seed.mjs";
+import { claimBookIntakeRecord } from "./book_intake_claim.mjs";
+import { buildPublishingBookReadiness } from "./book_intake_readiness.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1700,7 +1702,7 @@ async function batchUpdateSheetValuesServer(data) {
   return JSON.parse(text || "{}");
 }
 
-async function appendSheetValuesServer(range, values) {
+async function appendSheetValuesServer(range, values, { timeoutMs = 0 } = {}) {
   const token = await getServiceAccountAccessToken();
   const url = new URL(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(range)}:append`);
   url.searchParams.set("valueInputOption", "RAW");
@@ -1708,6 +1710,7 @@ async function appendSheetValuesServer(range, values) {
 
   const response = await fetch(url, {
     method: "POST",
+    ...(timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
     headers: {
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json"
@@ -3857,6 +3860,8 @@ async function getExcerptGatheringOptionsFromSheets() {
     catalogBooks,
     catalogLookupStatus: catalogResult?.catalogLookupStatus || "unknown",
     publishingBooks,
+    publishingBookReadiness: buildPublishingBookReadiness(
+      publishingBooks, catalogBooks, catalogResult?.catalogLookupStatus || "unknown"),
     publishingBooksError,
     fixPartOptions: [
       "The Quote",
@@ -3979,6 +3984,9 @@ async function findExistingBookIntakeRow(recordId, payload) {
   const missingFront = [1, 2, 3, 5, 6, 7].some(index => !String(saved[index] || "").trim())
     || (String(payload.notes || "").trim() && !String(saved[8] || "").trim());
   if (missingFront) {
+    console.warn(JSON.stringify({ event: "book_intake_partial_front_row", recordId,
+      rowNumber, missingColumns: [1, 2, 3, 5, 6, 7, 8]
+        .filter(index => !String(saved[index] || "").trim()).map(index => toA1Column(index + 1)) }));
     expectedFront[0] = saved[0] || expectedFront[0];
     await batchUpdateSheetValuesServer([{
       range: `'${sourceSheetName.replace(/'/g, "''")}'!A${rowNumber}:I${rowNumber}`,
@@ -4139,10 +4147,41 @@ async function appendExcerptGatheringRow(payload = {}) {
       canonicalExcerptRecordId: approvedMatch.sourceRecordId
     } : {})
   };
+  if (mode === "book" && process.env.K_SERVICE) {
+    const claim = await claimBookIntakeRecord({
+      recordId: sourceRecordId,
+      payload: normalizedPayload,
+      token: await getServiceAccountAccessToken(),
+      projectId: process.env.WEAVER_FIRESTORE_PROJECT_ID || "button-weaver-internal",
+      databaseId: process.env.WEAVER_FIRESTORE_DATABASE_ID || "weaverledger"
+    });
+    if (claim.recoveredStaleClaim) {
+      console.warn(JSON.stringify({ event: "book_intake_stale_claim_recovered", recordId: sourceRecordId }));
+    }
+    if (claim.recoveredStaleClaim || !claim.claimed) {
+      const existingRow = await findExistingBookIntakeRow(sourceRecordId, normalizedPayload);
+      if (existingRow) {
+        const runtimeDb = await shadowExcerptRecordsToRuntime([
+          buildExcerptRuntimeRecord(normalizedPayload, { sourceRow: existingRow })
+        ]);
+        return { ok: true, version: `${appVersion}-service-account`, rowNumber: existingRow,
+          recordId: sourceRecordId, intakeMode: mode, alreadySaved: true, runtimeDb };
+      }
+    }
+    if (!claim.claimed) {
+      throw new Error("This excerpt submission is already in progress or needs reconciliation. Retry shortly with the same submission; do not paste it as a new excerpt.");
+    }
+  }
   const rowValues = buildExcerptGatheringAppendRow(normalizedPayload);
   const response = await appendSheetValuesServer(
-    `'${sourceSheetName.replace(/'/g, "''")}'!A:${mode === "book" ? "AC" : "S"}`, [rowValues]);
+    `'${sourceSheetName.replace(/'/g, "''")}'!A:${mode === "book" ? "AC" : "S"}`,
+    [rowValues], mode === "book" ? { timeoutMs: 30000 } : {});
   const updatedRange = cleanSheetWhitespace(response?.updates?.updatedRange || "");
+  if (mode === "book") {
+    console.info(JSON.stringify({ event: "book_intake_append_result", recordId: sourceRecordId,
+      tableRange: cleanSheetWhitespace(response?.tableRange), updatedRange,
+      updatedRows: response?.updates?.updatedRows, updatedColumns: response?.updates?.updatedColumns }));
+  }
   const rowMatch = updatedRange.match(/![A-Z]+(\d+):/);
   const rowNumber = rowMatch ? Number(rowMatch[1]) : 0;
 
