@@ -7728,6 +7728,35 @@ async function validateEditableProjectForRework(update = {}) {
   };
 }
 
+async function hydrateApprovedFirestoreGraphicRecord(update) {
+  const completionId = cleanSheetWhitespace(update.pigCompletionId);
+  const requestId = cleanSheetWhitespace(update.graphicsRequestId);
+  const result = await syncWeaverRuntimeDb("get_graphics_completion", { completionId });
+  const completion = result?.record && typeof result.record === "object" ? result.record : {};
+  const payload = completion.sourcePayload && typeof completion.sourcePayload === "object"
+    ? completion.sourcePayload
+    : {};
+  if (!completionId || !requestId || !cleanSheetWhitespace(completion.id)
+    || cleanSheetWhitespace(completion.graphicsRequestId) !== requestId
+    || !cleanSheetWhitespace(payload.assetUrl)) {
+    throw new Error(`Approved graphic ${completionId || requestId} is missing its matching P.I.G. completion.`);
+  }
+  return {
+    ...payload,
+    ...update,
+    pigCompletionId: completionId,
+    graphicsRequestId: requestId,
+    sourceRecordId: cleanSheetWhitespace(payload.sourceRecordId || update.sourceRecordId),
+    assetLinkUrl: cleanSheetWhitespace(payload.assetUrl),
+    assetPreviewUrl: cleanSheetWhitespace(payload.assetPreviewUrl),
+    assetSet: Array.isArray(payload.assetSet) ? payload.assetSet : [],
+    pigProjectId: cleanSheetWhitespace(payload.pigProjectId),
+    editableProjectFileId: cleanSheetWhitespace(payload.editableProjectFileId),
+    editableProjectUrl: cleanSheetWhitespace(payload.editableProjectUrl),
+    syntheticTest: payload.syntheticTest === true,
+  };
+}
+
 async function saveGraphicsQcToSheets(updates) {
   if (!Array.isArray(updates) || !updates.length) {
     return { ok: false, error: "No graphics QC updates provided." };
@@ -7774,7 +7803,7 @@ async function saveGraphicsQcToSheets(updates) {
       matchedUpdates.push(normalizedUpdate);
       firestoreMatchedCount++;
       if (decision === "APPROVE") {
-        approvedFirestoreRecords.push(normalizedUpdate);
+        approvedFirestoreRecords.push(await hydrateApprovedFirestoreGraphicRecord(normalizedUpdate));
       }
       savedCount++;
       continue;

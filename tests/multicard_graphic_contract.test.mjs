@@ -68,6 +68,35 @@ test("synthetic canary stays marked through QC overlay and Poetry Please export"
   assert.deepEqual(exported.assetSet, assets);
 });
 
+test("QC approval restores the saved multi-card completion before Poetry Please export", async () => {
+  const context = loadFunctions(["hydrateApprovedFirestoreGraphicRecord", "buildPoetryPleaseGraphicRecord"], {
+    syncWeaverRuntimeDb: async (action, query) => {
+      assert.equal(action, "get_graphics_completion");
+      assert.equal(query.completionId, "canary-completion");
+      return { record: {
+        id: "canary-completion", graphicsRequestId: "canary-request",
+        sourcePayload: {
+          contentType: "QI", assetUrl: assets[0].assetUrl,
+          assetPreviewUrl: assets[0].assetPreviewUrl, assetSet: assets,
+          sourceRecordId: "canary-source", pigProjectId: "canary-project",
+          editableProjectFileId: "canary-json", syntheticTest: true
+        }
+      } };
+    }
+  });
+  const approved = await context.hydrateApprovedFirestoreGraphicRecord({
+    graphicsRequestId: "canary-request", pigCompletionId: "canary-completion",
+    graphicsQcDecision: "APPROVE", assetLinkUrl: assets[0].assetUrl
+  });
+  const exported = context.buildPoetryPleaseGraphicRecord(approved);
+  assert.deepEqual(exported.assetSet, assets);
+  assert.equal(exported.syntheticTest, true);
+  assert.equal(exported.sourceRecordId, "canary-source");
+  assert.equal(exported.sourceRequestId, "canary-request");
+  assert.equal(exported.sourceCompletionId, "canary-completion");
+  assert.equal(exported.editableProjectFileId, "canary-json");
+});
+
 test("FPI outbound import retains all cards and editable identity after its payload mapping", async () => {
   let posted;
   const context = loadFunctions(["handoffApprovedGraphicsToPoetryPlease"], {
