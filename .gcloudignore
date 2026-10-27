@@ -10,6 +10,8 @@
 !public/**
 
 !server.mjs
+!book_intake_claim.mjs
+!book_intake_readiness.mjs
 !weaver_progress_auth.mjs
 !video_curation_handoff.mjs
 !video_excerpt_folding.mjs
