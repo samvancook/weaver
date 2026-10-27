@@ -10,6 +10,8 @@ RUN npm install --omit=dev
 
 COPY public ./public
 COPY server.mjs ./server.mjs
+COPY book_intake_claim.mjs ./book_intake_claim.mjs
+COPY book_intake_readiness.mjs ./book_intake_readiness.mjs
 COPY weaver_progress_auth.mjs ./weaver_progress_auth.mjs
 COPY video_curation_handoff.mjs ./video_curation_handoff.mjs
 COPY video_excerpt_folding.mjs ./video_excerpt_folding.mjs
