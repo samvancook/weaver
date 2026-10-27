@@ -4819,6 +4819,43 @@ function buildStructuredRepairReturn(record = {}) {
   };
 }
 
+function mergeSingleCardRepairReturn(structured, originalAssetSet) {
+  const index = Number(structured.affectedCardIndex);
+  if (!Number.isInteger(index) || index < 1 || !Array.isArray(originalAssetSet)
+      || originalAssetSet.length < 2 || structured.assetSet.length !== originalAssetSet.length) {
+    throw new Error("invalid_single_card_repair_asset_set");
+  }
+  const original = originalAssetSet.find(card => Number(card.index) === index);
+  const replacement = structured.assetSet.find(card => Number(card.index) === index);
+  if (!original || !replacement || !cleanSheetWhitespace(replacement.assetFileId)
+      || cleanSheetWhitespace(replacement.assetFileId) === cleanSheetWhitespace(original.assetFileId)) {
+    throw new Error("replacement_card_missing_or_unchanged");
+  }
+  for (const card of originalAssetSet) {
+    if (Number(card.index) === index) continue;
+    const returned = structured.assetSet.find(item => Number(item.index) === Number(card.index));
+    if (!returned || cleanSheetWhitespace(returned.assetFileId) !== cleanSheetWhitespace(card.assetFileId)) {
+      throw new Error("unaffected_card_file_changed");
+    }
+  }
+  const assetSet = originalAssetSet.map(card => Number(card.index) === index ? replacement : card);
+  return {
+    ...structured,
+    affectedCardIndex: index,
+    assetSet,
+    replacementAssetId: cleanSheetWhitespace(replacement.assetFileId),
+    replacementAssetLink: cleanSheetWhitespace(replacement.assetUrl)
+  };
+}
+
+async function buildPoetryPleaseRepairReturn(record, repairRequestId) {
+  const structured = buildStructuredRepairReturn(record);
+  if (!structured.assetSet.length) return structured;
+  const fetched = await fetchPoetryPleaseRepairRequest(repairRequestId);
+  if (!fetched.ok) throw new Error(fetched.error || "poetry_please_repair_read_failed");
+  return mergeSingleCardRepairReturn(structured, fetched.request.assetSet);
+}
+
 async function checkRepairReplacementAvailability(assetLink) {
   const cleanedLink = cleanSheetWhitespace(assetLink);
   if (!cleanedLink) return { available: false, reason: "missing_replacement_asset_link" };
@@ -5035,7 +5072,7 @@ async function syncPoetryPleaseRepairRequests({ repairRequestId = "", limit = 1,
 }
 
 async function returnRepairToPoetryPlease(repairReturn) {
-  const structured = buildStructuredRepairReturn(repairReturn);
+  const structured = await buildPoetryPleaseRepairReturn(repairReturn, repairReturn.repairRequestId);
   if (!structured.replacementAssetId || !structured.replacementAssetLink) {
     return {
       repairRequestId: repairReturn.repairRequestId,
@@ -9222,14 +9259,14 @@ const server = http.createServer(async (req, res) => {
       }
       const hasReplacement = Boolean(cleanSheetWhitespace(record.replacementAssetLink));
       const status = hasReplacement ? "returned" : "in_progress";
+      const structured = hasReplacement ? await buildPoetryPleaseRepairReturn(record, repairRequestId) : {};
       const note = hasReplacement
         ? [
-            `Replacement ${cleanSheetWhitespace(record.replacementAssetId) || "asset"}`,
-            cleanSheetWhitespace(record.replacementAssetLink),
+            `Replacement ${structured.replacementAssetId || "asset"}`,
+            structured.replacementAssetLink,
             `Weaver/P.I.G. job ${cleanSheetWhitespace(record.pigJobId)}`
           ].filter(Boolean).join(" | ")
         : `Accepted by Weaver; ${record.repairDestination === "pig" ? `waiting on P.I.G. job ${record.pigJobId}` : "routed to manual review"}.`;
-      const structured = hasReplacement ? buildStructuredRepairReturn(record) : {};
       const response = await updatePoetryPleaseRepairStatus(repairRequestId, status, note, structured);
       await persistRepairStatusResponse(repairRequestId, status, response, note);
       if (response.ok && status === "returned") {

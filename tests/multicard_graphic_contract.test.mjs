@@ -139,24 +139,30 @@ test("unexpected FP graphic is rejected instead of being sent as QI", async () =
 
 test("repair return posts ordered replacements and affected card through the actual status serializer", async () => {
   let posted;
-  const context = loadFunctions(["buildStructuredRepairReturn", "updatePoetryPleaseRepairStatus"], {
+  const context = loadFunctions(["buildStructuredRepairReturn", "mergeSingleCardRepairReturn", "updatePoetryPleaseRepairStatus"], {
     fetch: async (_url, options) => {
       posted = JSON.parse(options.body);
       return { ok: true, status: 200, json: async () => ({ ok: true }) };
     }
   });
-  const structured = context.buildStructuredRepairReturn({
-    assetSet: assets, affectedCardIndex: 2, contentType: "FPI",
+  const original = assets.map(card => ({ ...card, assetPreviewUrl: `https://pp.example.com/${card.index}` }));
+  const replacement = { ...assets[1], assetFileId: "new-card-2", assetUrl: "https://example.com/new-card-2.png" };
+  const structured = context.mergeSingleCardRepairReturn(context.buildStructuredRepairReturn({
+    assetSet: [assets[0], replacement, assets[2]], affectedCardIndex: 2, contentType: "FPI",
     sourceRecordId: "synthetic-source", sourceRequestId: "original-request",
     sourceCompletionId: "original-completion", pigProjectId: "synthetic-project",
     replacementAssetId: assets[0].assetFileId, replacementAssetLink: assets[0].assetUrl,
     pigCompletionId: "replacement-completion", weaverJobId: "repair-job"
-  });
+  }), original);
   await context.updatePoetryPleaseRepairStatus("synthetic-repair", "returned", "", structured);
-  assert.deepEqual(posted.assetSet, assets);
+  assert.deepEqual(posted.assetSet, [original[0], replacement, original[2]]);
   assert.equal(posted.affectedCardIndex, 2);
   assert.equal(posted.contentType, "FPI");
   assert.equal(posted.sourceCompletionId, "original-completion");
   assert.equal(posted.pigJobId, "replacement-completion");
-  assert.equal(posted.replacementAssetLink, assets[0].assetUrl);
+  assert.equal(posted.replacementAssetId, replacement.assetFileId);
+  assert.equal(posted.replacementAssetLink, replacement.assetUrl);
+  assert.throws(() => context.mergeSingleCardRepairReturn(
+    { ...structured, assetSet: [replacement, replacement, assets[2]] }, original
+  ), /unaffected_card_file_changed/);
 });
