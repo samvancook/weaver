@@ -6,6 +6,7 @@ import hashlib
 import re
 import os
 import sys
+import uuid
 from datetime import datetime
 from typing import Any
 
@@ -65,6 +66,7 @@ FIRESTORE_HANDOFF_ACTIONS = {
     "get_curation_reviews",
     "upsert_video_curation_gate",
     "claim_video_curation_handoff",
+    "finish_video_curation_handoff",
     "get_video_curation_gates",
 }
 
@@ -879,15 +881,45 @@ def claim_video_curation_handoff(connection, payload: dict[str, Any]) -> dict[st
     if normalize_text((existing.get("poetryPleaseHandoff") or {}).get("status")):
         return {"ok": True, "claimed": False, "reason": "handoff_already_started", "record": existing}
     now = utc_now_iso()
+    attempt_id = uuid.uuid4().hex
     record = {
         **existing,
-        "poetryPleaseHandoff": {"status": "sending", "updatedAt": now},
+        "poetryPleaseHandoff": {"status": "sending", "attemptId": attempt_id, "updatedAt": now},
         "handoffStatus": "sending",
         "updatedAt": now,
-        "history": (list(existing.get("history") or []) + [{"event": "poetry_please_handoff", "status": "sending", "at": now}])[-20:],
+        "history": (list(existing.get("history") or []) + [{"event": "poetry_please_handoff", "status": "sending", "attemptId": attempt_id, "at": now}])[-20:],
     }
     saved = connection.write_raw_document_if_unchanged(FIRESTORE_VIDEO_CURATION_GATES_COLLECTION, gate_id, record, update_time)
     return {"ok": True, "claimed": bool(saved), "reason": "" if saved else "concurrent_claim", "record": saved}
+
+
+def finish_video_curation_handoff(connection, payload: dict[str, Any]) -> dict[str, Any]:
+    priority_set_id = normalize_text(payload.get("prioritySetId"))
+    source_file_id = normalize_text(payload.get("sourceFileId"))
+    attempt_id = normalize_text(payload.get("attemptId"))
+    update = payload.get("poetryPleaseHandoff")
+    if not priority_set_id or not source_file_id or not attempt_id or not isinstance(update, dict):
+        raise ValueError("A claimed video handoff and result are required")
+    status = normalize_text(update.get("status"))
+    if status not in {"sent_to_poetry_please", "failed", "needs_reconciliation"}:
+        raise ValueError("Unsupported video handoff result")
+    if status == "sent_to_poetry_please" and not all(normalize_text(update.get(key)) for key in ("canonicalVideoId", "canonicalVideoUrl", "sourceRecordId")):
+        raise ValueError("A sent handoff requires the canonical ID, URL, and source record ID")
+    gate_id = hashlib.sha256(f"{priority_set_id}|{source_file_id}".encode("utf-8")).hexdigest()[:32]
+    existing, update_time = connection.get_raw_document_versioned(FIRESTORE_VIDEO_CURATION_GATES_COLLECTION, gate_id)
+    handoff = (existing or {}).get("poetryPleaseHandoff") or {}
+    if normalize_text(handoff.get("status")) != "sending" or normalize_text(handoff.get("attemptId")) != attempt_id:
+        return {"ok": True, "saved": False, "reason": "handoff_attempt_changed", "record": existing}
+    now = utc_now_iso()
+    record = {
+        **existing,
+        "poetryPleaseHandoff": {**handoff, **update, "attemptId": attempt_id, "updatedAt": now},
+        "handoffStatus": status,
+        "updatedAt": now,
+        "history": (list(existing.get("history") or []) + [{"event": "poetry_please_handoff", "status": status, "attemptId": attempt_id, "at": now}])[-20:],
+    }
+    saved = connection.write_raw_document_if_unchanged(FIRESTORE_VIDEO_CURATION_GATES_COLLECTION, gate_id, record, update_time)
+    return {"ok": True, "saved": bool(saved), "reason": "" if saved else "concurrent_update", "record": saved}
 
 
 def fetch_graphics_state(connection, payload: dict[str, Any]) -> dict[str, Any]:
@@ -1890,6 +1922,8 @@ def main() -> int:
             result = upsert_video_curation_gate(connection, payload)
         elif action == "claim_video_curation_handoff":
             result = claim_video_curation_handoff(connection, payload)
+        elif action == "finish_video_curation_handoff":
+            result = finish_video_curation_handoff(connection, payload)
         elif action == "get_video_curation_gates":
             result = fetch_video_curation_gates(connection, payload)
         else:

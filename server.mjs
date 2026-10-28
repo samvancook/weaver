@@ -2700,9 +2700,14 @@ async function handoffVideoCurationGate(payload = {}) {
   if (!claim?.claimed) {
     return { ok: false, error: claim?.reason || "video_handoff_claim_failed", gate: claim?.record || null };
   }
-  const persist = async update => syncWeaverRuntimeDb("upsert_video_curation_gate", {
-    gate: { ...candidate, ...gate, poetryPleaseHandoff: update }
-  });
+  const attemptId = cleanSheetWhitespace(claim.record?.poetryPleaseHandoff?.attemptId);
+  const persist = async update => {
+    const finished = await syncWeaverRuntimeDb("finish_video_curation_handoff", {
+      prioritySetId, sourceFileId, attemptId, poetryPleaseHandoff: update
+    });
+    if (!finished?.saved) throw new Error(finished?.reason || "video_handoff_finish_failed");
+    return finished;
+  };
   const endpoint = `${poetryPleaseApiUrl.replace(/\/$/, "")}/internal/weaverVideoImport`;
   try {
     const response = await fetch(endpoint, {
@@ -2718,7 +2723,7 @@ async function handoffVideoCurationGate(payload = {}) {
     const saved = await persist({ ...result, sourceRecordId: record.sourceRecordId, updatedAt: new Date().toISOString() });
     return { ...result, gate: saved.record, poetryPlease: body };
   } catch (error) {
-    await persist({ status: "needs_reconciliation", sourceRecordId: record.sourceRecordId, error: error.message, updatedAt: new Date().toISOString() });
+    await persist({ status: "needs_reconciliation", sourceRecordId: record.sourceRecordId, error: error.message, updatedAt: new Date().toISOString() }).catch(() => {});
     throw error;
   }
 }
