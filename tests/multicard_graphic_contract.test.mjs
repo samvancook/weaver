@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
+import { createHash } from "node:crypto";
 
 const source = readFileSync(new URL("../server.mjs", import.meta.url), "utf8");
 const assets = [1, 2, 3].map(index => ({
@@ -27,6 +28,47 @@ function loadFunctions(names, overrides = {}) {
   }
   return context;
 }
+
+test("legacy request-wrapped content identity validates without accepting other content", async () => {
+  const requestId = "pig:record-TGIT-FP-JOHN-MCPHEE";
+  const project = {
+    id: "saved-project", pigProjectId: "saved-project",
+    sourceIdentity: { graphicsRequestId: requestId },
+    selectedRecord: { contentId: "TGIT-FP-JOHN-MCPHEE", imageId: "TGIT-FP-JOHN-MCPHEE",
+      graphicsRequestId: requestId, quoteText: "Synthetic source text" },
+    multiCardDraft: { cards: [{ titleText: "Card 1" }, { titleText: "Card 2" }] }
+  };
+  const completion = { completionId: "synthetic-completion", graphicsRequestId: requestId,
+    sourceRecordId: requestId, quoteText: "Synthetic source text", pigProjectId: project.id,
+    editableProjectFileId: "saved-json", editableProjectUrl: "https://example.com/saved.json",
+    editableProjectValidationError: { message: "old conflict" } };
+  const context = loadFunctions([
+    "normalizeEditableIdentityText", "cleanEditableIdentityValue", "editableIdentityTextHash",
+    "getEditableIdentityValues", "validateCompletionEditableProjectIdentity", "validateEditableProjectForRework"
+  ], { createHash, fetchDriveFileResponse: async () => ({ ok: true, json: async () => project }),
+    syncWeaverRuntimeDb: async () => ({ record: {
+      ...completion, id: completion.completionId, pigProjectId: "", editableProjectFileId: "",
+      editableProjectUrl: "", candidatePigProjectId: project.id,
+      candidateEditableProjectFileId: "saved-json", candidateEditableProjectUrl: completion.editableProjectUrl
+    } }) });
+  const verified = await context.validateCompletionEditableProjectIdentity(completion);
+  assert.equal(verified.editableProjectValidationStatus, "verified");
+  assert.equal(Object.keys(verified.editableProjectValidationError).length, 0);
+  const rework = await context.validateEditableProjectForRework({
+    pigCompletionId: completion.completionId, graphicsRequestId: requestId
+  });
+  assert.equal(rework.editableProjectAvailable, true);
+  assert.equal(rework.editableProjectFileId, "saved-json");
+  project.selectedRecord.contentId = "OTHER-POEM";
+  project.selectedRecord.imageId = "OTHER-POEM";
+  await assert.rejects(context.validateCompletionEditableProjectIdentity(completion), /content identity conflicts/);
+  project.selectedRecord.contentId = "TGIT-FP-JOHN-MCPHEE";
+  project.selectedRecord.imageId = "TGIT-FP-JOHN-MCPHEE";
+  project.selectedRecord.quoteText = "Different source text";
+  await assert.rejects(context.validateCompletionEditableProjectIdentity(completion), /text conflicts/);
+  project.sourceIdentity.graphicsRequestId = "different-request";
+  await assert.rejects(context.validateCompletionEditableProjectIdentity(completion), /request identity conflicts/);
+});
 
 for (const contentType of ["QI", "FPI"]) {
   test(`${contentType} approval stays one record with all cards and project identity`, () => {

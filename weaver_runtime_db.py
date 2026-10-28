@@ -894,6 +894,7 @@ def normalize_handoff_record(record: dict[str, Any]) -> dict[str, Any]:
         str(normalized.get("pigProjectId") or "").strip()
         and str(normalized.get("editableProjectFileId") or "").strip()
         and str(normalized.get("editableProjectUrl") or "").strip()
+        and normalized.get("editableProjectValidationStatus") not in {"identity_conflict", "drive_inaccessible"}
     )
     if normalized.get("qcStatus") == "needs_revision" or normalized.get("handoffStatus") == "rejected":
         normalized["originalGraphicsRequestId"] = str(

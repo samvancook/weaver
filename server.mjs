@@ -7705,6 +7705,14 @@ async function validateCompletionEditableProjectIdentity(completion = {}) {
   }
 
   const expectedContentIds = new Set([expected.contentId, expected.imageId].filter(Boolean));
+  // Legacy sheet completions use the request wrapper as their content ID.
+  const legacyContentId = expectedRequestId.startsWith("pig:record-")
+    ? expectedRequestId.slice("pig:record-".length) : "";
+  if (legacyContentId && projectRequestIds.length
+      && projectRequestIds.every(value => value === expectedRequestId)
+      && expectedContentIds.has(expectedRequestId)) {
+    expectedContentIds.add(legacyContentId);
+  }
   const projectContentIds = [projectIdentity.contentId, projectIdentity.imageId].filter(Boolean);
   if (expectedContentIds.size && projectContentIds.length
       && !projectContentIds.some(value => expectedContentIds.has(value))) {
@@ -7738,7 +7746,8 @@ async function validateCompletionEditableProjectIdentity(completion = {}) {
       textHash: expected.textHash
     },
     textHash: expected.textHash,
-    editableProjectValidationStatus: "verified"
+    editableProjectValidationStatus: "verified",
+    editableProjectValidationError: {}
   };
 }
 
@@ -7760,11 +7769,14 @@ async function validateEditableProjectForRework(update = {}) {
   const payload = completion.sourcePayload && typeof completion.sourcePayload === "object"
     ? completion.sourcePayload
     : {};
-  const pigProjectId = cleanSheetWhitespace(completion.pigProjectId || payload.pigProjectId);
+  const pigProjectId = cleanSheetWhitespace(completion.pigProjectId || payload.pigProjectId
+    || completion.candidatePigProjectId || payload.candidatePigProjectId);
   const editableProjectFileId = cleanSheetWhitespace(
     completion.editableProjectFileId || payload.editableProjectFileId || payload.projectFileId
+      || completion.candidateEditableProjectFileId || payload.candidateEditableProjectFileId
   );
-  const editableProjectUrl = cleanSheetWhitespace(completion.editableProjectUrl || payload.editableProjectUrl);
+  const editableProjectUrl = cleanSheetWhitespace(completion.editableProjectUrl || payload.editableProjectUrl
+    || completion.candidateEditableProjectUrl || payload.candidateEditableProjectUrl);
   const lifecycleIdentity = getEditableIdentityValues(completion);
   if (!pigProjectId || !editableProjectFileId || !editableProjectUrl) {
     return {
