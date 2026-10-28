@@ -93,6 +93,8 @@ test("FV source may be its own final asset, while folder conflicts stay unknown"
     ...gate, publishableAssetUrl: candidate.sourceVideoUrl
   });
   assert.equal(record.finalAssetUrl, candidate.sourceVideoUrl);
+  assert.equal(record.sourceVideoUrl, "");
+  assert.equal(record.sourceDriveFileId, candidate.sourceFileId);
   assert.equal(classifyDriveFolderPath([
     { id: "child", name: "FV - Vertical Versions - BPL Charm City 2026" },
     { id: "parent", name: "Vertical Video | 9:16" }

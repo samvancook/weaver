@@ -143,9 +143,15 @@ export function buildWeaverVideoImport(candidate, gate) {
     ? "BPL Charm City 2026"
     : clean(gate?.releaseCatalog) || clean(candidate?.releaseCatalog);
   const finalAssetUrl = clean(gate?.publishableAssetUrl);
-  const sourceVideoUrl = reviewSourceFileId
+  const declaredSourceVideoUrl = reviewSourceFileId
     ? `https://drive.google.com/file/d/${encodeURIComponent(sourceFileId)}/view`
     : (clean(gate?.sourceVideoUrl) || clean(candidate?.sourceVideoUrl));
+  // A video already in the FV folder can itself be the publishable asset.
+  // In that case, sourceFileId carries its provenance; sourceVideoUrl would
+  // incorrectly declare the same finished file as raw footage to the receiver.
+  const sourceVideoUrl = clean(candidate?.sourceMediaType) === "FV"
+    && driveFileId(finalAssetUrl) === sourceFileId
+    ? "" : declaredSourceVideoUrl;
   const missing = Object.entries({ sourceFileId, sourceEvent, sourceEventLabel, finalAssetUrl })
     .filter(([, value]) => !value)
     .map(([key]) => key);
