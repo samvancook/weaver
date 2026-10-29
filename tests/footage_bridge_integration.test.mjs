@@ -60,3 +60,16 @@ test('Helper rebuilds current manifest server-side and stale receipts never conf
  report.titles[0].title='Changed in inventory';assert.equal(api.checkWeaverEvent('Pilot').status,'inventory_changed');
  report.closed=true;assert.throws(()=>api.sendEventToWeaver('Pilot'),/already closed/);
 });
+test('only the deploying owner can configure the fixed live-test target or read connection identity',()=>{
+ const source=readFileSync(new URL('../integrations/footage-helper/ConnectionSetup.gs',import.meta.url),'utf8');
+ let active='owner@example.com',saved;
+ const api=runInNewContext(source+';({configureWeaverLiveTest,getWeaverConnectionInfo})',{
+  Session:{getActiveUser:()=>({getEmail:()=>active}),getEffectiveUser:()=>({getEmail:()=> 'owner@example.com'})},
+  PropertiesService:{getScriptProperties:()=>({setProperties:v=>{saved=v;}})},
+  weaverConnectionInfo_:()=>({audience:'exact-helper-audience',effectiveEmail:'owner@example.com',emailVerified:true})
+ });
+ assert.equal(api.configureWeaverLiveTest().audience,'exact-helper-audience');
+ assert.equal(saved.WEAVER_BRIDGE_ENABLED,'true');assert.match(saved.WEAVER_BRIDGE_URL,/^https:\/\/footage-bridge---/);
+ active='other@example.com';assert.throws(()=>api.configureWeaverLiveTest(),/deploying owner/);assert.throws(()=>api.getWeaverConnectionInfo(),/deploying owner/);
+ active='';assert.throws(()=>api.getWeaverConnectionInfo(),/deploying owner/);
+});
