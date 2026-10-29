@@ -171,6 +171,9 @@ export function buildWeaverVideoImport(candidate, gate) {
     && (finalAssetUrl === sourceVideoUrl || driveFileId(finalAssetUrl) === sourceFileId)) {
     throw new Error("The final publishable asset cannot be the raw Weaver source video.");
   }
+  if (requiresManualVideoIdentityReview(candidate, finalAssetUrl, gate)) {
+    throw new Error("This finished video needs a canonical identity review before handoff.");
+  }
 
   return {
     contentType: "VV",
@@ -205,9 +208,11 @@ export function buildWeaverVideoImport(candidate, gate) {
   };
 }
 
-export function requiresManualVideoIdentityReview(candidate, finalAssetUrl) {
+export function requiresManualVideoIdentityReview(candidate, finalAssetUrl, gate = {}) {
   return clean(candidate?.sourceMediaType) === "FV"
-    && driveFileId(finalAssetUrl) === clean(candidate?.sourceFileId);
+    && driveFileId(finalAssetUrl) === clean(candidate?.sourceFileId)
+    && !clean(candidate?.sourceReviewFileId)
+    && !clean(gate?.sourceReviewFileId);
 }
 
 export function parsePoetryPleaseVideoImport(response, body, sourceRecordId, apiUrl, expected = {}) {

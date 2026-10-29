@@ -2754,7 +2754,7 @@ async function autoAdvanceVideoCuration(prioritySetId, sourceFileId) {
     });
     invalidateQueueSnapshots();
   }
-  if (requiresManualVideoIdentityReview(candidate, publishableAssetUrl)) {
+  if (requiresManualVideoIdentityReview(candidate, publishableAssetUrl, candidate.gate)) {
     return { status: "ready_for_poetry_please", requiresManualIdentityReview: true };
   }
   const handoff = await handoffVideoCurationGate({ prioritySetId, sourceFileId });
