@@ -50,10 +50,11 @@
         <p class="selected-title" id="reportEventName"></p>
         <div id="reportMeta" class="detail"></div>
 
-        <h3 class="section-title">Send to Weaver</h3>
-        <p class="detail">Send the titles and linked videos already entered for this event to Weaver for curation. This does not close the event.</p>
+        <h3 class="section-title">Connect this event to Weaver</h3>
+        <p class="detail">Preview existing Weaver matches and video versions, then link or send this event. This confirms only the listed titles and links; it does not certify that the event is complete or ready to close.</p>
         <button type="button" id="weaverConnect">Connect Weaver (owner)</button>
-        <button type="button" id="weaverSend" disabled>Send event to Weaver</button>
+        <button type="button" id="weaverPreview" disabled>Preview Weaver connection</button>
+        <button type="button" id="weaverSend" disabled>Link / send event to Weaver</button>
         <button type="button" id="weaverCheck" disabled>Check Weaver receipt</button>
         <div id="weaverStatus" class="detail" role="status"></div>
 
@@ -193,6 +194,7 @@
         reportEl.hidden = false;
         reportEventName.textContent = eventName;
         reportMeta.textContent = 'Loading...';
+        document.getElementById('weaverPreview').disabled = true;
         document.getElementById('weaverSend').disabled = true;
         document.getElementById('weaverCheck').disabled = true;
         document.getElementById('weaverStatus').textContent = '';
@@ -211,15 +213,38 @@
 
       let weaverEventName = '';
       let weaverBusy = false;
+      let weaverReportEligible = false;
       function renderWeaverReceipt(r) {
         const status = document.getElementById('weaverStatus');
         status.replaceChildren();
         const p = document.createElement('p');
-        p.textContent = `${r.acceptedCount} of ${r.submittedCount} videos received for curation. ` +
-          (r.status === 'inventory_changed' ? 'Inventory has changed since the handoff; this receipt no longer covers it.' :
-          r.readyForClosureReview ? 'Ready for closure review.' : 'Needs attention before closure review.') +
-          ' Weaver checked video metadata access; playback and publication approval are not confirmed. The event remains open.';
+        const existing = r.mode === 'existing_event';
+        const action = r.preview ? (existing ? 'can connect to' : 'can send to') : (existing ? 'connected to' : 'received in');
+        p.textContent = (r.preview ? 'Preview: ' : '') + `${r.acceptedCount} of ${r.submittedCount} titles ${action} ` +
+          (r.targetEventName || 'Weaver') + '. ' +
+          (r.status === 'inventory_changed' ? 'Inventory has changed; re-preview before proceeding. ' :
+           r.transferComplete ? (existing ? 'The existing curation queue ' + (r.preview ? 'will be reused. ' : 'was reused. ') : '') : 'Some titles or assets need attention. ') +
+          'Event completeness and readiness to close have not been assessed. Playback and publication approval are not confirmed.';
+        document.getElementById('weaverSend').textContent = existing ? 'Link to existing Weaver event' : 'Send new event to Weaver';
         status.appendChild(p);
+        (r.families || []).forEach(t => {
+          const group = document.createElement('p');
+          const title = document.createElement('b'); title.textContent = t.performer + ' — ' + t.title + ': ';
+          group.append(title);
+          (t.assets || []).forEach((a,i) => {
+            if (!/^https:\/\/drive\.google\.com\//.test(a.url || '')) return;
+            if (i) group.append(document.createTextNode(' · '));
+            const link = document.createElement('a'); link.href = a.url; link.target = '_blank'; link.rel = 'noopener noreferrer';
+            link.textContent = (a.format || 'unknown format') + (a.role === 'inventory_source' ? ' inventory source' : ' curation version');
+            group.append(link);
+          });
+          status.append(group);
+        });
+        if ((r.families || []).length) {
+          const text = document.createElement('p');
+          text.textContent = 'HV and VV remain separate assets. Reviews stay on the version reviewed. Canonical text links have not yet been recorded.';
+          status.append(text);
+        }
         (r.blocked || []).forEach(t => {
           const item = document.createElement('p');
           item.textContent = `Row ${t.sourceRow}: ${t.performer} — ${t.title}: ${t.reason.replace(/_/g,' ')}`;
@@ -235,20 +260,22 @@
         if (!weaverEventName || weaverBusy) return;
         const eventName = weaverEventName;
         weaverBusy = true;
+        document.getElementById('weaverPreview').disabled = true;
         document.getElementById('weaverSend').disabled = true;
         document.getElementById('weaverCheck').disabled = true;
         document.getElementById('weaverStatus').textContent = 'Contacting Weaver…';
         const finish = () => {
           weaverBusy = false;
-          if (eventName !== weaverEventName) return false;
-          document.getElementById('weaverSend').disabled = false;
-          document.getElementById('weaverCheck').disabled = false;
-          return true;
+          document.getElementById('weaverPreview').disabled = !weaverReportEligible;
+          document.getElementById('weaverSend').disabled = !weaverReportEligible;
+          document.getElementById('weaverCheck').disabled = !weaverReportEligible;
+          return eventName === weaverEventName;
         };
         const runner = google.script.run
           .withSuccessHandler(r => { if(finish()) renderWeaverReceipt(r); })
           .withFailureHandler(err => { if(finish()) document.getElementById('weaverStatus').textContent = err.message || String(err); });
-        if (action === 'send') runner.sendEventToWeaver(eventName);
+        if (action === 'preview') runner.previewEventToWeaver(eventName);
+        else if (action === 'send') runner.sendEventToWeaver(eventName);
         else runner.checkWeaverEvent(eventName);
       }
       document.getElementById('weaverConnect').onclick = () => {
@@ -265,10 +292,14 @@
           status.textContent = err.message || String(err);
         }).configureWeaverLiveTest();
       };
+      document.getElementById('weaverPreview').onclick = () => runWeaver('preview');
       document.getElementById('weaverSend').onclick = () => runWeaver('send');
       document.getElementById('weaverCheck').onclick = () => runWeaver('check');
       function renderReport(r) {
         weaverEventName = r.eventName;
+        weaverReportEligible = !!r.event && !r.closed && !!r.titles.length;
+        document.getElementById('weaverPreview').disabled = !weaverReportEligible || weaverBusy;
+        document.getElementById('weaverSend').textContent = 'Link / send event to Weaver';
         document.getElementById('weaverSend').disabled = !r.event || r.closed || !r.titles.length || weaverBusy;
         document.getElementById('weaverCheck').disabled = !r.event || r.closed || weaverBusy;
         checklistEl.innerHTML = '';

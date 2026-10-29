@@ -1,4 +1,5 @@
-import { prepareEventIntake, footageEventAsSet, currentEventReceipt } from "./footage_event_intake.mjs";
+import { resolveEventTarget } from "./footage_event_links.mjs";
+import { prepareEventIntake, footageEventAsSet, currentEventReceipt, validateEventManifest, fileId as footageFileId } from "./footage_event_intake.mjs";
 import { verifyFootageHelperCaller } from "./footage_helper_auth.mjs";
 import http from "node:http";
 import { spawn } from "node:child_process";
@@ -2210,7 +2211,7 @@ async function getDriveFolderMetadata(folderId) {
 
 async function getDriveFileMetadata(fileId) {
   const url = new URL(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}`);
-  url.searchParams.set("fields", "id,name,mimeType,trashed,parents,thumbnailLink,webViewLink,createdTime");
+  url.searchParams.set("fields", "id,name,mimeType,trashed,parents,thumbnailLink,webViewLink,createdTime,videoMediaMetadata");
   url.searchParams.set("supportsAllDrives", "true");
   return fetchDriveJson(url);
 }
@@ -2337,8 +2338,23 @@ async function refreshFootageEventSets() {
     if (set.inventoryEvent) PRIORITY_VIDEO_SETS.delete(id);
   }
   for (const record of result.records || []) {
-    if (record.acceptedCount > 0) PRIORITY_VIDEO_SETS.set(record.eventId, footageEventAsSet(record));
+    const set = footageEventAsSet(record);
+    if (record.acceptedCount > 0 && set) PRIORITY_VIDEO_SETS.set(record.eventId, set);
   }
+}
+
+async function verifyFootageReceiptQueue(record) {
+  const set = PRIORITY_VIDEO_SETS.get(record.prioritySetId);
+  if (!set || set.inventoryEvent) return false;
+  const ids = new Set((await listVideoSetFiles(set)).filter(f => isPriorityVideoFileIncluded(f,set)).map(f=>f.id));
+  return (record.accepted || []).every(t => ids.has(t.sourceFileId));
+}
+async function getFootageAssetConnections(prioritySetId) {
+  if (process.env.WEAVER_FOOTAGE_BRIDGE_ENABLED !== "true") return [];
+  const result = await syncWeaverRuntimeDb("get_footage_events", {});
+  if (!result?.ok) throw new Error(result?.error || "Inventory asset connections unavailable.");
+  return (result.records || []).filter(r => r.prioritySetId === prioritySetId)
+    .flatMap(r => (r.accepted || []).map(t => ({...t,inventoryEventName:r.eventName,inventoryEventId:r.eventId})));
 }
 
 async function loadPriorityVideoSet(prioritySetId, reviewerEmail = "") {
@@ -2346,6 +2362,7 @@ async function loadPriorityVideoSet(prioritySetId, reviewerEmail = "") {
   if (!set) throw new Error("Unknown priority video set.");
   const sourceMedia = await getVideoSetMediaType(set);
   const files = (await listVideoSetFiles(set)).filter(file => isPriorityVideoFileIncluded(file, set));
+  const connections = await getFootageAssetConnections(set.id);
   const allReviewResult = await syncWeaverRuntimeDb("get_curation_reviews", { prioritySetId: set.id });
   const allReviews = reconcileVideoReviews(
     files,
@@ -2390,6 +2407,9 @@ async function loadPriorityVideoSet(prioritySetId, reviewerEmail = "") {
       ...sourceMedia,
       sourceFileId: cleanSheetWhitespace(file.id),
       sourceFileName: cleanSheetWhitespace(file.name),
+      relatedVideoAssets: connections.filter(c => c.sourceFileId === file.id).flatMap(c => c.assets || []),
+      inventoryEventNames: [...new Set(connections.filter(c => c.sourceFileId === file.id).map(c => c.inventoryEventName))],
+      canonicalTextLinkStatus: "not_linked",
       weaverExcerptCount: (excerptIdsByFileId.get(cleanSheetWhitespace(file.id)) || new Set()).size,
       videoReleaseStatus,
       publicationRestricted: Boolean(videoReleaseStatus),
@@ -8473,14 +8493,19 @@ const server = http.createServer(async (req, res) => {
         audience: process.env.WEAVER_HELPER_TOKEN_AUDIENCE,
         emails: process.env.WEAVER_HELPER_ALLOWED_EMAILS
       });
-      if (req.method === "POST" && url.pathname === "/api/footage/events") {
-        const manifest = JSON.parse(await readRequestBody(req) || "{}");
-        const receipt = await prepareEventIntake(manifest, getDriveFileMetadata);
+      if (req.method === "POST" && ["/api/footage/events", "/api/footage/events/preview"].includes(url.pathname)) {
+        const manifest = validateEventManifest(JSON.parse(await readRequestBody(req) || "{}")).manifest;
+        await refreshFootageEventSets();
+        const target = await resolveEventTarget(manifest, PRIORITY_VIDEO_SETS,
+          async set => (await listVideoSetFiles(set)).filter(f => isPriorityVideoFileIncluded(f,set)), footageFileId);
+        const receipt = await prepareEventIntake(manifest, getDriveFileMetadata, target);
+        if (url.pathname.endsWith("/preview")) return sendJson(res,200,{ok:true,receipt:{...receipt,preview:true}});
         const saved = await syncWeaverRuntimeDb("save_footage_event", {record:{...receipt,submittedBy:caller.email}});
         if (!saved?.ok) return sendJson(res, saved?.conflict ? 409 : 500, {ok:false,error:saved?.error || "Receipt was not saved."});
-        if (saved.record.acceptedCount > 0) PRIORITY_VIDEO_SETS.set(receipt.eventId, footageEventAsSet(saved.record));
-        else PRIORITY_VIDEO_SETS.delete(receipt.eventId);
-        return sendJson(res, 200, {ok:true,receipt:await currentEventReceipt(saved.record,getDriveFileMetadata)});
+        const set = footageEventAsSet(saved.record);
+        if (saved.record.acceptedCount > 0 && set) PRIORITY_VIDEO_SETS.set(receipt.eventId,set);
+        else if (saved.record.mode !== "existing_event") PRIORITY_VIDEO_SETS.delete(receipt.eventId);
+        return sendJson(res, 200, {ok:true,receipt:await currentEventReceipt(saved.record,getDriveFileMetadata,verifyFootageReceiptQueue)});
       }
       if (req.method === "GET" && url.pathname.startsWith("/api/footage/events/")) {
         const eventId = decodeURIComponent(url.pathname.slice("/api/footage/events/".length));
@@ -8488,7 +8513,8 @@ const server = http.createServer(async (req, res) => {
         const result = await syncWeaverRuntimeDb("get_footage_events", {eventId});
         if (!result?.ok) throw new Error(result?.error || "Receipt lookup failed.");
         if (!result.records?.length) return sendJson(res,404,{ok:false,error:"Event has not been sent to Weaver."});
-        return sendJson(res,200,{ok:true,receipt:await currentEventReceipt(result.records[0],getDriveFileMetadata)});
+        await refreshFootageEventSets();
+        return sendJson(res,200,{ok:true,receipt:await currentEventReceipt(result.records[0],getDriveFileMetadata,verifyFootageReceiptQueue)});
       }
       return sendJson(res,405,{ok:false,error:"Method not allowed."});
     } catch(error) {

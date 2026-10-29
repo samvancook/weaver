@@ -1,54 +1,52 @@
-# Footage Inventory → Weaver pilot
+# Footage Inventory → Weaver bridge
 
-This change adds an event handoff to the existing Helper Intake QC page and Weaver Video curation. It is implemented and tested locally, **not deployed or verified live**.
+The bridge reads current open-event titles from Helper, previews their Weaver connection, then saves a receipt when a person chooses Link / Send. It never writes to Footage Inventory sheets, moves media, publishes to Poetry Please, or closes events.
 
-The source Helper project is **Retitle Portal**:
-https://script.google.com/home/projects/1aGmHhfSQujviWDRN7WY5mMJEVbG3t81O0MucZ0JWLN266vbvoNoWa0k1/edit
+Source Helper: https://script.google.com/home/projects/1aGmHhfSQujviWDRN7WY5mMJEVbG3t81O0MucZ0JWLN266vbvoNoWa0k1/edit
 
-`IntakeQC.html` is the October 29 editor snapshot with one added Weaver section. `WeaverBridge.gs` is new. Do not push the entire Weaver repository into the Helper project. Re-read current Helper source and apply only this section and new file, preserving any intervening changes. The captured source was not proven byte-identical to deployed version 43.
+## Current update: existing events and video versions
 
-## Behavior
+- Existing curation event IDs and reviewed source file IDs are retained. An association receipt does not create another queue or rewrite reviews/excerpts.
+- PAGES Matam footage supplied by Rudy is the first reviewed event correspondence. Four landscape source files connect to four vertical files in `pages-matam-san-diego-2026-labc`. The mapping is in `footage_event_links.mjs` and the original and edited IDs stay distinct. It is based on the named source/FV event folders and the reviewed four-title crosswalk, not byte identity or a frame comparison.
+- For other events, exact existing Drive IDs can identify a single existing queue. Partial/ambiguous matches are surfaced rather than silently duplicated. Titles alone never merge events, recordings, or canonical texts.
+- Each accepted row records related assets with independent IDs, measured `HV`/`VV` format, roles, and a stable family ID. Multiple inventory versions can connect to the same existing curation asset without adding review tasks. The existing curation version remains the review target; related originals are reference links.
+- `textReference.canonicalTextId` stays null and `canonicalTextLinkStatus=not_linked` until the authoritative underlying text is linked. These local asset families are not fabricated Poetry Please text IDs. Existing reviews are never pooled across versions or recordings.
+- The inventory's exact author/feature/workshop contract status is accepted for internal curation, along with `Have video release`. Publication restrictions are retained. This does not assert legal clearance or infer an absent release from the author-contract status.
+- `transferComplete` confirms only the submitted association/transfer and current metadata accessibility. `eventCompleteness=not_assessed` and `readyForClosureReview=false` are always returned. Adam's known incomplete intake cannot become closure-ready because two listed videos were received.
 
-1. A staff member opens an event in Helper's existing Intake QC report and chooses **Send event to Weaver**.
-2. Helper reconstructs the current event and title records with its existing `getIntakeReport`; the browser does not supply the title payload.
-3. Weaver verifies the signed Helper identity token, validates the manifest and checks each individual video with its own Drive identity. For this first pilot only titles marked `Have video release` are accepted; other statuses are listed as blocked, not silently dropped. This is not a new ruling on author contracts or rights.
-4. Weaver saves a receipt in its `footageEventIntakes` Firestore collection, reads it back, and makes the accepted files available through its existing Video curation queue. Inventory performer and title fields take precedence over filenames. No camera-folder expansion or performance reconstruction happens.
-5. Helper shows received/blocked counts and **Ready for closure review** only when every submitted title was accepted and current Drive metadata checks succeed. **Check Weaver receipt** rechecks Weaver access and compares current inventory title data with the accepted manifest.
+## Staff steps for the separate live test
 
-A receipt confirms durable queue registration and metadata access. It does not confirm video playback, completeness of the original inventory work, or permission to publish. Every imported source remains publication-restricted. Media type stays unknown because an OM event folder alone does not prove that a linked title video is OM. Existing review and excerpt tools remain the curation surface. Event closure stays manual in the existing inventory workflow.
+1. Open the test Helper and select **PAGES footage from Rudy Francisco 2026**.
+2. If needed, choose **Connect Weaver (owner)** once.
+3. Choose **Preview Weaver connection**. Expect the existing San Diego event, four accepted title rows, and an HV/VV pair for each. Preview writes no receipt or queue.
+4. Choose **Link to existing Weaver event**.
+5. Choose **Check Weaver receipt**. Success means the four submitted relationships are recorded; the event remains open. The existing Weaver playlist should still have four curation items, with related HV/VV links visible.
 
-Retries retain one stable event ID and update access results for the same manifest. A changed manifest returns 409 and preserves the earlier queue; revision/update support is deferred until after the pilot. Partial sends appear with explicit blocked rows and cannot report closure readiness. No receipt or bridge code writes to production Footage Inventory sheets, renames/moves files, or deletes media. Helper stores only event receipt pointers in Script Properties.
+Reviewers keep using the existing Video curation interface. To review a different version as its own review target would require an explicit curation choice; these source-reference links do not silently change which asset a rating belongs to.
 
-## Configuration and rollout still required
+## Downstream boundary
 
-Both sides are disabled until configured. No credentials or OAuth audience were invented or copied into this change.
+Current Poetry Please `main` was checked during this update. Its Weaver video receiver still explicitly accepts only `VV` (`functions/weaver-video-intake.js`, `buildWeaverVideoIntake`). This change does not alter that receiver or claim a completed HV import or canonical-text association in Poetry Please. That remains downstream work, owned by the Weaver → Poetry Please workstream. No publication or downstream send is part of this pilot.
 
-- Weaver: `WEAVER_FOOTAGE_BRIDGE_ENABLED=true`, `WEAVER_HELPER_TOKEN_AUDIENCE` set to the Helper's exact verified OAuth client audience, and `WEAVER_HELPER_ALLOWED_EMAILS` set to the actual deploying owner's verified email. Existing Firestore production ledger configuration and Drive identity must be retained. The new collection uses the same Firestore client as other Weaver receipts.
-- Helper Script Properties: `WEAVER_BRIDGE_URL` set to the reviewed Weaver HTTPS origin, `WEAVER_BRIDGE_ENABLED=true`.
-- Helper authorization: inspect the project's currently resolved scopes and preserve them. Merge the additions in `oauth-scope-additions.json` into the manifest's `oauthScopes`; that file is an additions list, not a complete manifest. Authorize as the deploying owner. `weaverConnectionInfo_()` returns only the identity token's audience and email to assist configuration; it does not expose the token. Weaver independently verifies the signature/audience/email on requests.
-- Deploy a preview Weaver revision and a test Helper deployment before updating the employee-facing deployment. Neither is deployed by this PR. Do not use the repository's default clasp target for the Helper.
+## Runtime and deployment
 
-Google documents the explicit `openid` scope and optional email claim for `getIdentityToken`: https://developers.google.com/apps-script/reference/script/script-app#getIdentityToken(). Scope configuration: https://developers.google.com/apps-script/concepts/scopes.
+Weaver uses the existing `footageEventIntakes` collection in its Firestore ledger. Same-manifest retries keep one receipt; changed manifests or changed queue/asset routing return a conflict and preserve the old association. Both source and curation assets are rechecked, as is existing queue membership. Existing-event receipts never shadow the static queue during restart hydration.
 
-## Pilot and completion evidence
+Configuration remains:
 
-Current inventory reads on October 29 found **Adam Falkner NYC Release**, two Add Title records (rows 6138–6139), both marked `Have video release`, individual Drive MP4 links, and no matching closure entry in source Close Event responses or the closure worksheet. Two whitespace-equivalent Add Event rows (6107, 6137) point to the same OM folder. They map to one stable bridge identity. The second inventory title uses “Honest” while its Drive filename uses “Kindest”; this remains an observed metadata discrepancy, not a confirmed bad link. The bridge preserves the inventory wording and does not repair it.
+- `WEAVER_FOOTAGE_BRIDGE_ENABLED=true`
+- `WEAVER_HELPER_TOKEN_AUDIENCE` = exact signed Helper OAuth audience
+- `WEAVER_HELPER_ALLOWED_EMAILS` = verified deploying owner's email
+- Helper Script Properties `WEAVER_BRIDGE_URL`, `WEAVER_BRIDGE_ENABLED`
 
-The connector returned metadata for both MP4s. That is **not** evidence of Weaver runtime access, playback, or a successful import. The browser automation surface was unavailable during this implementation; live Helper authorization and pilot round trip remain unverified.
+The reviewed test endpoint is fixed in `ConnectionSetup.gs`. Signed identity tokens stay server-side; only audience/email metadata is exposed to the owner. Google documentation: https://developers.google.com/apps-script/reference/script/script-app#getIdentityToken().
 
-Before calling the pilot complete: submit the current two-title manifest through the test Helper, read the persisted receipt back, load the same event's two videos through Weaver's existing Video interface, verify playback as a curator, and recheck Helper's receipt and the unchanged open inventory state. Repeat the send and verify one event with two items. Do not close the event automatically.
+Apply the small `Code-doGet.patch`, `IntakeQC.html`, `WeaverBridge.gs` and `ConnectionSetup.gs` to a fresh current-source pull. Preserve all other source files. The owner-only `?page=weaver-preview&event=...` route runs the same read-only preview for deployment verification, without saving a receipt. A preview may use the fixed reviewed endpoint without storing connection configuration. Sending still requires the explicit connection flag.
 
-## Validation performed
+`appsscript.live-test.json` preserves DOMAIN / USER_DEPLOYING and makes Sheets/Forms, read-only Drive, email/OpenID and external-request scopes explicit. Never push the entire Weaver repository through clasp. Read back every affected source file and deployment version. Keep normal Helper v43 and production Weaver traffic unchanged during the separate test rollout.
 
-- 35 JavaScript tests passed across bridge contract, mocked route/queue rehydration, Helper server calls, authentication, and existing video handoff/release flows.
-- 5 new Python ledger tests passed (receipt readback, retries, changed-manifest protection, atomic creation, no SQLite fallback); 6 existing curation claim tests passed.
-- Server/client syntax checks and Python compilation passed.
-- The wider dashboard test file has one existing failure: it expects `selectedExcerptRecordIds` inside a gate literal that current base commit `3d8ae6d` does not contain. The unmodified base has the same missing pattern; this PR does not alter that handoff literal or that test. Six other tests in that file passed.
+## Validation and limits
 
-The integration tests use mocked identity/Drive/storage services. They exercise production receiver, queue loading, and Helper functions, but do not prove production permissions, real Firestore writes, owner consent, or a live deployed round trip.
+44 selected JavaScript checks and 12 Python checks passed, including existing video handoff/claim flows. New tests cover existing-queue preservation, author-contract curation, HV/VV identity separation, read-only preview, retry/hydration, changed-routing protection, loss of either asset/queue, ambiguous matches, and multiple source versions in one family. External services are mocked in these tests; deployment readbacks and the actual PAGES preview are separate evidence.
 
-## Live-test connection setup
-
-The rollout adds `ConnectionSetup.gs` and the small `Code-doGet.patch` to the current Helper source. The Intake QC page gains **Connect Weaver (owner)**. This accepts no arbitrary endpoint: it configures the reviewed `footage-bridge` preview and returns non-secret token audience/email metadata. Only the deploying owner can connect or read these details. The owner-only `?page=weaver-connection` route returns the same metadata so deployment verification can read it without copying a token or inventory data.
-
-`appsscript.live-test.json` makes the existing Sheets/Forms access and the read-only Drive access explicit, and adds the OpenID/email/external-request scopes needed for this handoff. It preserves DOMAIN access and USER_DEPLOYING execution. No repair, mutation, trigger, or inventory function is run by connection setup. Apply it only to the separate test deployment first; keep the employee-facing version 43 deployment unchanged until the pilot succeeds.
+The wider dashboard suite previously had one source-pattern assertion that already failed on unmodified base; this update does not claim that suite passes. No frame/audio identity verification or curator playback has been performed. A successful transfer is not proof of a complete event or cleared publication rights.

@@ -1,12 +1,17 @@
 --- Code.gs
 +++ Code.gs
-@@ -16,6 +16,12 @@
+@@ -16,6 +16,17 @@
  
  function doGet(e) {
    const page = e && e.parameter && e.parameter.page;
-+  // Owner-only connection metadata; no bearer token or inventory data returned.
++  // Owner-only diagnostics: no token, receipt write, or inventory mutation.
 +  if (page === 'weaver-connection') {
 +    return ContentService.createTextOutput(JSON.stringify(getWeaverConnectionInfo()))
++      .setMimeType(ContentService.MimeType.JSON);
++  }
++  if (page === 'weaver-preview') {
++    weaverRequireOwner_();
++    return ContentService.createTextOutput(JSON.stringify(previewEventToWeaver(e.parameter.event)))
 +      .setMimeType(ContentService.MimeType.JSON);
 +  }
 +

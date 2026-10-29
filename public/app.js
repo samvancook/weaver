@@ -123,6 +123,7 @@ const elements = {
   gatheringVideoOpenItem: document.getElementById("gathering-video-open-item"),
   gatheringVideoPlaylistStatus: document.getElementById("gathering-video-playlist-status"),
   gatheringVideoExcerptGuidance: document.getElementById("gathering-video-excerpt-guidance"),
+  gatheringVideoRelatedAssets: document.getElementById("gathering-video-related-assets"),
   gatheringVideoReleaseWarning: document.getElementById("gathering-video-release-warning"),
   gatheringFixFields: document.getElementById("gathering-fix-fields"),
   gatheringBatchFields: document.getElementById("gathering-batch-fields"),
@@ -1408,6 +1409,8 @@ function setGatheringVideoPlaylistStatus(message = "") {
 }
 
 function clearGatheringVideoPlaylistItemFields() {
+  elements.gatheringVideoRelatedAssets?.replaceChildren();
+  if (elements.gatheringVideoRelatedAssets) elements.gatheringVideoRelatedAssets.hidden = true;
   [
     elements.gatheringVideoAuthor,
     elements.gatheringVideoTitle,
@@ -1467,6 +1470,24 @@ function updateGatheringVideoPlaylistUi() {
 
 function applyGatheringVideoPlaylistItem(item, { preserveQuote = false } = {}) {
   if (!item) return;
+  if (elements.gatheringVideoRelatedAssets) {
+    const box = elements.gatheringVideoRelatedAssets;
+    box.replaceChildren();
+    const assets = [...new Map((item.relatedVideoAssets || []).map(a=>[a.driveFileId,a])).values()];
+    box.hidden = !assets.length;
+    if (assets.length) {
+      const label = document.createElement("p");
+      label.textContent = "Related video versions — ratings stay on the version reviewed. Canonical text link not yet recorded.";
+      box.append(label);
+      for (const asset of assets) {
+        if (!/^https:\/\/drive\.google\.com\//.test(asset.url || "")) continue;
+        const link = document.createElement("a");
+        link.href = asset.url; link.target = "_blank"; link.rel = "noopener noreferrer";
+        link.textContent = `${asset.format || "unknown format"} · ${asset.role === "inventory_source" ? "inventory source" : "curation version"} · ${asset.fileName}`;
+        const p = document.createElement("p"); p.append(link); box.append(p);
+      }
+    }
+  }
   if (elements.gatheringVideoEvent) {
     elements.gatheringVideoEvent.value = item.eventName || "";
   }
@@ -1482,7 +1503,7 @@ function applyGatheringVideoPlaylistItem(item, { preserveQuote = false } = {}) {
   if (elements.gatheringVideoReleaseWarning) {
     elements.gatheringVideoReleaseWarning.hidden = !item.publicationRestricted;
     elements.gatheringVideoReleaseWarning.textContent = item.publicationRestricted
-      ? `Internal review only: ${item.videoReleaseStatus === "opted_out" ? "the performer opted out" : item.videoReleaseStatus === "usage_approval_document_unlinked" ? "written author and filmmaker approval was reported, but its source has not been linked in Weaver" : "no video release is on file"}. Do not publish or distribute this footage.`
+      ? `Internal review only: ${item.videoReleaseStatus === "inventory_curation_only" ? "inventory rights information is recorded; publication clearance has not been verified here" : item.videoReleaseStatus === "opted_out" ? "the performer opted out" : item.videoReleaseStatus === "usage_approval_document_unlinked" ? "written author and filmmaker approval was reported, but its source has not been linked in Weaver" : "no video release is on file"}. Do not publish or distribute this footage.`
       : "";
   }
   if (!preserveQuote && elements.gatheringVideoQuote) {
@@ -1518,6 +1539,7 @@ function normalizeVideoPlaylistItem(rawItem, eventName) {
     sourceFolderId: cleanSheetWhitespace(rawItem?.sourceFolderId),
     sourceFileId: cleanSheetWhitespace(rawItem?.sourceFileId),
     sourceFileName: cleanSheetWhitespace(rawItem?.sourceFileName),
+    relatedVideoAssets: Array.isArray(rawItem?.relatedVideoAssets) ? rawItem.relatedVideoAssets : [],
     weaverExcerptCount: Math.max(0, Number(rawItem?.weaverExcerptCount) || 0),
     videoReleaseStatus: cleanSheetWhitespace(rawItem?.videoReleaseStatus),
     publicationRestricted: Boolean(rawItem?.publicationRestricted),

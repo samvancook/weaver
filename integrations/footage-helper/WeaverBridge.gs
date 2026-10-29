@@ -19,8 +19,9 @@ function weaverManifest_(eventName) {
 }
 function weaverRequest_(path, method, payload) {
   const props = PropertiesService.getScriptProperties();
-  if (props.getProperty('WEAVER_BRIDGE_ENABLED') !== 'true') throw new Error('Weaver bridge is not enabled yet.');
-  const origin = String(props.getProperty('WEAVER_BRIDGE_URL') || '').replace(/\/$/, '');
+  const previewOnly = path === '/api/footage/events/preview';
+  if (!previewOnly && props.getProperty('WEAVER_BRIDGE_ENABLED') !== 'true') throw new Error('Weaver bridge is not enabled yet.');
+  const origin = String(props.getProperty('WEAVER_BRIDGE_URL') || (previewOnly ? WEAVER_REVIEWED_TEST_URL : '')).replace(/\/$/, '');
   if (!/^https:\/\/[a-zA-Z0-9.-]+$/.test(origin)) throw new Error('Configure the reviewed Weaver HTTPS origin.');
   const token = ScriptApp.getIdentityToken();
   if (!token) throw new Error('Owner authorization is required for the Weaver connection.');
@@ -41,6 +42,10 @@ function weaverPointerKey_(manifest) {
     JSON.stringify([manifest.omFolderId, intakeKey_(manifest.eventName)]))
     .map(function(b) {return ('0'+((b+256)%256).toString(16)).slice(-2);}).join('');
 }
+function previewEventToWeaver(eventName) {
+  const receipt = weaverRequest_('/api/footage/events/preview', 'post', weaverManifest_(eventName));
+  return weaverReceiptForUi_(receipt);
+}
 function sendEventToWeaver(eventName) {
   // Always reconstruct from current source rows; never trust browser title data.
   const manifest = weaverManifest_(eventName);
@@ -59,12 +64,17 @@ function checkWeaverEvent(eventName) {
     return {sourceRow:t.sourceRow, performer:clean(t.performer), title:clean(t.title), rights:clean(t.rights), contentLink:clean(t.contentLink)};
   }).sort(function(a,b){return a.sourceRow-b.sourceRow;});
   if (JSON.stringify(current) !== JSON.stringify(receipt.manifest.titles)) {
-    receipt.readyForClosureReview=false; receipt.status='inventory_changed';
+    receipt.transferComplete=false; receipt.readyForClosureReview=false; receipt.status='inventory_changed';
   }
   return weaverReceiptForUi_(receipt);
 }
 function weaverReceiptForUi_(r) {
-  return {eventId:r.eventId, status:r.status, submittedCount:r.submittedCount,
+  return {eventId:r.eventId, prioritySetId:r.prioritySetId, mode:r.mode, preview:!!r.preview,
+    targetEventName:r.targetEventName, transferComplete:!!r.transferComplete,
+    eventCompleteness:'not_assessed', canonicalTextLinkStatus:r.canonicalTextLinkStatus || 'not_linked',
+    families:(r.accepted || []).map(function(t) {return {sourceRow:t.sourceRow,performer:t.performer,title:t.title,
+      familyId:t.familyId,sourceFileId:t.sourceFileId,assets:t.assets || []};}),
+    status:r.status, submittedCount:r.submittedCount,
     acceptedCount:r.acceptedCount, blockedCount:r.blockedCount,
     readyForClosureReview:r.readyForClosureReview, checkedAt:r.checkedAt,
     currentUnavailableFileIds:r.currentUnavailableFileIds || [],
