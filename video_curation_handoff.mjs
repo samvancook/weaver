@@ -195,7 +195,10 @@ export function buildWeaverVideoImport(candidate, gate) {
     gateId: clean(gate.gateId),
     releaseStatus: clean(gate.releaseStatus) || clean(candidate.releaseStatus),
     publicationRestricted: false,
-    selectedExcerptRecordIds: Array.isArray(gate.selectedExcerptRecordIds) ? gate.selectedExcerptRecordIds : [],
+    selectedExcerptRecordIds: [...new Set([
+      ...(Array.isArray(gate.selectedExcerptRecordIds) ? gate.selectedExcerptRecordIds : []),
+      ...(Array.isArray(candidate.excerptRecordIds) ? candidate.excerptRecordIds : []),
+    ].map(clean).filter(Boolean))],
     reviews: Array.isArray(candidate.ratings) ? candidate.ratings : [],
     baseScore: gate.baseScore ?? candidate.baseScore,
     excerptBonus: gate.excerptBonus ?? candidate.excerptBonus,
@@ -233,10 +236,23 @@ export function parsePoetryPleaseVideoImport(response, body, sourceRecordId, api
     && reviewsReceived && excerptLinksReceived;
   return {
     ok,
-    status: ok ? "sent_to_poetry_please" : (["created", "updated", "duplicate"].includes(status) ? "failed" : (status || "failed")),
+    status: ok ? "sent_to_poetry_please"
+      : (["blocked", "needs_reconciliation"].includes(status) ? status : "failed"),
     canonicalVideoId,
     canonicalVideoUrl: canonicalVideoUrl ? new URL(canonicalVideoUrl, apiUrl).toString() : "",
     finalAssetUrl: clean(item.finalAssetUrl),
+    receivedReviewCount: Number(item.receivedReviewCount || 0),
+    receivedSelectedExcerptIdCount: Number(item.receivedSelectedExcerptIdCount || 0),
+    ...(item.storedReviewCount != null ? { storedReviewCount: Number(item.storedReviewCount) } : {}),
+    ...(item.storedSelectedExcerptIdCount != null ? { storedSelectedExcerptIdCount: Number(item.storedSelectedExcerptIdCount) } : {}),
+    ...(item.durableCopyStatus != null ? {
+      durableCopyStatus: clean(item.durableCopyStatus),
+      durableCopyQueued: item.durableCopyQueued === true,
+      durableCopyError: clean(item.durableCopyError),
+      storageMode: clean(item.storageMode),
+      mediaStatus: clean(item.mediaStatus),
+      reviewOnly: item.reviewOnly === true,
+    } : {}),
     warnings,
     error: ok ? "" : clean(item.error || body?.error || (
       warnings.length ? `Poetry Please import warnings: ${warnings.join(", ")}`
