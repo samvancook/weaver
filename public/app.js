@@ -3734,16 +3734,16 @@ function updateGraphicsModuleTitle() {
   setElementForcedHidden(elements.graphicsReleaseCatalogField, isOpsView);
   setElementForcedHidden(elements.graphicsMainHint, isOpsView);
   setElementForcedHidden(elements.graphicsFolderImportPanel, isOpsView);
-  setElementForcedHidden(elements.graphicsBookPicker, isOpsHandoff);
-  setElementForcedHidden(elements.graphicsBookSelect?.closest("label"), isOpsHandoff || isOpsRepairs);
-  setElementForcedHidden(elements.loadGraphicsBooks, isOpsHandoff || isOpsRepairs);
+  setElementForcedHidden(elements.graphicsBookPicker, false);
+  setElementForcedHidden(elements.graphicsBookSelect?.closest("label"), isOpsRepairs);
+  setElementForcedHidden(elements.loadGraphicsBooks, isOpsRepairs);
   if (isOpsRepairs && elements.graphicsBookCountBadge) {
     elements.graphicsBookCountBadge.textContent = "All repairs";
   }
-  setElementForcedHidden(elements.graphicsQueueRowsHeader, isOpsHandoff);
-  setElementForcedHidden(elements.graphicsQueueToolbarTop, isOpsHandoff);
-  setElementForcedHidden(elements.graphicsList, isOpsHandoff);
-  setElementForcedHidden(elements.graphicsQueueToolbarBottom, isOpsHandoff);
+  setElementForcedHidden(elements.graphicsQueueRowsHeader, false);
+  setElementForcedHidden(elements.graphicsQueueToolbarTop, false);
+  setElementForcedHidden(elements.graphicsList, false);
+  setElementForcedHidden(elements.graphicsQueueToolbarBottom, false);
 }
 
 function getVisibleGraphicsBookSummaries() {
@@ -5910,7 +5910,7 @@ function buildGraphicsCard(record) {
         <figure class="graphics-preview">
           ${record.assetSet?.length ? `<figcaption>Card ${index + 1} of ${record.assetSet.length}${asset.role === "prompt" ? " · prompt" : ""}</figcaption>` : ""}
           <a href="${escapeAttribute(asset.assetUrl || asset.assetPreviewUrl || "")}" target="_blank" rel="noopener noreferrer">
-            <img class="graphics-preview__image" src="${escapeAttribute(asset.assetPreviewUrl || asset.assetUrl || "")}" alt="Card ${index + 1} for ${escapeAttribute(record.poemTitle || "this excerpt")}" loading="lazy" />
+            <img class="graphics-preview__image" src="${escapeAttribute(asset.assetFileId ? `/api/drive-image?fileId=${encodeURIComponent(asset.assetFileId)}` : normalizeGraphicsPreviewUrl(asset.assetUrl || asset.assetPreviewUrl, asset.assetPreviewUrl || asset.assetUrl))}" alt="Card ${index + 1} for ${escapeAttribute(record.poemTitle || "this excerpt")}" loading="lazy" />
           </a>
         </figure>
       `).join("")}
