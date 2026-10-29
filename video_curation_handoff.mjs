@@ -128,11 +128,21 @@ export function resolveVideoReviewSourceFileId(sourceFileId, historicalSourceIds
   const current = clean(sourceFileId);
   const historical = new Set(historicalSourceIds.map(clean).filter(id => id && id !== current));
   const receipts = new Map();
+  const failedRoots = new Set();
   for (const gate of gates) {
     if (clean(currentGate.prioritySetId) && clean(gate.prioritySetId) !== clean(currentGate.prioritySetId)) continue;
     if (!historical.has(clean(gate.sourceFileId))) continue;
     const receipt = gate.poetryPleaseHandoff || {};
     const root = clean(gate.sourceReviewFileId) || clean(gate.sourceFileId);
+    // A failed legacy attempt still records the identity that was submitted.
+    // Require its explicit review-source mapping, matching event and saved
+    // sourceRecordId; a title or failed receipt alone is not an identity anchor.
+    if (clean(currentGate.prioritySetId) && historical.has(root)
+      && root !== clean(gate.sourceFileId) && clean(gate.videoRecordId) === `weaver:video:${root}`
+      && clean(receipt.status) === "failed" && receipt.ok === false && clean(receipt.error)
+      && clean(receipt.sourceRecordId) === `weaver:video:${root}` && !clean(receipt.canonicalVideoId)) {
+      failedRoots.add(root);
+    }
     if (!historical.has(root) || clean(receipt.status) !== "sent_to_poetry_please"
       || clean(receipt.sourceRecordId) !== `weaver:video:${root}` || !clean(receipt.canonicalVideoId)) continue;
     const ids = receipts.get(root) || new Set();
@@ -144,8 +154,10 @@ export function resolveVideoReviewSourceFileId(sourceFileId, historicalSourceIds
   if (receipts.size) {
     if (receipts.size !== 1) return "";
     const [root, ids] = [...receipts][0];
+    if ([...failedRoots].some(failedRoot => failedRoot !== root)) return "";
     return ids.size === 1 ? root : "";
   }
+  if (failedRoots.size) return failedRoots.size === 1 ? [...failedRoots][0] : "";
   if (historical.size === 1) return [...historical][0];
   return clean(currentGate.sourceReviewFileId);
 }
