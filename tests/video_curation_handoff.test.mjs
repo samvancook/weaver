@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildReviewerProgressExport, buildWeaverVideoImport, classifyDriveFolderPath, parsePoetryPleaseVideoImport, poetryPleaseVideoIdForSourceFile, reconcileVideoReviews, resolveCurrentVideoFileId } from "../video_curation_handoff.mjs";
+import { buildReviewerProgressExport, buildWeaverVideoImport, classifyDriveFolderPath, parsePoetryPleaseVideoImport, poetryPleaseVideoIdForSourceFile, reconcileVideoReviews, requiresManualVideoIdentityReview, resolveCurrentVideoFileId } from "../video_curation_handoff.mjs";
 
 test("reviewer progress export includes unstarted reviewers and reconciles replacement files", () => {
   const files = [
@@ -95,6 +95,9 @@ test("FV source may be its own final asset, while folder conflicts stay unknown"
   assert.equal(record.finalAssetUrl, candidate.sourceVideoUrl);
   assert.equal(record.sourceVideoUrl, "");
   assert.equal(record.sourceDriveFileId, candidate.sourceFileId);
+  assert.equal(requiresManualVideoIdentityReview(candidate, candidate.sourceVideoUrl), true);
+  assert.equal(requiresManualVideoIdentityReview(candidate, gate.publishableAssetUrl), false);
+  assert.equal(requiresManualVideoIdentityReview({ ...candidate, sourceMediaType: "OM" }, candidate.sourceVideoUrl), false);
   assert.equal(classifyDriveFolderPath([
     { id: "child", name: "FV - Vertical Versions - BPL Charm City 2026" },
     { id: "parent", name: "Vertical Video | 9:16" }

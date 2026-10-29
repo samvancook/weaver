@@ -205,6 +205,11 @@ export function buildWeaverVideoImport(candidate, gate) {
   };
 }
 
+export function requiresManualVideoIdentityReview(candidate, finalAssetUrl) {
+  return clean(candidate?.sourceMediaType) === "FV"
+    && driveFileId(finalAssetUrl) === clean(candidate?.sourceFileId);
+}
+
 export function parsePoetryPleaseVideoImport(response, body, sourceRecordId, apiUrl, expected = {}) {
   const item = (Array.isArray(body?.results) ? body.results : [])
     .find(result => clean(result?.sourceRecordId) === sourceRecordId) || {};

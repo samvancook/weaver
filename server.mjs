@@ -4,7 +4,7 @@ import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildReviewerProgressExport, buildWeaverVideoImport, classifyDriveFolderPath, driveFileId, parsePoetryPleaseVideoImport, poetryPleaseVideoIdForSourceFile, reconcileVideoReviews, resolveCurrentVideoFileId } from "./video_curation_handoff.mjs";
+import { buildReviewerProgressExport, buildWeaverVideoImport, classifyDriveFolderPath, driveFileId, parsePoetryPleaseVideoImport, poetryPleaseVideoIdForSourceFile, reconcileVideoReviews, requiresManualVideoIdentityReview, resolveCurrentVideoFileId } from "./video_curation_handoff.mjs";
 import { verifyProgressExportCaller } from "./weaver_progress_auth.mjs";
 import { findApprovedTextExcerptMatch } from "./video_excerpt_folding.mjs";
 import { poemKeyForExcerptText, POEM_KEY_SEED_SOURCE } from "./poem_key_seed.mjs";
@@ -2753,6 +2753,9 @@ async function autoAdvanceVideoCuration(prioritySetId, sourceFileId) {
       gate: { ...candidate, decision: "ready_for_poetry_please", publishableAssetUrl, decidedBy: "weaver:auto" }
     });
     invalidateQueueSnapshots();
+  }
+  if (requiresManualVideoIdentityReview(candidate, publishableAssetUrl)) {
+    return { status: "ready_for_poetry_please", requiresManualIdentityReview: true };
   }
   const handoff = await handoffVideoCurationGate({ prioritySetId, sourceFileId });
   return { status: handoff.ok ? "sent_to_poetry_please" : "already_started", ...handoff };
