@@ -2694,7 +2694,7 @@ async function handoffVideoCurationGate(payload = {}) {
   const publishableAssetMediaType = candidate.sourceMediaType === "FV"
     && driveFileId(finalAssetUrl) === candidate.sourceFileId
     ? "FV" : await getVideoAssetMediaType(finalAssetUrl);
-  const gate = { ...candidate.gate, selectedExcerptRecordIds: candidate.excerptRecordIds, publishableAssetMediaType };
+  const gate = { ...candidate.gate, publishableAssetMediaType };
   const record = buildWeaverVideoImport(candidate, gate);
   const claim = await syncWeaverRuntimeDb("claim_video_curation_handoff", { prioritySetId, sourceFileId });
   if (!claim?.claimed) {
