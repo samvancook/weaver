@@ -78,6 +78,28 @@ class VideoCurationClaimTest(unittest.TestCase):
         self.assertFalse(result["claimed"])
         self.assertEqual(result["reason"], "handoff_already_started")
 
+    def test_blocked_receiver_result_is_saved_and_cannot_be_reclaimed(self):
+        connection = FakeGateConnection({
+            "decision": "ready_for_poetry_please",
+            "poetryPleaseHandoff": {},
+        })
+        identity = {"prioritySetId": "bpl-charm-city-2026", "sourceFileId": "fv-file"}
+        claim = claim_video_curation_handoff(connection, identity)
+        attempt_id = claim["record"]["poetryPleaseHandoff"]["attemptId"]
+        result = finish_video_curation_handoff(connection, {
+            **identity,
+            "attemptId": attempt_id,
+            "poetryPleaseHandoff": {
+                "status": "blocked",
+                "sourceRecordId": "weaver:video:fv-file",
+                "error": "final_asset_matches_raw_source",
+            },
+        })
+        self.assertTrue(result["saved"])
+        self.assertEqual(connection.record["handoffStatus"], "blocked")
+        self.assertEqual(connection.record["poetryPleaseHandoff"]["error"], "final_asset_matches_raw_source")
+        self.assertFalse(claim_video_curation_handoff(connection, identity)["claimed"])
+
     def test_unready_gate_cannot_be_claimed(self):
         connection = FakeGateConnection({"decision": "send_to_editing"})
         result = claim_video_curation_handoff(

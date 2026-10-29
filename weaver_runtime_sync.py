@@ -901,7 +901,7 @@ def finish_video_curation_handoff(connection, payload: dict[str, Any]) -> dict[s
     if not priority_set_id or not source_file_id or not attempt_id or not isinstance(update, dict):
         raise ValueError("A claimed video handoff and result are required")
     status = normalize_text(update.get("status"))
-    if status not in {"sent_to_poetry_please", "failed", "needs_reconciliation"}:
+    if status not in {"sent_to_poetry_please", "blocked", "failed", "needs_reconciliation"}:
         raise ValueError("Unsupported video handoff result")
     if status == "sent_to_poetry_please" and not all(normalize_text(update.get(key)) for key in ("canonicalVideoId", "canonicalVideoUrl", "sourceRecordId")):
         raise ValueError("A sent handoff requires the canonical ID, URL, and source record ID")
