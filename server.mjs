@@ -4,7 +4,7 @@ import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildReviewerProgressExport, buildWeaverVideoImport, classifyDriveFolderPath, driveFileId, parsePoetryPleaseVideoImport, poetryPleaseVideoIdForSourceFile, reconcileVideoReviews, requiresManualVideoIdentityReview, resolveCurrentVideoFileId } from "./video_curation_handoff.mjs";
+import { buildReviewerProgressExport, buildWeaverVideoImport, classifyDriveFolderPath, driveFileId, parsePoetryPleaseVideoImport, poetryPleaseVideoIdForSourceFile, reconcileVideoReviews, requiresManualVideoIdentityReview, resolveCurrentVideoFileId, resolveVideoReviewSourceFileId } from "./video_curation_handoff.mjs";
 import { verifyProgressExportCaller } from "./weaver_progress_auth.mjs";
 import { findApprovedTextExcerptMatch } from "./video_excerpt_folding.mjs";
 import { poemKeyForExcerptText, POEM_KEY_SEED_SOURCE } from "./poem_key_seed.mjs";
@@ -2588,9 +2588,9 @@ async function getVideoCurationCandidates(prioritySetId = "") {
         .flatMap(review => review.originalSourceFileIds || [])
         .map(cleanSheetWhitespace)
         .filter(id => id && id !== sourceFileId))];
-      const sourceReviewFileId = historicalSourceIds.length === 1
-        ? historicalSourceIds[0]
-        : cleanSheetWhitespace(existingGate?.sourceReviewFileId);
+      const sourceReviewFileId = resolveVideoReviewSourceFileId(sourceFileId, historicalSourceIds,
+        Array.isArray(gateResult?.records) ? gateResult.records : [],
+        { ...(existingGate || {}), prioritySetId: set.id });
       const bookMeta = resolvePublishingBookMeta(firstReview.bookTitle, firstReview.bookTitle);
       const candidate = {
         candidateId,
