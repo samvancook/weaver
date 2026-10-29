@@ -124,6 +124,32 @@ export function poetryPleaseVideoIdForSourceFile(sourceFileId, gates = []) {
   return ids.size === 1 ? [...ids][0] : "";
 }
 
+export function resolveVideoReviewSourceFileId(sourceFileId, historicalSourceIds = [], gates = [], currentGate = {}) {
+  const current = clean(sourceFileId);
+  const historical = new Set(historicalSourceIds.map(clean).filter(id => id && id !== current));
+  const receipts = new Map();
+  for (const gate of gates) {
+    if (clean(currentGate.prioritySetId) && clean(gate.prioritySetId) !== clean(currentGate.prioritySetId)) continue;
+    if (!historical.has(clean(gate.sourceFileId))) continue;
+    const receipt = gate.poetryPleaseHandoff || {};
+    const root = clean(gate.sourceReviewFileId) || clean(gate.sourceFileId);
+    if (!historical.has(root) || clean(receipt.status) !== "sent_to_poetry_please"
+      || clean(receipt.sourceRecordId) !== `weaver:video:${root}` || !clean(receipt.canonicalVideoId)) continue;
+    const ids = receipts.get(root) || new Set();
+    ids.add(clean(receipt.canonicalVideoId));
+    receipts.set(root, ids);
+  }
+  // Prefer an actual earlier receiver receipt over choosing between the
+  // reviewed 720p file and its intermediate FV file by name or array order.
+  if (receipts.size) {
+    if (receipts.size !== 1) return "";
+    const [root, ids] = [...receipts][0];
+    return ids.size === 1 ? root : "";
+  }
+  if (historical.size === 1) return [...historical][0];
+  return clean(currentGate.sourceReviewFileId);
+}
+
 export function buildWeaverVideoImport(candidate, gate) {
   if (clean(gate?.decision) !== "ready_for_poetry_please") {
     throw new Error("Only a ready-for-Poetry Please video can be handed off.");

@@ -1,6 +1,19 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildReviewerProgressExport, buildWeaverVideoImport, classifyDriveFolderPath, parsePoetryPleaseVideoImport, poetryPleaseVideoIdForSourceFile, reconcileVideoReviews, requiresManualVideoIdentityReview, resolveCurrentVideoFileId } from "../video_curation_handoff.mjs";
+import { buildReviewerProgressExport, buildWeaverVideoImport, classifyDriveFolderPath, parsePoetryPleaseVideoImport, poetryPleaseVideoIdForSourceFile, reconcileVideoReviews, requiresManualVideoIdentityReview, resolveCurrentVideoFileId, resolveVideoReviewSourceFileId } from "../video_curation_handoff.mjs";
+
+test("multiple historical files resolve only through a unique earlier canonical receipt", () => {
+  const earlier = { prioritySetId: "event", sourceFileId: "intermediate", sourceReviewFileId: "reviewed-720",
+    poetryPleaseHandoff: { status: "sent_to_poetry_please", sourceRecordId: "weaver:video:reviewed-720", canonicalVideoId: "canonical" } };
+  const history = ["reviewed-720", "intermediate"];
+  assert.equal(resolveVideoReviewSourceFileId("final-2160", history, [earlier], { prioritySetId: "event" }), "reviewed-720");
+  assert.equal(resolveVideoReviewSourceFileId("final-2160", history, [], {}), "");
+  assert.equal(resolveVideoReviewSourceFileId("final-2160", history, [earlier], { prioritySetId: "other-event" }), "");
+  assert.equal(resolveVideoReviewSourceFileId("final-2160", history, [earlier, {
+    ...earlier, poetryPleaseHandoff: { ...earlier.poetryPleaseHandoff, canonicalVideoId: "conflicting-canonical" },
+  }], {}), "");
+  assert.equal(resolveVideoReviewSourceFileId("final-2160", ["reviewed-720"], [], {}), "reviewed-720");
+});
 
 test("receiver validation errors stay in finalizable held states", () => {
   const sourceRecordId = "weaver:video:original";
