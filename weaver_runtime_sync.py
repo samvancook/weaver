@@ -40,6 +40,7 @@ from weaver_runtime_db import (
 
 
 FIRESTORE_HANDOFF_ACTIONS = {
+    "save_footage_event", "get_footage_events",
     "upsert_completions",
     "insert_qc_reviews",
     "insert_poetry_please_handoffs",
@@ -1878,6 +1879,42 @@ def recover_stalled_pig_requests(connection, payload: dict[str, Any]) -> dict[st
     }
 
 
+FOOTAGE_EVENTS_COLLECTION = "footageEventIntakes"
+
+
+def save_footage_event(connection, payload):
+    # This receipt must survive a Cloud Run restart. Never silently use SQLite.
+    if not hasattr(connection, "create_raw_document_if_absent"):
+        raise ValueError("Footage event intake requires the Firestore ledger")
+    record = dict(payload.get("record") or {})
+    event_id = normalize_text(record.get("eventId"))
+    if not event_id.startswith("inventory-") or not record.get("digest"):
+        raise ValueError("Event ID and manifest digest are required")
+    for _ in range(3):
+        existing, version = connection.get_raw_document_versioned(FOOTAGE_EVENTS_COLLECTION, event_id)
+        if existing and existing.get("digest") != record["digest"]:
+            return {"ok": False, "conflict": True, "error": "Inventory changed since this event was sent. Existing receipt was preserved."}
+        now = utc_now_iso()
+        record.update({"createdAt": (existing or {}).get("createdAt") or now, "updatedAt": now})
+        saved = (connection.write_raw_document_if_unchanged(FOOTAGE_EVENTS_COLLECTION, event_id, record, version)
+                 if existing else connection.create_raw_document_if_absent(FOOTAGE_EVENTS_COLLECTION, event_id, record))
+        if saved is not None:
+            verified = connection.get_raw_document(FOOTAGE_EVENTS_COLLECTION, event_id)
+            if not verified or verified.get("digest") != record["digest"]:
+                raise ValueError("Event receipt readback did not match")
+            return {"ok": True, "record": verified}
+    return {"ok": False, "conflict": True, "error": "Event receipt changed concurrently; retry."}
+
+
+def get_footage_events(connection, payload):
+    if not hasattr(connection, "list_raw_documents"):
+        raise ValueError("Footage event intake requires the Firestore ledger")
+    event_id = normalize_text(payload.get("eventId"))
+    records = ([connection.get_raw_document(FOOTAGE_EVENTS_COLLECTION, event_id)] if event_id
+               else connection.list_raw_documents(FOOTAGE_EVENTS_COLLECTION))
+    return {"ok": True, "records": [record for record in records if record]}
+
+
 def main() -> int:
     payload = load_payload()
     action = normalize_text(payload.get("action"))
@@ -1890,7 +1927,11 @@ def main() -> int:
     try:
         if not use_firestore:
             ensure_runtime_schema(connection)
-        if action == "upsert_completions":
+        if action == "save_footage_event":
+            result = save_footage_event(connection, payload)
+        elif action == "get_footage_events":
+            result = get_footage_events(connection, payload)
+        elif action == "upsert_completions":
             result = sync_completions(connection, payload)
         elif action == "insert_qc_reviews":
             result = sync_qc_reviews(connection, payload)

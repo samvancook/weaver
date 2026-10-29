@@ -1529,12 +1529,13 @@ async function refreshPriorityVideoSetVisibility() {
   const select = elements.gatheringVideoPrioritySet;
   if (!select) return;
   const email = elements.gatheringEmail?.value.trim() || "";
-  const options = Array.from(select.options).filter(option => option.value);
-  if (!email) {
-    options.forEach(option => { option.hidden = false; option.disabled = false; });
-    return;
-  }
   const result = await requestReviewApi("/api/intake/priority-video-sets", { reviewerEmail: email });
+  for (const set of result.sets || []) {
+    if (!Array.from(select.options).some(option => option.value === set.id)) {
+      select.add(new Option(set.label || set.id, set.id));
+    }
+  }
+  const options = Array.from(select.options).filter(option => option.value);
   if (email !== (elements.gatheringEmail?.value.trim() || "")) return;
   const completed = new Set((result.sets || []).filter(set => set.completed).map(set => set.id));
   const regular = new Set((result.sets || []).filter(set => set.lane === "video").map(set => set.id));
