@@ -44,3 +44,5 @@ data/*
 
 !footage_event_intake.mjs
 !footage_helper_auth.mjs
+
+!footage_event_links.mjs

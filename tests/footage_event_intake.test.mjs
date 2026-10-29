@@ -5,7 +5,7 @@ const id='individual_video_12345';
 const manifest=()=>({sourceSpreadsheetId:INVENTORY_ID,eventName:'Pilot event',omFolderId:'event_folder_123456789',closed:false,titles:[{sourceRow:6000,performer:'Poet',title:'Poem',rights:'Have video release',contentLink:`https://drive.google.com/file/d/${id}/view?resourcekey=example`} ]});
 const file=async n=>({id:n,name:'Clip 1.mov',mimeType:'video/quicktime'});
 test('accepted intake preserves event, source row and resource key; acknowledgement does not claim playback or closure',async()=>{
- const r=await prepareEventIntake(manifest(),file);assert.equal(r.acceptedCount,1);assert.equal(r.readyForClosureReview,true);
+ const r=await prepareEventIntake(manifest(),file);assert.equal(r.acceptedCount,1);assert.equal(r.transferComplete,true);assert.equal(r.readyForClosureReview,false);assert.equal(r.eventCompleteness,'not_assessed');
  assert.equal(r.accepted[0].sourceRow,6000);assert.match(r.accepted[0].sourceVideoUrl,/resourcekey=example/);
  assert.equal(r.playbackVerified,false);assert.equal(r.closedAutomatically,false);assert.equal(r.accepted[0].publicationRestricted,true);
  assert.equal(footageEventAsSet(r).inventoryTitles[id].performer,'Poet');

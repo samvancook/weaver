@@ -48,6 +48,14 @@ class FootageLedgerTest(unittest.TestCase):
         db=Ledger(); save_footage_event(db,{'record':self.record()}); db.conflict_once=True
         result=save_footage_event(db,{'record':{**self.record(),'blockedCount':1}})
         self.assertTrue(result['ok']); self.assertEqual(result['record']['blockedCount'],1)
+    def test_routing_changes_do_not_reassign_an_existing_receipt(self):
+        db=Ledger()
+        original={**self.record(), 'prioritySetId':'existing-a','routingDigest':'route-a'}
+        save_footage_event(db,{'record':original})
+        result=save_footage_event(db,{'record':{**original,'prioritySetId':'existing-b','routingDigest':'route-b'}})
+        self.assertTrue(result['conflict'])
+        self.assertEqual(db.records['inventory-123']['prioritySetId'],'existing-a')
+
     def test_sqlite_fallback_is_rejected(self):
         self.assertIn('save_footage_event',FIRESTORE_HANDOFF_ACTIONS)
         self.assertIn('get_footage_events',FIRESTORE_HANDOFF_ACTIONS)

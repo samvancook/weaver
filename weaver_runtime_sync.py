@@ -1894,6 +1894,9 @@ def save_footage_event(connection, payload):
         existing, version = connection.get_raw_document_versioned(FOOTAGE_EVENTS_COLLECTION, event_id)
         if existing and existing.get("digest") != record["digest"]:
             return {"ok": False, "conflict": True, "error": "Inventory changed since this event was sent. Existing receipt was preserved."}
+        if existing and ((existing.get("routingDigest") and existing["routingDigest"] != record.get("routingDigest"))
+                         or (existing.get("prioritySetId") and existing["prioritySetId"] != record.get("prioritySetId"))):
+            return {"ok": False, "conflict": True, "error": "Existing event or asset association changed. Earlier receipt was preserved."}
         now = utc_now_iso()
         record.update({"createdAt": (existing or {}).get("createdAt") or now, "updatedAt": now})
         saved = (connection.write_raw_document_if_unchanged(FOOTAGE_EVENTS_COLLECTION, event_id, record, version)

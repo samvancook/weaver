@@ -4,6 +4,7 @@ export const INVENTORY_ID = '1npv-dpP22MV-cRs-DRjOimjbWIxf-xvbun5SdP6dl7U';
 const text = value => String(value ?? '').trim();
 const key = value => text(value).replace(/\s+/g, ' ').toLowerCase();
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+const AUTHOR_CONTRACT = 'all button authors, all features, all workshop instructors - contract is not stored with video releases';
 export function fileId(url) {
   try {
     const u = new URL(url);
@@ -24,54 +25,95 @@ export function validateEventManifest(input) {
   const manifest = { sourceSpreadsheetId: INVENTORY_ID, eventName: text(input.eventName).replace(/\s+/g,' '), omFolderId: text(input.omFolderId), closed: false, titles };
   return { manifest, eventId: 'inventory-' + hash([INVENTORY_ID,manifest.omFolderId,key(manifest.eventName)]).slice(0,32), digest: hash(manifest) };
 }
+function validVideo(file, id) {
+  return file?.id === id && !file.trashed && String(file.mimeType || '').startsWith('video/');
+}
+export function describeVideoAsset(file, url, role) {
+  const width = Number(file.videoMediaMetadata?.width) || null;
+  const height = Number(file.videoMediaMetadata?.height) || null;
+  return {assetId:'drive:'+file.id,driveFileId:file.id,fileName:text(file.name),url,
+    mimeType:file.mimeType,role,format:width && height ? (width>height?'HV':height>width?'VV':'square'):'unknown',
+    width,height,durationMillis:file.videoMediaMetadata?.durationMillis || null};
+}
+function resultStatus(record, complete) {
+  return complete ? (record.mode === 'existing_event' ? 'linked_existing_event' : 'received_for_curation') : 'needs_attention';
+}
 
-// Drive metadata is checked by Weaver's runtime identity, not asserted by Helper.
-// This acknowledges a curation queue; it never claims publication or playback approval.
-export async function prepareEventIntake(input, getFile) {
+// A receipt acknowledges queue registration/association, never event completeness.
+export async function prepareEventIntake(input, getFile, target = {mode:'new_event'}) {
   const {manifest,eventId,digest} = validateEventManifest(input);
   const accepted=[],blocked=[],seen=new Set();
   for (const title of manifest.titles) {
     const id=fileId(title.contentLink);
+    const targetId=target.mode==='existing_event' ? target.pairs?.get(id) : id;
     let reason = !title.performer || !title.title ? 'missing_performer_or_title'
-      : key(title.rights)!=='have video release' ? 'rights_need_review'
+      : !['have video release',AUTHOR_CONTRACT].includes(key(title.rights)) ? 'rights_need_review'
       : !id ? 'individual_drive_video_required'
-      : seen.has(id) ? 'duplicate_video_in_event' : '';
+      : seen.has(id) ? 'duplicate_video_in_event'
+      : !targetId ? 'existing_event_asset_connection_missing'
+      : target.mode==='existing_event' && !target.available?.has(targetId) ? 'existing_curation_video_not_in_queue'
+      : '';
     if (!reason) {
       try {
-        const file=await getFile(id);
-        if (file?.id!==id || file.trashed || !String(file.mimeType||'').startsWith('video/')) reason='not_an_accessible_video';
+        const source=await getFile(id);
+        const curation=targetId===id ? source : await getFile(targetId);
+        if (!validVideo(source,id) || !validVideo(curation,targetId)) reason='not_an_accessible_video';
         else {
           seen.add(id);
-          accepted.push({...title,sourceFileId:id,sourceFileName:text(file.name),mimeType:file.mimeType,
-            sourceVideoUrl:title.contentLink,videoReleaseStatus:'inventory_curation_only',publicationRestricted:true});
+          const sourceAsset=describeVideoAsset(source,title.contentLink,'inventory_source');
+          const curationAsset=targetId===id ? sourceAsset : describeVideoAsset(curation,
+            text(curation.webViewLink)||`https://drive.google.com/file/d/${targetId}/view`,'existing_curation');
+          accepted.push({...title,sourceFileId:targetId,sourceFileName:text(curation.name),mimeType:curation.mimeType,
+            inventorySourceFileId:id,sourceVideoUrl:curationAsset.url,
+            videoReleaseStatus:'inventory_curation_only',publicationRestricted:true,
+            familyId:'footage-family-'+hash([target.prioritySetId||eventId,targetId]).slice(0,32),
+            textReference:{author:title.performer,title:title.title,canonicalTextId:null,status:'not_linked'},
+            assets:targetId===id?[sourceAsset]:[sourceAsset,curationAsset],
+            relationship:targetId===id?'same_asset':'corresponding_event_versions',
+            derivationEvidence:target.evidence||'Inventory-linked individual video.',
+            exactDerivationVerified:false});
         }
       } catch { reason='weaver_cannot_read_video'; }
     }
     if(reason) blocked.push({...title,reason});
   }
-  return {schemaVersion:1,eventId,prioritySetId:eventId,digest,manifest,eventName:manifest.eventName,
+  const mode=target.mode||'new_event';
+  const prioritySetId=target.prioritySetId||eventId;
+  const complete=accepted.length>0 && blocked.length===0;
+  return {schemaVersion:2,eventId,prioritySetId,digest,manifest,eventName:manifest.eventName,
+    mode,targetEventName:target.label||manifest.eventName,
+    routingDigest:hash([mode,prioritySetId,manifest.titles.map(t=>[fileId(t.contentLink),target.mode==='existing_event'?target.pairs?.get(fileId(t.contentLink))||'':fileId(t.contentLink)])]),
     sourceFolderId:manifest.omFolderId,sourceMediaType:'unknown',accepted,blocked,
     submittedCount:manifest.titles.length,acceptedCount:accepted.length,blockedCount:blocked.length,
-    readyForClosureReview:accepted.length>0 && blocked.length===0,
-    status:accepted.length>0 && !blocked.length?'ready_for_closure_review':'needs_attention',
-    accessCheck:'drive_metadata_verified',playbackVerified:false,closedAutomatically:false};
+    linkedExistingCount:mode==='existing_event'?accepted.length:0,
+    inventoryAssetCount:new Set(accepted.map(t=>t.inventorySourceFileId)).size,
+    curationAssetCount:new Set(accepted.map(t=>t.sourceFileId)).size,
+    familyCount:new Set(accepted.map(t=>t.familyId)).size,
+    transferComplete:complete,readyForClosureReview:false,eventCompleteness:'not_assessed',
+    status:resultStatus({mode},complete),accessCheck:'accepted_asset_metadata_checked',
+    canonicalTextLinkStatus:'not_linked',checkedAt:new Date().toISOString(),playbackVerified:false,closedAutomatically:false};
 }
 
 export function footageEventAsSet(record) {
+  // Linking never shadows a live queue or changes its review source identities.
+  if(record.mode==='existing_event') return null;
   return {id:record.eventId,label:record.eventName,eventName:record.eventName,folderId:record.sourceFolderId,
     inventoryEvent:true,sourceMediaType:'unknown',sourceMediaLabel:'Inventory-linked video',
     inventoryFiles:(record.accepted||[]).map(t=>({id:t.sourceFileId,name:t.sourceFileName,mimeType:t.mimeType,webViewLink:t.sourceVideoUrl})),
     inventoryTitles:Object.fromEntries((record.accepted||[]).map(t=>[t.sourceFileId,t]))};
 }
 
-export async function currentEventReceipt(record,getFile) {
+export async function currentEventReceipt(record,getFile,verifyQueue=async()=>true) {
+  const ids=[...new Set((record.accepted||[]).flatMap(t=>t.assets?.map(a=>a.driveFileId)||[t.sourceFileId]))];
   const unavailable=[];
-  for(const t of record.accepted||[]) {
-    try { const f=await getFile(t.sourceFileId); if(f?.id!==t.sourceFileId||f.trashed||!String(f.mimeType||'').startsWith('video/')) unavailable.push(t.sourceFileId); }
-    catch { unavailable.push(t.sourceFileId); }
+  for(const id of ids) {
+    try {if(!validVideo(await getFile(id),id)) unavailable.push(id);}
+    catch {unavailable.push(id);}
   }
-  const ready=record.acceptedCount>0 && record.blockedCount===0 && unavailable.length===0;
-  return {...record,currentUnavailableFileIds:unavailable,readyForClosureReview:ready,
-    status:ready?'ready_for_closure_review':'needs_attention',checkedAt:new Date().toISOString(),
+  const targetQueueAvailable=record.mode!=='existing_event'||await verifyQueue(record);
+  const complete=record.acceptedCount>0 && record.blockedCount===0 && !unavailable.length && targetQueueAvailable;
+  return {...record,currentUnavailableFileIds:unavailable,targetQueueAvailable,
+    transferComplete:complete,readyForClosureReview:false,eventCompleteness:'not_assessed',
+    status:resultStatus(record,complete),checkedAt:new Date().toISOString(),
     playbackVerified:false,closedAutomatically:false};
 }
