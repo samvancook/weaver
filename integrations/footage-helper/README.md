@@ -46,3 +46,9 @@ Before calling the pilot complete: submit the current two-title manifest through
 - The wider dashboard test file has one existing failure: it expects `selectedExcerptRecordIds` inside a gate literal that current base commit `3d8ae6d` does not contain. The unmodified base has the same missing pattern; this PR does not alter that handoff literal or that test. Six other tests in that file passed.
 
 The integration tests use mocked identity/Drive/storage services. They exercise production receiver, queue loading, and Helper functions, but do not prove production permissions, real Firestore writes, owner consent, or a live deployed round trip.
+
+## Live-test connection setup
+
+The rollout adds `ConnectionSetup.gs` and the small `Code-doGet.patch` to the current Helper source. The Intake QC page gains **Connect Weaver (owner)**. This accepts no arbitrary endpoint: it configures the reviewed `footage-bridge` preview and returns non-secret token audience/email metadata. Only the deploying owner can connect or read these details. The owner-only `?page=weaver-connection` route returns the same metadata so deployment verification can read it without copying a token or inventory data.
+
+`appsscript.live-test.json` makes the existing Sheets/Forms access and the read-only Drive access explicit, and adds the OpenID/email/external-request scopes needed for this handoff. It preserves DOMAIN access and USER_DEPLOYING execution. No repair, mutation, trigger, or inventory function is run by connection setup. Apply it only to the separate test deployment first; keep the employee-facing version 43 deployment unchanged until the pilot succeeds.

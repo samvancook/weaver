@@ -52,6 +52,7 @@
 
         <h3 class="section-title">Send to Weaver</h3>
         <p class="detail">Send the titles and linked videos already entered for this event to Weaver for curation. This does not close the event.</p>
+        <button type="button" id="weaverConnect">Connect Weaver (owner)</button>
         <button type="button" id="weaverSend" disabled>Send event to Weaver</button>
         <button type="button" id="weaverCheck" disabled>Check Weaver receipt</button>
         <div id="weaverStatus" class="detail" role="status"></div>
@@ -250,6 +251,20 @@
         if (action === 'send') runner.sendEventToWeaver(eventName);
         else runner.checkWeaverEvent(eventName);
       }
+      document.getElementById('weaverConnect').onclick = () => {
+        const button = document.getElementById('weaverConnect');
+        const status = document.getElementById('weaverStatus');
+        button.disabled = true;
+        status.textContent = 'Checking the owner connection…';
+        google.script.run.withSuccessHandler(info => {
+          button.disabled = false;
+          status.textContent = 'Helper is connected to the Weaver test endpoint. Owner: ' + info.effectiveEmail +
+            '. Connection audience: ' + info.audience + '. The receiver must trust this exact audience before sending.';
+        }).withFailureHandler(err => {
+          button.disabled = false;
+          status.textContent = err.message || String(err);
+        }).configureWeaverLiveTest();
+      };
       document.getElementById('weaverSend').onclick = () => runWeaver('send');
       document.getElementById('weaverCheck').onclick = () => runWeaver('check');
       function renderReport(r) {
