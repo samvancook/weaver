@@ -1310,6 +1310,16 @@ class FirestoreLedgerClient:
         document = self.request("GET", self.document_url_for(collection, document_id))
         return self.decode_raw_document(document)
 
+    def create_raw_document_if_absent(self, collection, document_id, record):
+        body = {"fields": {key: firestore_encode_value(value) for key, value in record.items()}}
+        try:
+            document = self.request("PATCH", self.document_url_for(collection, document_id) + "?currentDocument.exists=false", body)
+        except RuntimeError as exc:
+            if "HTTP 412" in str(exc) or "HTTP 409" in str(exc):
+                return None
+            raise
+        return self.decode_raw_document(document)
+
     def get_raw_document_versioned(self, collection: str, document_id: str) -> tuple[dict[str, Any] | None, str]:
         document = self.request("GET", self.document_url_for(collection, document_id))
         return self.decode_raw_document(document), str((document or {}).get("updateTime") or "")

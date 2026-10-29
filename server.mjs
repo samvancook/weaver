@@ -1,3 +1,5 @@
+import { prepareEventIntake, footageEventAsSet, currentEventReceipt } from "./footage_event_intake.mjs";
+import { verifyFootageHelperCaller } from "./footage_helper_auth.mjs";
 import http from "node:http";
 import { spawn } from "node:child_process";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
@@ -128,6 +130,7 @@ const VIDEO_CURATION_SCORE_BY_RATING = Object.freeze({
 const VIDEO_CURATION_CANDIDATE_THRESHOLD = 7;
 
 function getPriorityVideoReleaseStatus(fileName, set = null, fileId = "") {
+  if (set?.inventoryEvent) return "inventory_curation_only";
   if (Array.isArray(set?.releaseConfirmedFileIds) && set.releaseConfirmedFileIds.includes(cleanSheetWhitespace(fileId))) {
     return "";
   }
@@ -2207,7 +2210,7 @@ async function getDriveFolderMetadata(folderId) {
 
 async function getDriveFileMetadata(fileId) {
   const url = new URL(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}`);
-  url.searchParams.set("fields", "id,name,mimeType,parents,thumbnailLink,webViewLink,createdTime");
+  url.searchParams.set("fields", "id,name,mimeType,trashed,parents,thumbnailLink,webViewLink,createdTime");
   url.searchParams.set("supportsAllDrives", "true");
   return fetchDriveJson(url);
 }
@@ -2317,11 +2320,32 @@ function isPriorityVideoFileIncluded(file, set) {
   return !set?.excludeNoPoem || !PRIORITY_VIDEO_NO_POEM_PATTERN.test(cleanSheetWhitespace(file?.name));
 }
 
+async function listVideoSetFiles(set) {
+  return set.inventoryEvent ? set.inventoryFiles : listDriveFolderVideoFiles(set.folderId);
+}
+async function getVideoSetMediaType(set) {
+  return set.inventoryEvent
+    ? {sourceMediaType: "unknown", sourceMediaLabel: "Inventory-linked video"}
+    : getVideoFolderMediaType(set.folderId);
+}
+async function refreshFootageEventSets() {
+  // Disabled installations retain the existing queues and need no new ledger access.
+  if (process.env.WEAVER_FOOTAGE_BRIDGE_ENABLED !== "true") return;
+  const result = await syncWeaverRuntimeDb("get_footage_events", {});
+  if (!result?.ok) throw new Error(result?.error || "Footage event ledger unavailable.");
+  for (const [id, set] of PRIORITY_VIDEO_SETS) {
+    if (set.inventoryEvent) PRIORITY_VIDEO_SETS.delete(id);
+  }
+  for (const record of result.records || []) {
+    if (record.acceptedCount > 0) PRIORITY_VIDEO_SETS.set(record.eventId, footageEventAsSet(record));
+  }
+}
+
 async function loadPriorityVideoSet(prioritySetId, reviewerEmail = "") {
   const set = PRIORITY_VIDEO_SETS.get(cleanSheetWhitespace(prioritySetId));
   if (!set) throw new Error("Unknown priority video set.");
-  const sourceMedia = await getVideoFolderMediaType(set.folderId);
-  const files = (await listDriveFolderVideoFiles(set.folderId)).filter(file => isPriorityVideoFileIncluded(file, set));
+  const sourceMedia = await getVideoSetMediaType(set);
+  const files = (await listVideoSetFiles(set)).filter(file => isPriorityVideoFileIncluded(file, set));
   const allReviewResult = await syncWeaverRuntimeDb("get_curation_reviews", { prioritySetId: set.id });
   const allReviews = reconcileVideoReviews(
     files,
@@ -2356,7 +2380,7 @@ async function loadPriorityVideoSet(prioritySetId, reviewerEmail = "") {
   const items = files.map(file => {
     const videoReleaseStatus = getPriorityVideoReleaseStatus(file.name, set, file.id);
     return {
-      ...parsePriorityVideoFileName(file.name),
+      ...(set.inventoryTitles?.[file.id] ? {author: set.inventoryTitles[file.id].performer, poemTitle: set.inventoryTitles[file.id].title} : parsePriorityVideoFileName(file.name)),
       bookTitle: cleanSheetWhitespace(set.bookTitle),
       releaseCatalog: cleanSheetWhitespace(set.releaseCatalog),
       videoUrl: cleanSheetWhitespace(file.webViewLink) || `https://drive.google.com/file/d/${encodeURIComponent(file.id)}/view`,
@@ -2388,11 +2412,11 @@ async function getPriorityVideoSetAvailability(reviewerEmail = "") {
   const email = cleanSheetWhitespace(reviewerEmail).toLowerCase();
   const sets = Array.from(PRIORITY_VIDEO_SETS.values());
   if (!email) {
-    return { ok: true, sets: sets.map(set => ({ id: set.id, completed: false, lane: "priority_video" })) };
+    return { ok: true, sets: sets.map(set => ({ id: set.id, label: set.label, completed: false, lane: "priority_video" })) };
   }
   const [reviewResult, fileResults] = await Promise.all([
     syncWeaverRuntimeDb("get_curation_reviews", {}),
-    Promise.all(sets.map(set => listDriveFolderVideoFiles(set.folderId)))
+    Promise.all(sets.map(set => listVideoSetFiles(set)))
   ]);
   const reviews = Array.isArray(reviewResult?.records) ? reviewResult.records : [];
   return {
@@ -2417,6 +2441,7 @@ async function getPriorityVideoSetAvailability(reviewerEmail = "") {
       }).length;
       return {
         id: set.id,
+        label: set.label,
         totalCount: files.length,
         reviewedCount: reviewedFileIds.size,
         readyVideos,
@@ -2433,7 +2458,7 @@ async function loadPriorityVideoProgress() {
     syncWeaverRuntimeDb("get_curation_reviews", {}),
     Promise.all(sets.map(async set => ({
       set,
-      files: (await listDriveFolderVideoFiles(set.folderId)).filter(file => isPriorityVideoFileIncluded(file, set))
+      files: (await listVideoSetFiles(set)).filter(file => isPriorityVideoFileIncluded(file, set))
     })))
   ]);
   const reviews = Array.isArray(reviewResult?.records) ? reviewResult.records : [];
@@ -2521,7 +2546,7 @@ async function loadPriorityVideoAssignmentExport(reviewerEmail, prioritySetId = 
     syncWeaverRuntimeDb("get_curation_reviews", {}),
     Promise.all(sets.map(async set => ({
       set,
-      files: (await listDriveFolderVideoFiles(set.folderId)).filter(file => isPriorityVideoFileIncluded(file, set))
+      files: (await listVideoSetFiles(set)).filter(file => isPriorityVideoFileIncluded(file, set))
     })))
   ]);
   const reviews = Array.isArray(reviewResult?.records) ? reviewResult.records : [];
@@ -2543,8 +2568,8 @@ async function getVideoCurationCandidates(prioritySetId = "") {
     ? [PRIORITY_VIDEO_SETS.get(prioritySetId)].filter(Boolean)
     : Array.from(PRIORITY_VIDEO_SETS.values());
   const candidatesBySet = await Promise.all(sets.map(async set => {
-    const sourceMedia = await getVideoFolderMediaType(set.folderId);
-    const files = (await listDriveFolderVideoFiles(set.folderId)).filter(file => isPriorityVideoFileIncluded(file, set));
+    const sourceMedia = await getVideoSetMediaType(set);
+    const files = (await listVideoSetFiles(set)).filter(file => isPriorityVideoFileIncluded(file, set));
     const reviewsResult = await syncWeaverRuntimeDb("get_curation_reviews", {
       prioritySetId: set.id
     });
@@ -2792,7 +2817,7 @@ async function savePriorityVideoReview(payload = {}) {
   const sourceFileId = cleanSheetWhitespace(payload.sourceFileId);
   const reviewerEmail = cleanSheetWhitespace(payload.email || payload.reviewerEmail).toLowerCase();
   if (!sourceFileId || !reviewerEmail) throw new Error("Video review requires a source file and reviewer email.");
-  const folderFiles = await listDriveFolderVideoFiles(set.folderId);
+  const folderFiles = await listVideoSetFiles(set);
   const file = folderFiles.find(candidate => (
     cleanSheetWhitespace(candidate.id) === sourceFileId
     && isPriorityVideoFileIncluded(candidate, set)
@@ -2801,7 +2826,7 @@ async function savePriorityVideoReview(payload = {}) {
     throw new Error("The selected video is not in the requested priority set.");
   }
   const videoReleaseStatus = getPriorityVideoReleaseStatus(file.name, set, sourceFileId);
-  const sourceMedia = await getVideoFolderMediaType(set.folderId);
+  const sourceMedia = await getVideoSetMediaType(set);
   const result = await syncWeaverRuntimeDb("upsert_curation_review", {
     review: {
       ...payload,
@@ -8439,6 +8464,41 @@ const server = http.createServer(async (req, res) => {
     } catch (error) {
       return sendBookIntakeError(req, res, "catalog_poems", error);
     }
+  }
+
+  if (url.pathname === "/api/footage/events" || url.pathname.startsWith("/api/footage/events/")) {
+    try {
+      if (process.env.WEAVER_FOOTAGE_BRIDGE_ENABLED !== "true") return sendJson(res, 503, {ok:false,error:"Footage bridge is not enabled."});
+      const caller = await verifyFootageHelperCaller(req, {
+        audience: process.env.WEAVER_HELPER_TOKEN_AUDIENCE,
+        emails: process.env.WEAVER_HELPER_ALLOWED_EMAILS
+      });
+      if (req.method === "POST" && url.pathname === "/api/footage/events") {
+        const manifest = JSON.parse(await readRequestBody(req) || "{}");
+        const receipt = await prepareEventIntake(manifest, getDriveFileMetadata);
+        const saved = await syncWeaverRuntimeDb("save_footage_event", {record:{...receipt,submittedBy:caller.email}});
+        if (!saved?.ok) return sendJson(res, saved?.conflict ? 409 : 500, {ok:false,error:saved?.error || "Receipt was not saved."});
+        if (saved.record.acceptedCount > 0) PRIORITY_VIDEO_SETS.set(receipt.eventId, footageEventAsSet(saved.record));
+        else PRIORITY_VIDEO_SETS.delete(receipt.eventId);
+        return sendJson(res, 200, {ok:true,receipt:await currentEventReceipt(saved.record,getDriveFileMetadata)});
+      }
+      if (req.method === "GET" && url.pathname.startsWith("/api/footage/events/")) {
+        const eventId = decodeURIComponent(url.pathname.slice("/api/footage/events/".length));
+        if (!/^inventory-[a-f0-9]{32}$/.test(eventId)) return sendJson(res,400,{ok:false,error:"Invalid event ID."});
+        const result = await syncWeaverRuntimeDb("get_footage_events", {eventId});
+        if (!result?.ok) throw new Error(result?.error || "Receipt lookup failed.");
+        if (!result.records?.length) return sendJson(res,404,{ok:false,error:"Event has not been sent to Weaver."});
+        return sendJson(res,200,{ok:true,receipt:await currentEventReceipt(result.records[0],getDriveFileMetadata)});
+      }
+      return sendJson(res,405,{ok:false,error:"Method not allowed."});
+    } catch(error) {
+      return sendJson(res,Number(error.statusCode || 400),{ok:false,error:error.message});
+    }
+  }
+  if ((url.pathname.startsWith("/api/intake/") && /(?:video|curation)/.test(url.pathname))
+      || url.pathname.startsWith("/api/admin/video-curation")) {
+    try { await refreshFootageEventSets(); }
+    catch(error) { return sendJson(res,503,{ok:false,error:error.message}); }
   }
 
   if (url.pathname === "/api/intake/priority-video-sets" && req.method === "GET") {

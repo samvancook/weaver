@@ -1,0 +1,337 @@
+<!doctype html>
+<html>
+  <head>
+    <base target="_top">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <?!= include('Styles'); ?>
+  </head>
+  <body>
+    <main>
+      <div class="tools-header">
+        <span class="tools-title">Footage Helper</span>
+        <nav class="tools-nav">
+          <a href="<?!= ScriptApp.getService().getUrl() ?>?page=retitle">Retitle Poem</a>
+          <a href="<?!= ScriptApp.getService().getUrl() ?>?page=footage">Push to Production</a>
+          <a href="<?!= ScriptApp.getService().getUrl() ?>?page=health">Event Health</a>
+          <a href="<?!= ScriptApp.getService().getUrl() ?>?page=intake">Intake QC</a>
+        </nav>
+      </div>
+
+      <h1>Intake QC</h1>
+      <p class="intro">
+        Review an event's intake before closing it. This only shows what was entered and flags
+        possible gaps &mdash; it never changes anything, and closing stays a manual step in the
+        form.
+      </p>
+
+      <section class="panel">
+        <h2 class="section-title">Events awaiting close</h2>
+        <p class="detail">
+          Events with an Add Event submission that have no Event Closure Worksheet row and no
+          Close Event submission yet, newest first. Pick one to review.
+        </p>
+        <div class="actions">
+          <button id="loadOpen">Load open events</button>
+        </div>
+        <label for="openFilter">Filter by event name or submitter</label>
+        <input id="openFilter" type="search" autocomplete="off" placeholder="Optional">
+        <div id="openStatus" class="status"></div>
+        <div id="openList" class="results"></div>
+      </section>
+
+      <section class="panel">
+        <label for="search">Search event name</label>
+        <input id="search" type="search" autocomplete="off" placeholder="Start typing...">
+        <div id="searchStatus" class="status"></div>
+        <div id="results" class="results"></div>
+      </section>
+
+      <section class="panel" id="report" hidden>
+        <p class="selected-title" id="reportEventName"></p>
+        <div id="reportMeta" class="detail"></div>
+
+        <h3 class="section-title">Send to Weaver</h3>
+        <p class="detail">Send the titles and linked videos already entered for this event to Weaver for curation. This does not close the event.</p>
+        <button type="button" id="weaverSend" disabled>Send event to Weaver</button>
+        <button type="button" id="weaverCheck" disabled>Check Weaver receipt</button>
+        <div id="weaverStatus" class="detail" role="status"></div>
+
+        <h3 class="section-title">Review checklist</h3>
+        <div id="checklist" class="results"></div>
+
+        <h3 class="section-title">OM footage</h3>
+        <div id="omInfo" class="detail"></div>
+
+        <h3 class="section-title">Timing</h3>
+        <div id="timingInfo" class="detail"></div>
+
+        <h3 class="section-title">Rights management</h3>
+        <div id="rightsInfo" class="detail"></div>
+
+        <h3 class="section-title">Performers (<span id="performerCount">0</span>)</h3>
+        <div id="performerList" class="detail"></div>
+
+        <h3 class="section-title">Titles (<span id="titleCount">0</span>)</h3>
+        <div id="titlesList" class="results"></div>
+      </section>
+    </main>
+
+    <script>
+      const state = { timer: null };
+      const searchInput = document.getElementById('search');
+      const resultsEl = document.getElementById('results');
+      const searchStatus = document.getElementById('searchStatus');
+      const reportEl = document.getElementById('report');
+      const reportEventName = document.getElementById('reportEventName');
+      const reportMeta = document.getElementById('reportMeta');
+      const omInfo = document.getElementById('omInfo');
+      const timingInfo = document.getElementById('timingInfo');
+      const rightsInfo = document.getElementById('rightsInfo');
+      const performerCount = document.getElementById('performerCount');
+      const performerList = document.getElementById('performerList');
+      const titleCount = document.getElementById('titleCount');
+      const titlesList = document.getElementById('titlesList');
+      const checklistEl = document.getElementById('checklist');
+      const loadOpenBtn = document.getElementById('loadOpen');
+      const openFilter = document.getElementById('openFilter');
+      const openStatus = document.getElementById('openStatus');
+      const openList = document.getElementById('openList');
+      let openEvents = [];
+
+      loadOpenBtn.addEventListener('click', () => {
+        loadOpenBtn.disabled = true;
+        openStatus.textContent = 'Loading...';
+        openStatus.className = 'status';
+        openList.innerHTML = '';
+        google.script.run
+          .withSuccessHandler(result => {
+            loadOpenBtn.disabled = false;
+            openEvents = result.events || [];
+            openStatus.textContent = `${result.totalOpen} open event${result.totalOpen === 1 ? '' : 's'}` +
+              (result.totalOpen > openEvents.length ? ` (showing the ${openEvents.length} newest)` : '') + '.';
+            renderOpenEvents();
+          })
+          .withFailureHandler(err => {
+            loadOpenBtn.disabled = false;
+            showError(openStatus, err);
+          })
+          .listEventsAwaitingClose();
+      });
+
+      openFilter.addEventListener('input', renderOpenEvents);
+
+      function renderOpenEvents() {
+        const q = openFilter.value.trim().toLowerCase();
+        openList.innerHTML = '';
+        openEvents
+          .filter(ev => !q || (ev.name + ' ' + (ev.addedBy || '')).toLowerCase().indexOf(q) !== -1)
+          .forEach(ev => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'result';
+            const concerns = [];
+            if (ev.titles === 0) concerns.push('no titles');
+            if (ev.performersWithoutTitles) concerns.push(`${ev.performersWithoutTitles} performer(s) without titles`);
+            if (ev.titlesMatchingPerformer) concerns.push(`${ev.titlesMatchingPerformer} title(s) equal the performer name`);
+            button.innerHTML = `
+              <span class="result-title">${escapeHtml(ev.name)}</span>
+              <span class="result-meta">${escapeHtml(ev.date || '')} | ${ev.titles} title(s) |
+                ${ev.addedBy ? 'Added by ' + escapeHtml(ev.addedBy) : 'No submitter email'}
+                ${concerns.length ? ' | ' + escapeHtml(concerns.join(', ')) : ''}</span>
+            `;
+            button.addEventListener('click', () => {
+              loadReport(ev.name);
+              reportEl.scrollIntoView({ behavior: 'smooth' });
+            });
+            openList.appendChild(button);
+          });
+      }
+
+      searchInput.addEventListener('input', () => {
+        window.clearTimeout(state.timer);
+        state.timer = window.setTimeout(runSearch, 250);
+      });
+
+      function runSearch() {
+        const query = searchInput.value.trim();
+        resultsEl.innerHTML = '';
+
+        if (query.length < 2) {
+          searchStatus.textContent = 'Type at least two characters.';
+          return;
+        }
+
+        searchStatus.textContent = 'Searching...';
+        google.script.run
+          .withSuccessHandler(renderResults)
+          .withFailureHandler(err => showError(searchStatus, err))
+          .searchIntakeEvents(query);
+      }
+
+      function renderResults(results) {
+        resultsEl.innerHTML = '';
+        searchStatus.textContent = results.length
+          ? `${results.length} result${results.length === 1 ? '' : 's'}`
+          : 'No matches found.';
+
+        results.forEach(item => {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'result';
+          button.innerHTML = `
+            <span class="result-title">${escapeHtml(item.name)}</span>
+            <span class="result-meta">${escapeHtml(item.date || '')} ${item.addedBy ? '| Added by ' + escapeHtml(item.addedBy) : ''}</span>
+          `;
+          button.addEventListener('click', () => loadReport(item.name));
+          resultsEl.appendChild(button);
+        });
+      }
+
+      function loadReport(eventName) {
+        weaverEventName = '';
+        reportEl.hidden = false;
+        reportEventName.textContent = eventName;
+        reportMeta.textContent = 'Loading...';
+        document.getElementById('weaverSend').disabled = true;
+        document.getElementById('weaverCheck').disabled = true;
+        document.getElementById('weaverStatus').textContent = '';
+        omInfo.textContent = '';
+        timingInfo.textContent = '';
+        rightsInfo.textContent = '';
+        performerList.textContent = '';
+        titlesList.innerHTML = '';
+        checklistEl.innerHTML = '';
+
+        google.script.run
+          .withSuccessHandler(renderReport)
+          .withFailureHandler(err => showError(reportMeta, err))
+          .getIntakeReport(eventName);
+      }
+
+      let weaverEventName = '';
+      let weaverBusy = false;
+      function renderWeaverReceipt(r) {
+        const status = document.getElementById('weaverStatus');
+        status.replaceChildren();
+        const p = document.createElement('p');
+        p.textContent = `${r.acceptedCount} of ${r.submittedCount} videos received for curation. ` +
+          (r.status === 'inventory_changed' ? 'Inventory has changed since the handoff; this receipt no longer covers it.' :
+          r.readyForClosureReview ? 'Ready for closure review.' : 'Needs attention before closure review.') +
+          ' Weaver checked video metadata access; playback and publication approval are not confirmed. The event remains open.';
+        status.appendChild(p);
+        (r.blocked || []).forEach(t => {
+          const item = document.createElement('p');
+          item.textContent = `Row ${t.sourceRow}: ${t.performer} — ${t.title}: ${t.reason.replace(/_/g,' ')}`;
+          status.appendChild(item);
+        });
+        if ((r.currentUnavailableFileIds || []).length) {
+          const item = document.createElement('p');
+          item.textContent = `${r.currentUnavailableFileIds.length} previously received video(s) are no longer accessible to Weaver.`;
+          status.appendChild(item);
+        }
+      }
+      function runWeaver(action) {
+        if (!weaverEventName || weaverBusy) return;
+        const eventName = weaverEventName;
+        weaverBusy = true;
+        document.getElementById('weaverSend').disabled = true;
+        document.getElementById('weaverCheck').disabled = true;
+        document.getElementById('weaverStatus').textContent = 'Contacting Weaver…';
+        const finish = () => {
+          weaverBusy = false;
+          if (eventName !== weaverEventName) return false;
+          document.getElementById('weaverSend').disabled = false;
+          document.getElementById('weaverCheck').disabled = false;
+          return true;
+        };
+        const runner = google.script.run
+          .withSuccessHandler(r => { if(finish()) renderWeaverReceipt(r); })
+          .withFailureHandler(err => { if(finish()) document.getElementById('weaverStatus').textContent = err.message || String(err); });
+        if (action === 'send') runner.sendEventToWeaver(eventName);
+        else runner.checkWeaverEvent(eventName);
+      }
+      document.getElementById('weaverSend').onclick = () => runWeaver('send');
+      document.getElementById('weaverCheck').onclick = () => runWeaver('check');
+      function renderReport(r) {
+        weaverEventName = r.eventName;
+        document.getElementById('weaverSend').disabled = !r.event || r.closed || !r.titles.length || weaverBusy;
+        document.getElementById('weaverCheck').disabled = !r.event || r.closed || weaverBusy;
+        checklistEl.innerHTML = '';
+        (r.flags || []).forEach(f => {
+          const div = document.createElement('div');
+          div.className = 'result' + (f.level === 'warn' ? ' status-failed' : f.level === 'ok' ? ' status-pass' : '');
+          const label = f.level === 'warn' ? 'Check: ' : f.level === 'ok' ? 'OK: ' : 'Note: ';
+          div.innerHTML = `<b>${label}</b>${escapeHtml(f.text)}`;
+          checklistEl.appendChild(div);
+        });
+
+        const ev = r.event;
+        reportMeta.innerHTML = ev
+          ? `Event date ${escapeHtml(ev.date || '(none)')} &middot; added by ${escapeHtml(ev.addedBy || '(unknown)')}`
+          : '<span class="status error">No "Add Event" submission found for this exact name &mdash; titles below were still matched by event name.</span>';
+
+        if (!ev || !ev.omFolderLink) {
+          omInfo.textContent = 'No OM folder link on record for this event.';
+        } else if (r.omCountError) {
+          omInfo.innerHTML = `<a href="${escapeHtml(ev.omFolderLink)}" target="_blank">Folder link</a> &mdash; ${escapeHtml(r.omCountError)}`;
+        } else {
+          const d = r.omDetail || {};
+          const diff = r.omCount - r.titles.length;
+          const diffText = diff === 0
+            ? 'matches titles added'
+            : (diff > 0 ? `${diff} more video file(s) than titles added` : `${-diff} fewer video file(s) than titles added`);
+          omInfo.innerHTML = `<a href="${escapeHtml(ev.omFolderLink)}" target="_blank">Folder link</a> &mdash; <b>${r.omCount}</b> video file(s), ${diffText}.<br>
+            ${escapeHtml(String(d.files))} file(s) in all (${escapeHtml(String(d.topFiles))} at the top level, ${escapeHtml(String(d.subfolders))} subfolder(s)),
+            counted ${escapeHtml(String(d.countedAt || ''))}. Refreshed automatically every hour by the Intake OM Counter.`;
+        }
+
+        if (r.timing) {
+          const first = new Date(r.timing.first);
+          const last = new Date(r.timing.last);
+          const h = Math.floor(r.timing.spanMinutes / 60);
+          const m = r.timing.spanMinutes % 60;
+          timingInfo.textContent = `${first.toLocaleString()} → ${last.toLocaleString()} (${h}h ${m}m span)`;
+        } else {
+          timingInfo.textContent = 'No timestamps found.';
+        }
+
+        const rightsKeys = Object.keys(r.rightsBreakdown);
+        rightsInfo.innerHTML = rightsKeys.length
+          ? rightsKeys.map(k => `${r.rightsBreakdown[k]} × ${escapeHtml(k)}`).join('<br>')
+          : 'No titles yet.';
+
+        performerCount.textContent = r.performers.length;
+        performerList.textContent = r.performers.length ? r.performers.join(', ') : '(none)';
+
+        titleCount.textContent = r.titles.length;
+        titlesList.innerHTML = '';
+        r.titles.forEach(t => {
+          const div = document.createElement('div');
+          div.className = 'result';
+          div.innerHTML = `
+            <span class="result-title">${escapeHtml(t.performer)} &mdash; ${escapeHtml(t.title || '(untitled)')}</span>
+            <span class="result-meta">${escapeHtml(t.rights || '')} | ${t.timestamp ? new Date(t.timestamp).toLocaleString() : ''} | ${escapeHtml(t.addedBy || '')}</span>
+          `;
+          titlesList.appendChild(div);
+        });
+        if (!r.titles.length) {
+          titlesList.innerHTML = '<p class="detail">No titles added yet for this event.</p>';
+        }
+      }
+
+      function showError(el, error) {
+        el.textContent = error.message || String(error);
+        el.className = 'status error';
+      }
+
+      function escapeHtml(value) {
+        return String(value || '')
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#039;');
+      }
+    </script>
+  </body>
+</html>

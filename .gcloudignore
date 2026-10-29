@@ -41,3 +41,6 @@ data/*
 !data/formal_catalog.db
 !data/qi_image_database.csv
 !data/qi_queue_cleanup_updates.csv
+
+!footage_event_intake.mjs
+!footage_helper_auth.mjs
