@@ -288,3 +288,42 @@ export function parsePoetryPleaseVideoImport(response, body, sourceRecordId, api
     ))
   };
 }
+
+export function parsePoetryPleaseVideoReceipt(receipt, gate) {
+  const previous = gate?.poetryPleaseHandoff || {};
+  if (receipt?.ok !== true || receipt.received !== true || receipt.ambiguousVideoMatch
+    || clean(receipt.sourceRecordId) !== clean(previous.sourceRecordId)
+    || clean(receipt.canonicalVideoId) !== clean(previous.canonicalVideoId)
+    || !clean(previous.canonicalVideoId)
+    || clean(receipt.event?.sourceEvent) !== clean(gate.sourceEvent)
+    || (clean(gate.sourceEventLabel) && clean(receipt.event?.sourceEventLabel) !== clean(gate.sourceEventLabel))) {
+    throw new Error("Poetry Please receipt identity or event does not match this gate.");
+  }
+  const reviews = Number(receipt.review?.reviewCount);
+  const excerpts = Number(receipt.review?.selectedExcerptIdCount);
+  if (!Number.isInteger(reviews) || !Number.isInteger(excerpts)
+    || reviews < Number(previous.receivedReviewCount || 0)
+    || excerpts < Math.max(Number(previous.receivedSelectedExcerptIdCount || 0), (gate.selectedExcerptRecordIds || []).length)) {
+    throw new Error("Poetry Please receipt is missing previously received review context.");
+  }
+  const media = receipt.media || {};
+  const bytes = Number(media.durableByteCount || 0);
+  if (clean(media.durableCopyStatus) === "verified") {
+    let hosted;
+    try { hosted = new URL(media.videoUrl); } catch {}
+    if (clean(media.storageMode) !== "durable" || !Number.isSafeInteger(bytes) || bytes <= 0
+      || !clean(media.durableChecksum) || hosted?.protocol !== "https:"
+      || !["firebasestorage.googleapis.com", "storage.googleapis.com"].includes(hosted?.hostname)) {
+      throw new Error("Poetry Please verified copy receipt is incomplete.");
+    }
+  }
+  return {
+    sourceRecordId: previous.sourceRecordId, canonicalVideoId: previous.canonicalVideoId,
+    durableCopyStatus: clean(media.durableCopyStatus), durableCopyError: clean(media.durableCopyError),
+    durableByteCount: bytes, durableChecksum: clean(media.durableChecksum),
+    storageMode: clean(media.storageMode), mediaStatus: clean(media.mediaStatus),
+    reviewOnly: media.reviewOnly === true,
+    storedReviewCount: reviews, storedSelectedExcerptIdCount: excerpts,
+    ...(clean(media.durableCopyStatus) === "verified" ? { finalAssetUrl: media.videoUrl } : {}),
+  };
+}

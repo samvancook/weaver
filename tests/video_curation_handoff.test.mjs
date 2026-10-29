@@ -1,6 +1,29 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildReviewerProgressExport, buildWeaverVideoImport, classifyDriveFolderPath, parsePoetryPleaseVideoImport, poetryPleaseVideoIdForSourceFile, reconcileVideoReviews, requiresManualVideoIdentityReview, resolveCurrentVideoFileId, resolveVideoReviewSourceFileId } from "../video_curation_handoff.mjs";
+import { buildReviewerProgressExport, buildWeaverVideoImport, classifyDriveFolderPath, parsePoetryPleaseVideoImport, parsePoetryPleaseVideoReceipt, poetryPleaseVideoIdForSourceFile, reconcileVideoReviews, requiresManualVideoIdentityReview, resolveCurrentVideoFileId, resolveVideoReviewSourceFileId } from "../video_curation_handoff.mjs";
+
+test("receipt refresh accepts only the same event, identity, retained context and verified hosted copy", () => {
+  const gate = { sourceEvent: "event", sourceEventLabel: "Event", selectedExcerptRecordIds: ["excerpt"],
+    poetryPleaseHandoff: { sourceRecordId: "source", canonicalVideoId: "canonical", receivedReviewCount: 11, receivedSelectedExcerptIdCount: 8 } };
+  const receipt = { ok: true, received: true, sourceRecordId: "source", canonicalVideoId: "canonical",
+    event: { sourceEvent: "event", sourceEventLabel: "Event" }, review: { reviewCount: 11, selectedExcerptIdCount: 8 },
+    media: { durableCopyStatus: "verified", storageMode: "durable", mediaStatus: "verified", reviewOnly: true,
+      durableByteCount: 1447300329, durableChecksum: "checksum", videoUrl: "https://firebasestorage.googleapis.com/v0/b/pp/o/final" } };
+  const parsed = parsePoetryPleaseVideoReceipt(receipt, gate);
+  assert.equal(parsed.finalAssetUrl, receipt.media.videoUrl);
+  assert.equal(parsed.durableByteCount, 1447300329);
+  assert.equal(parsed.reviewOnly, true);
+  assert.equal(parsed.storedReviewCount, 11);
+  for (const changed of [
+    { ...receipt, canonicalVideoId: "other" },
+    { ...receipt, event: { ...receipt.event, sourceEvent: "other" } },
+    { ...receipt, review: { ...receipt.review, reviewCount: 9 } },
+    { ...receipt, media: { ...receipt.media, durableByteCount: 0 } },
+    { ...receipt, media: { ...receipt.media, videoUrl: "https://example.com/unverified" } },
+  ]) assert.throws(() => parsePoetryPleaseVideoReceipt(changed, gate));
+  const pending = parsePoetryPleaseVideoReceipt({ ...receipt, media: { ...receipt.media, durableCopyStatus: "copying" } }, gate);
+  assert.equal(Object.hasOwn(pending, "finalAssetUrl"), false);
+});
 
 test("multiple historical files resolve only through a unique earlier canonical receipt", () => {
   const earlier = { prioritySetId: "event", sourceFileId: "intermediate", sourceReviewFileId: "reviewed-720",

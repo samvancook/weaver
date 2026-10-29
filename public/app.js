@@ -1730,13 +1730,16 @@ function renderVideoCurationCandidates() {
       <label class="field"><span>Editing instructions</span><textarea data-field="editingInstructions">${escapeHtml(gate.editingInstructions || "")}</textarea></label>
       <label class="field"><span>Decision note</span><textarea data-field="note">${escapeHtml(gate.note || "")}</textarea></label>
       <p>${escapeHtml(gate.poetryPleaseHandoff?.status || gate.handoffStatus || "")}</p>
+      ${gate.poetryPleaseHandoff?.durableCopyStatus ? `<p>PP copy: ${escapeHtml(gate.poetryPleaseHandoff.durableCopyStatus)}${gate.poetryPleaseHandoff.durableByteCount ? ` · ${Number(gate.poetryPleaseHandoff.durableByteCount).toLocaleString()} bytes` : ""}${gate.poetryPleaseHandoff.reviewOnly ? " · Review only" : ""}${gate.poetryPleaseHandoff.durableCopyError ? ` · ${escapeHtml(gate.poetryPleaseHandoff.durableCopyError)}` : ""}</p>` : ""}
       <button type="button" class="button button--secondary" data-action="save">Save Decision</button>
-      ${gate.decision === "ready_for_poetry_please" ? '<button type="button" class="button" data-action="handoff">Send to Poetry Please</button>' : ""}
+      ${gate.decision === "ready_for_poetry_please" && !gate.poetryPleaseHandoff?.status ? '<button type="button" class="button" data-action="handoff">Send to Poetry Please</button>' : ""}
+      ${gate.poetryPleaseHandoff?.status === "sent_to_poetry_please" && gate.poetryPleaseHandoff?.canonicalVideoId ? '<button type="button" class="button button--secondary" data-action="receipt">Refresh PP receipt</button>' : ""}
       ` : ""}
       `;
       if (article.querySelector('[data-field="decision"]')) article.querySelector('[data-field="decision"]').value = gate.decision || "";
       article.querySelector('[data-action="save"]')?.addEventListener("click", () => saveVideoCurationDecision(candidate, article));
       article.querySelector('[data-action="handoff"]')?.addEventListener("click", () => sendVideoCurationHandoff(candidate));
+      article.querySelector('[data-action="receipt"]')?.addEventListener("click", () => refreshVideoCurationReceipt(candidate));
       container.append(article);
     }
   }
@@ -1790,6 +1793,21 @@ async function sendVideoCurationHandoff(candidate) {
     await loadVideoCurationCandidates();
   } catch (error) {
     setStatus(`Video handoff failed: ${error.message}`);
+  }
+}
+
+async function refreshVideoCurationReceipt(candidate) {
+  try {
+    const response = await adminFetch("/api/admin/video-curation-gates/receipt", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prioritySetId: candidate.prioritySetId, sourceFileId: candidate.sourceFileId }),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || !result.ok) throw new Error(result.error || `Receipt lookup failed (${response.status}).`);
+    setStatus(`PP receipt refreshed: ${result.gate?.poetryPleaseHandoff?.durableCopyStatus || "not yet verified"}`);
+    await loadVideoCurationCandidates();
+  } catch (error) {
+    setStatus(`PP receipt refresh failed: ${error.message}`);
   }
 }
 

@@ -67,6 +67,7 @@ FIRESTORE_HANDOFF_ACTIONS = {
     "upsert_video_curation_gate",
     "claim_video_curation_handoff",
     "finish_video_curation_handoff",
+    "refresh_video_curation_receipt",
     "get_video_curation_gates",
 }
 
@@ -865,7 +866,16 @@ def upsert_video_curation_gate(connection, payload: dict[str, Any]) -> dict[str,
 
 
 def fetch_video_curation_gates(connection, payload: dict[str, Any]) -> dict[str, Any]:
-    records = connection.list_raw_documents(FIRESTORE_VIDEO_CURATION_GATES_COLLECTION)
+    priority_set_id = normalize_text(payload.get("prioritySetId"))
+    source_file_id = normalize_text(payload.get("sourceFileId"))
+    if priority_set_id or source_file_id:
+        if not priority_set_id or not source_file_id:
+            raise ValueError("prioritySetId and sourceFileId are required")
+        gate_id = hashlib.sha256(f"{priority_set_id}|{source_file_id}".encode("utf-8")).hexdigest()[:32]
+        record = connection.get_raw_document(FIRESTORE_VIDEO_CURATION_GATES_COLLECTION, gate_id)
+        records = [record] if record else []
+    else:
+        records = connection.list_raw_documents(FIRESTORE_VIDEO_CURATION_GATES_COLLECTION)
     return {"ok": True, "records": records, "count": len(records)}
 
 
@@ -919,6 +929,36 @@ def finish_video_curation_handoff(connection, payload: dict[str, Any]) -> dict[s
         "history": (list(existing.get("history") or []) + [{"event": "poetry_please_handoff", "status": status, "attemptId": attempt_id, "at": now}])[-20:],
     }
     saved = connection.write_raw_document_if_unchanged(FIRESTORE_VIDEO_CURATION_GATES_COLLECTION, gate_id, record, update_time)
+    return {"ok": True, "saved": bool(saved), "reason": "" if saved else "concurrent_update", "record": saved}
+
+
+def refresh_video_curation_receipt(connection, payload: dict[str, Any]) -> dict[str, Any]:
+    priority_set_id = normalize_text(payload.get("prioritySetId"))
+    source_file_id = normalize_text(payload.get("sourceFileId"))
+    receipt = payload.get("receipt")
+    if not priority_set_id or not source_file_id or not isinstance(receipt, dict):
+        raise ValueError("A video gate and verified receiver receipt are required")
+    gate_id = hashlib.sha256(f"{priority_set_id}|{source_file_id}".encode("utf-8")).hexdigest()[:32]
+    existing, version = connection.get_raw_document_versioned(FIRESTORE_VIDEO_CURATION_GATES_COLLECTION, gate_id)
+    handoff = (existing or {}).get("poetryPleaseHandoff") or {}
+    if (handoff.get("status") != "sent_to_poetry_please"
+            or normalize_text(handoff.get("attemptId")) != normalize_text(payload.get("attemptId"))
+            or not normalize_text(receipt.get("canonicalVideoId"))
+            or receipt.get("canonicalVideoId") != handoff.get("canonicalVideoId")
+            or receipt.get("sourceRecordId") != handoff.get("sourceRecordId")):
+        return {"ok": True, "saved": False, "reason": "handoff_attempt_changed", "record": existing}
+    fields = {"durableCopyStatus", "durableCopyError", "durableByteCount", "durableChecksum",
+              "storageMode", "mediaStatus", "reviewOnly", "storedReviewCount",
+              "storedSelectedExcerptIdCount", "finalAssetUrl"}
+    now = utc_now_iso()
+    record = {**existing,
+              "poetryPleaseHandoff": {**handoff, **{k: v for k, v in receipt.items() if k in fields},
+                                     "receiptCheckedAt": now},
+              "updatedAt": now,
+              "history": (list(existing.get("history") or []) + [{
+                  "event": "poetry_please_receipt", "status": normalize_text(receipt.get("durableCopyStatus")),
+                  "actor": normalize_text(payload.get("checkedBy")), "at": now}])[-20:]}
+    saved = connection.write_raw_document_if_unchanged(FIRESTORE_VIDEO_CURATION_GATES_COLLECTION, gate_id, record, version)
     return {"ok": True, "saved": bool(saved), "reason": "" if saved else "concurrent_update", "record": saved}
 
 
@@ -1924,6 +1964,8 @@ def main() -> int:
             result = claim_video_curation_handoff(connection, payload)
         elif action == "finish_video_curation_handoff":
             result = finish_video_curation_handoff(connection, payload)
+        elif action == "refresh_video_curation_receipt":
+            result = refresh_video_curation_receipt(connection, payload)
         elif action == "get_video_curation_gates":
             result = fetch_video_curation_gates(connection, payload)
         else:
