@@ -1852,6 +1852,7 @@ class FirestoreLedgerClient:
         graphics_request_id = str(completion["graphics_request_id"]).strip()
         if not completion_id or not graphics_request_id:
             raise ValueError("completion id and graphics_request_id are required")
+        supplied_request_id = graphics_request_id
         handoff = self.get_handoff(graphics_request_id)
         if handoff and handoff.get("graphicsRequestId"):
             graphics_request_id = str(handoff["graphicsRequestId"])
@@ -1859,6 +1860,15 @@ class FirestoreLedgerClient:
         image_type = normalize_content_type(completion.get("image_type") or completion.get("imageType") or completion.get("contentType"), content_type)
         ingested_at = str(completion.get("ingested_at") or completion.get("ingestedAt") or utc_now_iso())
         source_payload = completion.get("source_payload") or completion.get("sourcePayload") or {}
+        if graphics_request_id != supplied_request_id and isinstance(source_payload, dict):
+            source_payload = dict(source_payload)
+            for field in ("requestId", "graphicsRequestId"):
+                if str(source_payload.get(field) or "").strip() == supplied_request_id:
+                    source_payload[field] = graphics_request_id
+            if isinstance(source_payload.get("sourceIdentity"), dict):
+                source_payload["sourceIdentity"] = dict(source_payload["sourceIdentity"])
+                if str(source_payload["sourceIdentity"].get("graphicsRequestId") or "").strip() == supplied_request_id:
+                    source_payload["sourceIdentity"]["graphicsRequestId"] = graphics_request_id
         pig_project_id = str(
             completion.get("pig_project_id")
             or completion.get("pigProjectId")
@@ -1915,6 +1925,8 @@ class FirestoreLedgerClient:
         source_identity = completion.get("sourceIdentity") or source_payload.get("sourceIdentity")
         if not isinstance(source_identity, dict):
             source_identity = {}
+        if str(source_identity.get("graphicsRequestId") or "").strip() == supplied_request_id:
+            source_identity = {**source_identity, "graphicsRequestId": graphics_request_id}
         source_identity = {
             **source_identity,
             "graphicsRequestId": str(source_identity.get("graphicsRequestId") or graphics_request_id),
