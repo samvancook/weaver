@@ -2,6 +2,33 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { buildReviewerProgressExport, buildWeaverVideoImport, classifyDriveFolderPath, parsePoetryPleaseVideoImport, poetryPleaseVideoIdForSourceFile, reconcileVideoReviews, requiresManualVideoIdentityReview, resolveCurrentVideoFileId } from "../video_curation_handoff.mjs";
 
+test("receiver validation errors stay in finalizable held states", () => {
+  const sourceRecordId = "weaver:video:original";
+  for (const [status, expected] of [["blocked", "blocked"], ["error", "failed"], ["unexpected", "failed"]]) {
+    const result = parsePoetryPleaseVideoImport({ ok: false, status: 409 }, {
+      ok: false, results: [{ sourceRecordId, status, error: "receiver_validation" }],
+    }, sourceRecordId, "https://poetryplease.org/api");
+    assert.equal(result.ok, false);
+    assert.equal(result.status, expected);
+    assert.equal(result.error, "receiver_validation");
+  }
+});
+
+test("accepted review-only receipts retain copy state without claiming publication", () => {
+  const result = parsePoetryPleaseVideoImport({ ok: true, status: 200 }, { ok: true, results: [{
+    sourceRecordId: "source", status: "updated", canonicalVideoId: "canonical",
+    canonicalVideoUrl: "/app?item=canonical", receivedReviewCount: 9,
+    receivedSelectedExcerptIdCount: 8, storedReviewCount: 11, storedSelectedExcerptIdCount: 8,
+    durableCopyStatus: "pending", durableCopyQueued: true, reviewOnly: true,
+    storageMode: "external", mediaStatus: "review_ready",
+  }] }, "source", "https://poetryplease.org/api", { reviewCount: 9, selectedExcerptIdCount: 8 });
+  assert.equal(result.ok, true);
+  assert.equal(result.storedReviewCount, 11);
+  assert.equal(result.receivedReviewCount, 9);
+  assert.equal(result.durableCopyStatus, "pending");
+  assert.equal(result.reviewOnly, true);
+});
+
 test("reviewer progress export includes unstarted reviewers and reconciles replacement files", () => {
   const files = [
     { id: "new-file", name: "Poem A.mov", webViewLink: "https://drive.google.com/file/d/new-file/view" },
@@ -43,6 +70,13 @@ const gate = {
   publishableAssetMediaType: "FV",
   selectedExcerptRecordIds: ["exc-1"]
 };
+
+test("a replacement file retains the saved gate's excerpt associations", () => {
+  const record = buildWeaverVideoImport(candidate, {
+    ...gate, selectedExcerptRecordIds: ["archived-excerpt", "exc-1"],
+  });
+  assert.deepEqual(record.selectedExcerptRecordIds, ["archived-excerpt", "exc-1"]);
+});
 
 test("video import is a single root record with stable source identity", () => {
   const record = buildWeaverVideoImport(candidate, gate);
