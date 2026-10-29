@@ -4,7 +4,7 @@ import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildReviewerProgressExport, buildWeaverVideoImport, classifyDriveFolderPath, driveFileId, parsePoetryPleaseVideoImport, poetryPleaseVideoIdForSourceFile, reconcileVideoReviews, resolveCurrentVideoFileId } from "./video_curation_handoff.mjs";
+import { buildReviewerProgressExport, buildWeaverVideoImport, classifyDriveFolderPath, driveFileId, parsePoetryPleaseVideoImport, poetryPleaseVideoIdForSourceFile, reconcileVideoReviews, requiresManualVideoIdentityReview, resolveCurrentVideoFileId } from "./video_curation_handoff.mjs";
 import { verifyProgressExportCaller } from "./weaver_progress_auth.mjs";
 import { findApprovedTextExcerptMatch } from "./video_excerpt_folding.mjs";
 import { poemKeyForExcerptText, POEM_KEY_SEED_SOURCE } from "./poem_key_seed.mjs";
@@ -2700,9 +2700,14 @@ async function handoffVideoCurationGate(payload = {}) {
   if (!claim?.claimed) {
     return { ok: false, error: claim?.reason || "video_handoff_claim_failed", gate: claim?.record || null };
   }
-  const persist = async update => syncWeaverRuntimeDb("upsert_video_curation_gate", {
-    gate: { ...candidate, ...gate, poetryPleaseHandoff: update }
-  });
+  const attemptId = cleanSheetWhitespace(claim.record?.poetryPleaseHandoff?.attemptId);
+  const persist = async update => {
+    const finished = await syncWeaverRuntimeDb("finish_video_curation_handoff", {
+      prioritySetId, sourceFileId, attemptId, poetryPleaseHandoff: update
+    });
+    if (!finished?.saved) throw new Error(finished?.reason || "video_handoff_finish_failed");
+    return finished;
+  };
   const endpoint = `${poetryPleaseApiUrl.replace(/\/$/, "")}/internal/weaverVideoImport`;
   try {
     const response = await fetch(endpoint, {
@@ -2718,7 +2723,7 @@ async function handoffVideoCurationGate(payload = {}) {
     const saved = await persist({ ...result, sourceRecordId: record.sourceRecordId, updatedAt: new Date().toISOString() });
     return { ...result, gate: saved.record, poetryPlease: body };
   } catch (error) {
-    await persist({ status: "needs_reconciliation", sourceRecordId: record.sourceRecordId, error: error.message, updatedAt: new Date().toISOString() });
+    await persist({ status: "needs_reconciliation", sourceRecordId: record.sourceRecordId, error: error.message, updatedAt: new Date().toISOString() }).catch(() => {});
     throw error;
   }
 }
@@ -2748,6 +2753,9 @@ async function autoAdvanceVideoCuration(prioritySetId, sourceFileId) {
       gate: { ...candidate, decision: "ready_for_poetry_please", publishableAssetUrl, decidedBy: "weaver:auto" }
     });
     invalidateQueueSnapshots();
+  }
+  if (requiresManualVideoIdentityReview(candidate, publishableAssetUrl, candidate.gate)) {
+    return { status: "ready_for_poetry_please", requiresManualIdentityReview: true };
   }
   const handoff = await handoffVideoCurationGate({ prioritySetId, sourceFileId });
   return { status: handoff.ok ? "sent_to_poetry_please" : "already_started", ...handoff };
