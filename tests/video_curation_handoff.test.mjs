@@ -25,7 +25,7 @@ test("receipt refresh accepts only the same event, identity, retained context an
   assert.equal(Object.hasOwn(pending, "finalAssetUrl"), false);
 });
 
-test("multiple historical files resolve only through a unique earlier canonical receipt", () => {
+test("multiple historical files resolve through a unique earlier canonical receipt", () => {
   const earlier = { prioritySetId: "event", sourceFileId: "intermediate", sourceReviewFileId: "reviewed-720",
     poetryPleaseHandoff: { status: "sent_to_poetry_please", sourceRecordId: "weaver:video:reviewed-720", canonicalVideoId: "canonical" } };
   const history = ["reviewed-720", "intermediate"];
@@ -36,6 +36,32 @@ test("multiple historical files resolve only through a unique earlier canonical 
     ...earlier, poetryPleaseHandoff: { ...earlier.poetryPleaseHandoff, canonicalVideoId: "conflicting-canonical" },
   }], {}), "");
   assert.equal(resolveVideoReviewSourceFileId("final-2160", ["reviewed-720"], [], {}), "reviewed-720");
+});
+
+test("a failed legacy attempt preserves its explicit original source identity", () => {
+  const old = { prioritySetId: "event", sourceFileId: "intermediate", sourceReviewFileId: "original",
+    videoRecordId: "weaver:video:original", poetryPleaseHandoff: { status: "failed", ok: false,
+      sourceRecordId: "weaver:video:original", error: "The operation was aborted due to timeout" } };
+  const history = ["original", "intermediate"];
+  const current = { prioritySetId: "event" };
+  assert.equal(resolveVideoReviewSourceFileId("new-final", history, [old], current), "original");
+  for (const bad of [
+    { ...old, prioritySetId: "another-event" },
+    { ...old, sourceReviewFileId: "" },
+    { ...old, videoRecordId: "weaver:video:other" },
+    { ...old, poetryPleaseHandoff: { ...old.poetryPleaseHandoff, sourceRecordId: "weaver:video:other" } },
+    { ...old, poetryPleaseHandoff: { ...old.poetryPleaseHandoff, ok: true } },
+    { ...old, poetryPleaseHandoff: { ...old.poetryPleaseHandoff, canonicalVideoId: "unexpected" } },
+    { ...old, poetryPleaseHandoff: {} },
+  ]) assert.equal(resolveVideoReviewSourceFileId("new-final", history, [bad], current), "");
+  assert.equal(resolveVideoReviewSourceFileId("new-final", history, [old], {}), "");
+  const conflict = { ...old, sourceFileId: "original", sourceReviewFileId: "intermediate",
+    videoRecordId: "weaver:video:intermediate", poetryPleaseHandoff: { ...old.poetryPleaseHandoff,
+      sourceRecordId: "weaver:video:intermediate" } };
+  assert.equal(resolveVideoReviewSourceFileId("new-final", history, [old, conflict], current), "");
+  const sentConflict = { ...conflict, poetryPleaseHandoff: { status: "sent_to_poetry_please",
+    sourceRecordId: "weaver:video:intermediate", canonicalVideoId: "other-canonical" } };
+  assert.equal(resolveVideoReviewSourceFileId("new-final", history, [old, sentConflict], current), "");
 });
 
 test("receiver validation errors stay in finalizable held states", () => {
