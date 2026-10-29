@@ -4,7 +4,7 @@ import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildReviewerProgressExport, buildWeaverVideoImport, classifyDriveFolderPath, driveFileId, parsePoetryPleaseVideoImport, poetryPleaseVideoIdForSourceFile, reconcileVideoReviews, requiresManualVideoIdentityReview, resolveCurrentVideoFileId, resolveVideoReviewSourceFileId } from "./video_curation_handoff.mjs";
+import { buildReviewerProgressExport, buildWeaverVideoImport, classifyDriveFolderPath, driveFileId, parsePoetryPleaseVideoImport, parsePoetryPleaseVideoReceipt, poetryPleaseVideoIdForSourceFile, reconcileVideoReviews, requiresManualVideoIdentityReview, resolveCurrentVideoFileId, resolveVideoReviewSourceFileId } from "./video_curation_handoff.mjs";
 import { verifyProgressExportCaller } from "./weaver_progress_auth.mjs";
 import { findApprovedTextExcerptMatch } from "./video_excerpt_folding.mjs";
 import { poemKeyForExcerptText, POEM_KEY_SEED_SOURCE } from "./poem_key_seed.mjs";
@@ -221,7 +221,8 @@ const ADMIN_MUTATION_PATHS = new Set([
   "/api/save-review-single",
   "/api/save-reviews",
   "/api/admin/video-curation-gates",
-  "/api/admin/video-curation-gates/handoff"
+  "/api/admin/video-curation-gates/handoff",
+  "/api/admin/video-curation-gates/receipt"
 ]);
 
 function isAdministrativeMutationRequest(req, url) {
@@ -2726,6 +2727,30 @@ async function handoffVideoCurationGate(payload = {}) {
     await persist({ status: "needs_reconciliation", sourceRecordId: record.sourceRecordId, error: error.message, updatedAt: new Date().toISOString() }).catch(() => {});
     throw error;
   }
+}
+
+async function refreshVideoCurationReceipt(payload = {}, checkedBy = "") {
+  if (!poetryPleaseApiKey) throw new Error("POETRY_PLEASE_API_KEY is not configured.");
+  const prioritySetId = cleanSheetWhitespace(payload.prioritySetId);
+  const sourceFileId = cleanSheetWhitespace(payload.sourceFileId);
+  if (!prioritySetId || !sourceFileId) throw new Error("A saved video gate is required.");
+  const result = await syncWeaverRuntimeDb("get_video_curation_gates", { prioritySetId, sourceFileId });
+  const gate = result?.records?.[0];
+  const handoff = gate?.poetryPleaseHandoff;
+  if (handoff?.status !== "sent_to_poetry_please" || !handoff.sourceRecordId || !handoff.canonicalVideoId) {
+    throw new Error("This gate has no accepted Poetry Please handoff to refresh.");
+  }
+  const url = `${poetryPleaseApiUrl.replace(/\/$/, "")}/internal/weaverVideoReceipt?sourceRecordId=${encodeURIComponent(handoff.sourceRecordId)}`;
+  const response = await fetch(url, { headers: { "x-api-key": poetryPleaseApiKey } });
+  const receipt = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(receipt.error || "Poetry Please receipt lookup failed.");
+  const saved = await syncWeaverRuntimeDb("refresh_video_curation_receipt", {
+    prioritySetId, sourceFileId, attemptId: handoff.attemptId || "", checkedBy,
+    receipt: parsePoetryPleaseVideoReceipt(receipt, gate),
+  });
+  if (!saved?.saved) throw new Error(saved?.reason || "Receipt changed; refresh the gate before trying again.");
+  invalidateQueueSnapshots();
+  return { ok: true, gate: saved.record };
 }
 
 async function autoAdvanceVideoCuration(prioritySetId, sourceFileId) {
@@ -8492,6 +8517,16 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, result.ok ? 200 : 502, result);
     } catch (error) {
       return sendJson(res, Number(error.statusCode || 500), { ok: false, error: error.message });
+    }
+  }
+
+  if (url.pathname === "/api/admin/video-curation-gates/receipt" && req.method === "POST") {
+    try {
+      const admin = req.weaverAdmin || await verifyAdministrativeCaller(req);
+      const payload = JSON.parse(await readRequestBody(req) || "{}");
+      return sendJson(res, 200, await refreshVideoCurationReceipt(payload, admin.email));
+    } catch (error) {
+      return sendJson(res, Number(error.statusCode || 400), { ok: false, error: error.message });
     }
   }
 

@@ -1,6 +1,6 @@
 import unittest
 
-from weaver_runtime_sync import claim_video_curation_handoff, finish_video_curation_handoff
+from weaver_runtime_sync import claim_video_curation_handoff, finish_video_curation_handoff, refresh_video_curation_receipt
 
 
 class FakeGateConnection:
@@ -20,6 +20,35 @@ class FakeGateConnection:
 
 
 class VideoCurationClaimTest(unittest.TestCase):
+    def test_receipt_refresh_updates_only_the_same_accepted_attempt(self):
+        original = {
+            "decision": "ready_for_poetry_please", "decidedAt": "original-time",
+            "sourceReviewFileId": "original", "publishableAssetUrl": "final-drive",
+            "handoffStatus": "sent_to_poetry_please",
+            "poetryPleaseHandoff": {"status": "sent_to_poetry_please", "attemptId": "attempt",
+                                    "sourceRecordId": "source", "canonicalVideoId": "canonical",
+                                    "receivedReviewCount": 11},
+        }
+        connection = FakeGateConnection(original)
+        payload = {"prioritySetId": "event", "sourceFileId": "final", "attemptId": "attempt",
+                   "receipt": {"sourceRecordId": "source", "canonicalVideoId": "canonical",
+                               "durableCopyStatus": "verified", "durableByteCount": 123,
+                               "durableChecksum": "checksum", "finalAssetUrl": "hosted-final",
+                               "decision": "reject"}}
+        self.assertFalse(refresh_video_curation_receipt(connection, {**payload, "attemptId": "stale"})["saved"])
+        result = refresh_video_curation_receipt(connection, payload)
+        self.assertTrue(result["saved"])
+        for key in ["decision", "decidedAt", "sourceReviewFileId", "publishableAssetUrl", "handoffStatus"]:
+            self.assertEqual(result["record"][key], original[key])
+        handoff = result["record"]["poetryPleaseHandoff"]
+        self.assertEqual(handoff["receivedReviewCount"], 11)
+        self.assertEqual(handoff["attemptId"], "attempt")
+        self.assertEqual(handoff["status"], "sent_to_poetry_please")
+        self.assertEqual(handoff["finalAssetUrl"], "hosted-final")
+        self.assertEqual(len(result["record"]["history"]), 1)
+        self.assertFalse(refresh_video_curation_receipt(connection, {**payload, "receipt": {
+            **payload["receipt"], "canonicalVideoId": "wrong"}})["saved"])
+
     def test_only_first_claim_can_start_handoff(self):
         connection = FakeGateConnection({
             "decision": "ready_for_poetry_please",
