@@ -227,6 +227,15 @@
           'Event completeness and readiness to close have not been assessed. Playback and publication approval are not confirmed.';
         document.getElementById('weaverSend').textContent = existing ? 'Link to existing Weaver event' : 'Send new event to Weaver';
         status.appendChild(p);
+        (r.currentUnavailableFileIds || []).forEach(id => {
+          const missing = document.createElement('p');
+          missing.textContent='Video unavailable to Weaver; saved link retained: ';
+          const link=document.createElement('a');link.href='https://drive.google.com/file/d/'+encodeURIComponent(id)+'/view';
+          link.target='_blank';link.rel='noopener noreferrer';link.textContent=id;missing.append(link);status.append(missing);
+        });
+        if (r.targetQueueAvailable === false) {
+          const queue=document.createElement('p');queue.textContent='The existing Weaver curation event could not be verified. Saved relationships are retained.';status.append(queue);
+        }
         (r.families || []).forEach(t => {
           const group = document.createElement('p');
           const title = document.createElement('b'); title.textContent = t.performer + ' — ' + t.title + ': ';
@@ -243,7 +252,33 @@
             group.append(document.createTextNode(' — FV already linked; no new editing job. FV proceeds through curation approval before Poetry Please.'));
           }
           status.append(group);
+          if (t.progress) {
+            const progress = document.createElement('p');
+            const pp = t.progress.poetryPlease || {};
+            progress.textContent = 'Curation: ' + t.progress.reviewCount + ' reviews, ' + t.progress.linkedExcerptCount +
+              ' linked excerpts · ' + t.progress.state.replace(/_/g,' ') + '. Poetry Please (saved receipt): ' +
+              (pp.status || 'not checked').replace(/_/g,' ') +
+              (pp.durableCopyStatus && pp.durableCopyStatus !== 'not_checked' ? ' · media copy: ' + pp.durableCopyStatus : '') +
+              '. Calendar placement: not checked.';
+            if (pp.lastReceiptAt) progress.append(document.createTextNode(' Last PP receipt: ' + pp.lastReceiptAt + '.'));
+            if (/^https:\/\//.test(pp.canonicalVideoUrl || '')) {
+              const link = document.createElement('a'); link.href=pp.canonicalVideoUrl; link.target='_blank'; link.rel='noopener noreferrer';
+              link.textContent=' Open Poetry Please video'; progress.append(link);
+            }
+            if (pp.error) progress.append(document.createTextNode(' Handoff needs attention: ' + pp.error));
+            status.append(progress);
+          }
         });
+        if (r.progressCheck && r.progressCheck.status === 'checked') {
+          const checked = document.createElement('p');
+          checked.textContent='Weaver progress checked: ' + r.progressCheck.checkedAt + '. Poetry Please status reflects its last saved receipt.';
+          status.append(checked);
+        }
+        if (r.progressCheck && r.progressCheck.status === 'unavailable') {
+          const unavailable = document.createElement('p');
+          unavailable.textContent = 'The event connection is recorded, but current curation and Poetry Please progress could not be read. Check the receipt again; no links were removed.';
+          status.append(unavailable);
+        }
         if ((r.families || []).length) {
           const text = document.createElement('p');
           text.textContent = 'OM/FV identifies the workflow; HV/VV identifies the format. OM needs editing only when no finished video is linked. Only approved FV proceeds to Poetry Please and calendars. Reviews stay on the version reviewed. Canonical text links have not yet been recorded.';

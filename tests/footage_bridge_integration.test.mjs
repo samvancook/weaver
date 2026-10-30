@@ -4,6 +4,7 @@ import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import {INVENTORY_ID,prepareEventIntake,footageEventAsSet,currentEventReceipt,validateEventManifest,fileId as footageFileId} from '../footage_event_intake.mjs';
 import {resolveEventTarget} from '../footage_event_links.mjs';
+import {buildFootageProgress,footageProvenanceForFile} from '../footage_event_progress.mjs';
 const server=readFileSync(new URL('../server.mjs',import.meta.url),'utf8');
 const getFunction=name=>server.match(new RegExp(`async function ${name}\\([\\s\\S]*?\\n}\\n`))[0];
 const id='video_individual_123456';
@@ -11,7 +12,7 @@ const manifest={sourceSpreadsheetId:INVENTORY_ID,eventName:'Pilot',omFolderId:'e
  titles:[{sourceRow:6000,performer:'Inventory poet',title:'Inventory title',rights:'Have video release',contentLink:`https://drive.google.com/file/d/${id}/view`}]};
 test('receiver saves before acknowledgement, reloads queue after restart, and curation uses inventory titles',async()=>{
  const ledger=new Map(),sets=new Map();let reply;
- const context={prepareEventIntake,footageEventAsSet,currentEventReceipt,validateEventManifest,footageFileId,resolveEventTarget,refreshFootageEventSets:async()=>{},verifyFootageReceiptQueue:async()=>true,listVideoSetFiles:async()=>[],getFootageAssetConnections:async()=>[],PRIORITY_VIDEO_SETS:sets,
+ const context={prepareEventIntake,footageEventAsSet,currentEventReceipt,validateEventManifest,footageFileId,resolveEventTarget,footageProvenanceForFile,refreshFootageEventSets:async()=>{},getFootageEventProgress:async()=>({status:"checked",byFileId:{}}),verifyFootageReceiptQueue:async()=>true,listVideoSetFiles:async()=>[],getFootageAssetConnections:async()=>[],PRIORITY_VIDEO_SETS:sets,
   process:{env:{WEAVER_FOOTAGE_BRIDGE_ENABLED:'true'}},decodeURIComponent,
   verifyFootageHelperCaller:async()=>({email:'owner@example.com'}),
   getDriveFileMetadata:async fileId=>({id:fileId,mimeType:'video/mp4',name:'Clip 1.mp4'}),
@@ -42,6 +43,16 @@ test('receiver saves before acknowledgement, reloads queue after restart, and cu
  await api({method:'GET'},{},{pathname:'/api/footage/events/'+eventId});assert.equal(reply.body.receipt.transferComplete,true);assert.equal(reply.body.receipt.readyForClosureReview,false);
  context.getDriveFileMetadata=async()=>{throw Error('403');};
  await api({method:'GET'},{},{pathname:'/api/footage/events/'+eventId});assert.equal(reply.body.receipt.readyForClosureReview,false);
+});
+test('live progress reader is read-only and propagates unavailable ledger status',async()=>{
+ const calls=[];
+ const ctx={buildFootageProgress,syncWeaverRuntimeDb:async(action,payload)=>{calls.push({action,payload});return {ok:true,records:[]};}};
+ const read=runInNewContext(`${getFunction('getFootageEventProgress')}\ngetFootageEventProgress`,ctx);
+ const r=await read({prioritySetId:'event-a',accepted:[{sourceFileId:'fv-a'}]});
+ assert.equal(r.status,'checked');assert.equal(r.byFileId['fv-a'].reviewCount,0);
+ assert.deepEqual(calls.map(c=>c.action),['get_curation_reviews','get_video_curation_gates']);
+ ctx.syncWeaverRuntimeDb=async()=>({ok:false,error:'offline'});
+ await assert.rejects(read({prioritySetId:'event-a'}),/unavailable/);
 });
 test('Helper rebuilds current manifest server-side and stale receipts never confirm inventory edits',()=>{
  const source=readFileSync(new URL('../integrations/footage-helper/WeaverBridge.gs',import.meta.url),'utf8');
@@ -86,7 +97,7 @@ test('existing-event preview is read-only and sending preserves the live set and
  const context={prepareEventIntake,footageEventAsSet,currentEventReceipt,validateEventManifest,footageFileId,resolveEventTarget,
   PRIORITY_VIDEO_SETS:sets,process:{env:{WEAVER_FOOTAGE_BRIDGE_ENABLED:'true'}},decodeURIComponent,
   refreshFootageEventSets:async()=>{},listVideoSetFiles:async()=>currentFiles,
-  verifyFootageReceiptQueue:async r=>r.accepted.every(t=>currentFiles.some(f=>f.id===t.sourceFileId)),
+  getFootageEventProgress:async()=>({status:"checked",byFileId:{}}),verifyFootageReceiptQueue:async r=>r.accepted.every(t=>currentFiles.some(f=>f.id===t.sourceFileId)),
   verifyFootageHelperCaller:async()=>({email:'owner@example.com'}),isPriorityVideoFileIncluded:()=>true,
   getDriveFileMetadata:async id=>({id,name:id,mimeType:'video/mp4'}),
   readRequestBody:async()=>JSON.stringify(input),sendJson:(_res,status,body)=>{reply={status,body};},

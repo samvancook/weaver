@@ -839,6 +839,7 @@ def upsert_video_curation_gate(connection, payload: dict[str, Any]) -> dict[str,
         "prioritySetId": priority_set_id,
         "sourceFileId": source_file_id,
         "sourceReviewFileId": normalize_text(source.get("sourceReviewFileId")) or normalize_text(existing.get("sourceReviewFileId")),
+        "footageConnections": source.get("footageConnections", existing.get("footageConnections", [])),
         "sourceFileName": normalize_text(source.get("sourceFileName")),
         "sourceVideoUrl": normalize_text(source.get("sourceVideoUrl")),
         "author": normalize_text(source.get("author")),
@@ -1905,13 +1906,24 @@ def save_footage_event(connection, payload):
         if existing and ((existing.get("routingDigest") and existing["routingDigest"] != record.get("routingDigest"))
                          or (existing.get("prioritySetId") and existing["prioritySetId"] != record.get("prioritySetId"))):
             return {"ok": False, "conflict": True, "error": "Existing event or asset association changed. Earlier receipt was preserved."}
+        if existing:
+            pair = lambda title: (title.get("inventorySourceFileId") or title.get("sourceFileId"), title.get("sourceFileId"))
+            old_titles = {pair(t): t for t in existing.get("accepted", [])}
+            new_titles = {pair(t): t for t in record.get("accepted", [])}
+            if not old_titles.keys() <= new_titles.keys():
+                return {"ok": False, "conflict": True, "error": "This retry could not verify all saved links. Earlier links were preserved; check the receipt or retry when access is restored."}
+            for title_pair, old_title in old_titles.items():
+                new_types = {a.get("driveFileId"): a.get("mediaType") for a in new_titles[title_pair].get("assets", [])}
+                if any(a.get("mediaType") in {"OM", "FV"} and new_types.get(a.get("driveFileId")) != a["mediaType"]
+                       for a in old_title.get("assets", [])):
+                    return {"ok": False, "conflict": True, "error": "A saved OM/FV classification changed. Earlier roles were preserved; review the asset relationship explicitly."}
         now = utc_now_iso()
         record.update({"createdAt": (existing or {}).get("createdAt") or now, "updatedAt": now})
         saved = (connection.write_raw_document_if_unchanged(FOOTAGE_EVENTS_COLLECTION, event_id, record, version)
                  if existing else connection.create_raw_document_if_absent(FOOTAGE_EVENTS_COLLECTION, event_id, record))
         if saved is not None:
             verified = connection.get_raw_document(FOOTAGE_EVENTS_COLLECTION, event_id)
-            if not verified or verified.get("digest") != record["digest"]:
+            if verified != record:
                 raise ValueError("Event receipt readback did not match")
             return {"ok": True, "record": verified}
     return {"ok": False, "conflict": True, "error": "Event receipt changed concurrently; retry."}

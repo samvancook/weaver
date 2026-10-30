@@ -60,6 +60,23 @@ class FootageLedgerTest(unittest.TestCase):
         self.assertIn('save_footage_event',FIRESTORE_HANDOFF_ACTIONS)
         self.assertIn('get_footage_events',FIRESTORE_HANDOFF_ACTIONS)
         with self.assertRaises(ValueError): save_footage_event(object(),{'record':self.record()})
+    def test_temporary_access_failure_cannot_erase_saved_links(self):
+        db=Ledger()
+        title={"inventorySourceFileId":"om-a","sourceFileId":"fv-a","assets":[{"driveFileId":"om-a","mediaType":"OM"},{"driveFileId":"fv-a","mediaType":"FV"}]}
+        record={**self.record(),"accepted":[title]}
+        save_footage_event(db,{"record":record})
+        before=copy.deepcopy(db.records); writes=db.writes
+        result=save_footage_event(db,{"record":{**record,"accepted":[],"blockedCount":1}})
+        self.assertTrue(result['conflict']);self.assertEqual(db.records,before);self.assertEqual(db.writes,writes)
+        downgraded=copy.deepcopy(record);downgraded['accepted'][0]['assets'][1]['mediaType']='unknown'
+        self.assertTrue(save_footage_event(db,{"record":downgraded})['conflict'])
+        self.assertEqual(db.records,before)
+    def test_receipt_readback_checks_actual_saved_links_and_counts(self):
+        db=Ledger()
+        original=db.get_raw_document
+        db.get_raw_document=lambda collection,key: ({**original(collection,key),'acceptedCount':999} if original(collection,key) else None)
+        with self.assertRaisesRegex(ValueError,'readback'):
+            save_footage_event(db,{'record':self.record()})
     def test_firestore_create_has_atomic_absent_precondition(self):
         client=object.__new__(FirestoreLedgerClient)
         client.document_url_for=lambda c,k:'https://example.invalid/doc'

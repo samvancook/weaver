@@ -102,13 +102,15 @@ export async function prepareEventIntake(input, getFile, target = {mode:'new_eve
 export function footageEventAsSet(record) {
   // Linking never shadows a live queue or changes its review source identities.
   if(record.mode==='existing_event') return null;
+  const types=new Set((record.accepted||[]).map(t=>t.assets?.find(a=>a.driveFileId===t.sourceFileId)?.mediaType || 'unknown'));
+  const mediaType=types.size===1 && ['OM','FV'].includes([...types][0])?[...types][0]:'unknown';
   return {id:record.eventId,label:record.eventName,eventName:record.eventName,folderId:record.sourceFolderId,
-    inventoryEvent:true,sourceMediaType:'unknown',sourceMediaLabel:'Inventory-linked video',
+    inventoryEvent:true,sourceMediaType:mediaType,sourceMediaLabel:'Inventory-linked video',
     inventoryFiles:(record.accepted||[]).map(t=>({id:t.sourceFileId,name:t.sourceFileName,mimeType:t.mimeType,webViewLink:t.sourceVideoUrl})),
     inventoryTitles:Object.fromEntries((record.accepted||[]).map(t=>[t.sourceFileId,t]))};
 }
 
-export async function currentEventReceipt(record,getFile,verifyQueue=async()=>true) {
+export async function currentEventReceipt(record,getFile,verifyQueue=async()=>true,readProgress=async()=>({status:'not_checked'})) {
   const ids=[...new Set((record.accepted||[]).flatMap(t=>t.assets?.map(a=>a.driveFileId)||[t.sourceFileId]))];
   const unavailable=[];
   for(const id of ids) {
@@ -117,7 +119,12 @@ export async function currentEventReceipt(record,getFile,verifyQueue=async()=>tr
   }
   const targetQueueAvailable=record.mode!=='existing_event'||await verifyQueue(record);
   const complete=record.acceptedCount>0 && record.blockedCount===0 && !unavailable.length && targetQueueAvailable;
-  return {...record,currentUnavailableFileIds:unavailable,targetQueueAvailable,
+  let progress;
+  try { progress=await readProgress(record); }
+  catch { progress={status:'unavailable'}; }
+  return {...record,accepted:(record.accepted||[]).map(t=>({...t,progress:progress.byFileId?.[t.sourceFileId] || null})),
+    progressCheck:{status:progress.status,checkedAt:progress.checkedAt || null},
+    currentUnavailableFileIds:unavailable,targetQueueAvailable,
     transferComplete:complete,readyForClosureReview:false,eventCompleteness:'not_assessed',
     status:resultStatus(record,complete),checkedAt:new Date().toISOString(),
     playbackVerified:false,closedAutomatically:false};

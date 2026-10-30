@@ -42,6 +42,8 @@ test('media role is independent of orientation, and unreviewed files remain uncl
  assert.equal(om.accepted[0].workflow.editingStatus,'needs_editing');
  assert.equal(om.accepted[0].workflow.publicationAssetFileId,null);
  assert.equal(om.accepted[0].workflow.publicationStatus,'awaiting_finished_video');
+ assert.equal(footageEventAsSet(om).sourceMediaType,'OM');
+ assert.equal(footageEventAsSet(unknown).sourceMediaType,'unknown');
 });
 test('a missing target queue fails instead of silently creating a duplicate',async()=>{
  await assert.rejects(resolveEventTarget(input(),new Map(),list,fileId),/unavailable/);

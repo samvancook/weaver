@@ -70,14 +70,14 @@ function checkWeaverEvent(eventName) {
 }
 function weaverReceiptForUi_(r) {
   return {eventId:r.eventId, prioritySetId:r.prioritySetId, mode:r.mode, preview:!!r.preview,
-    targetEventName:r.targetEventName, transferComplete:!!r.transferComplete,
+    targetEventName:r.targetEventName, transferComplete:!!r.transferComplete,progressCheck:r.progressCheck || {status:'not_checked'},
     eventCompleteness:'not_assessed', canonicalTextLinkStatus:r.canonicalTextLinkStatus || 'not_linked',
     families:(r.accepted || []).map(function(t) {return {sourceRow:t.sourceRow,performer:t.performer,title:t.title,
-      familyId:t.familyId,sourceFileId:t.sourceFileId,assets:t.assets || [],workflow:t.workflow || {}};}),
+      familyId:t.familyId,sourceFileId:t.sourceFileId,assets:t.assets || [],workflow:t.workflow || {},progress:t.progress || null};}),
     status:r.status, submittedCount:r.submittedCount,
     acceptedCount:r.acceptedCount, blockedCount:r.blockedCount,
     readyForClosureReview:r.readyForClosureReview, checkedAt:r.checkedAt,
-    currentUnavailableFileIds:r.currentUnavailableFileIds || [],
+    currentUnavailableFileIds:r.currentUnavailableFileIds || [],targetQueueAvailable:r.targetQueueAvailable,
     blocked:(r.blocked || []).map(function(t){return {sourceRow:t.sourceRow, performer:t.performer, title:t.title, reason:t.reason};})};
 }
 
