@@ -1,5 +1,13 @@
 # Footage Inventory → Weaver bridge
 
+## Progress return and retry reliability — 2026-10-30
+
+**Check Weaver receipt** reads current Weaver reviews and decisions by exact curation event/file IDs. Helper shows the latest review count per person, linked excerpt count, editing/held/ready state, and the last saved Poetry Please acknowledgement (including canonical video link and media-copy state when present). It reports the check time. An unreadable ledger is shown as unavailable, never as zero work. Calendar placement remains explicitly not checked; a saved PP receipt does not prove scheduling or publication. Historical reviews on another Drive ID are not silently transferred.
+
+Weaver playlist/candidate context retains inventory event ID/name, response row, spreadsheet ID, local asset family, OM source and FV deliverable. Curation decisions preserve that provenance across later edits. This metadata is not a canonical poem/text identity, and downstream PP provenance persistence is a separate pending receiver change.
+
+Same-manifest retries cannot remove previously accepted file relationships or downgrade/change a confirmed OM/FV role. The original receipt is retained on a failed retry, and the user can check it again. Receipt readback verifies the actual saved record, not just its manifest digest. Missing files and unavailable target queues are named in Helper. These checks do not add approval steps or write to the source inventory.
+
 ## OM/FV routing — 2026-10-30
 
 Media role and orientation are separate fields: `mediaType=OM|FV|unknown` and `format=HV|VV|square|unknown`.

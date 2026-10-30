@@ -20,6 +20,18 @@ class FakeGateConnection:
 
 
 class VideoCurationClaimTest(unittest.TestCase):
+    def test_inventory_provenance_survives_decision_edits(self):
+        class SavedGate:
+            def __init__(self): self.record={}
+            def get_raw_document(self, collection, key): return self.record
+            def write_raw_document(self, collection, key, record): self.record=record;return record
+        db=SavedGate()
+        context=[{'inventoryEventId':'inventory-a','sourceRow':6871,'originalMediaFileId':'om-a','finishedVideoFileId':'fv-a'}]
+        gate={'prioritySetId':'event-a','sourceFileId':'fv-a','decision':'hold','footageConnections':context}
+        self.assertEqual(upsert_video_curation_gate(db,{'gate':gate})['record']['footageConnections'],context)
+        gate.pop('footageConnections');gate['note']='Waiting for review'
+        self.assertEqual(upsert_video_curation_gate(db,{'gate':gate})['record']['footageConnections'],context)
+
     def test_decision_save_keeps_existing_handoff_result_visible(self):
         class FakeSaveConnection:
             def __init__(self, handoff):
