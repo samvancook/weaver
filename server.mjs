@@ -2787,7 +2787,8 @@ async function handoffVideoCurationGate(payload = {}) {
     const body = await response.json().catch(() => ({}));
     const result = parsePoetryPleaseVideoImport(response, body, record.sourceRecordId, poetryPleaseApiUrl, {
       reviewCount: record.reviews.length,
-      selectedExcerptIdCount: record.selectedExcerptRecordIds.length
+      selectedExcerptIdCount: record.selectedExcerptRecordIds.length,
+      footageConnections:record.footageConnections || []
     });
     const saved = await persist({ ...result, sourceRecordId: record.sourceRecordId, updatedAt: new Date().toISOString() });
     return { ...result, gate: saved.record, poetryPlease: body };

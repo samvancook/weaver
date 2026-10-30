@@ -959,7 +959,8 @@ def refresh_video_curation_receipt(connection, payload: dict[str, Any]) -> dict[
         return {"ok": True, "saved": False, "reason": "handoff_attempt_changed", "record": existing}
     fields = {"durableCopyStatus", "durableCopyError", "durableByteCount", "durableChecksum",
               "storageMode", "mediaStatus", "reviewOnly", "storedReviewCount",
-              "storedSelectedExcerptIdCount", "finalAssetUrl"}
+              "storedSelectedExcerptIdCount", "finalAssetUrl", "receivedFootageConnections",
+              "receivedFootageConnectionCount", "storedFootageConnectionCount"}
     now = utc_now_iso()
     record = {**existing,
               "poetryPleaseHandoff": {**handoff, **{k: v for k, v in receipt.items() if k in fields},

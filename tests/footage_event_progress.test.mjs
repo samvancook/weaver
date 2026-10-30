@@ -7,7 +7,7 @@ const review=(extra={})=>({prioritySetId:'event-a',sourceFileId:'fv-a',reviewerE
 const gate=(extra={})=>({prioritySetId:'event-a',sourceFileId:'fv-a',decision:'ready_for_poetry_please',...extra});
 test('provenance retains exact inventory/OM/FV identities without borrowing another title or text ID',()=>{
  const connections=[{sourceFileId:'fv-a',inventoryEventId:'inventory-a',inventoryEventName:'Event A',sourceSpreadsheetId:'sheet-a',sourceRow:6871,familyId:'family-a',workflow:{originalMediaFileId:'om-a',finishedVideoFileId:'fv-a'}},{sourceFileId:'other',sourceRow:6872}];
- assert.deepEqual(footageProvenanceForFile(connections,'fv-a'),[{inventoryEventId:'inventory-a',inventoryEventName:'Event A',sourceSpreadsheetId:'sheet-a',sourceRow:6871,familyId:'family-a',originalMediaFileId:'om-a',finishedVideoFileId:'fv-a'}]);
+ assert.deepEqual(footageProvenanceForFile(connections,'fv-a'),[{inventoryEventId:'inventory-a',inventoryEventName:'Event A',sourceSpreadsheetId:'sheet-a',sourceRow:6871,familyId:'family-a',originalMediaFileId:'om-a',finishedVideoFileId:'fv-a',curationFileId:'fv-a'}]);
 });
 test('progress counts the latest review once per person and only the exact event/file',()=>{
  const r=buildFootageProgress(record,[review(),review({reviewerEmail:'A@EXAMPLE.COM',updatedAt:'2026-10-30T11:00:00Z',excerptRecordIds:['excerpt-b']}),review({prioritySetId:'other'}),review({sourceFileId:'om-a'})],[],'now').byFileId['fv-a'];

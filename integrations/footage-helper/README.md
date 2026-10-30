@@ -1,5 +1,15 @@
 # Footage Inventory → Weaver bridge
 
+## Poetry Please provenance handoff — 2026-10-30
+
+The video sender includes optional version-1 `footageConnections`: inventory receipt ID/name, source spreadsheet/row, family ID, and separate OM/FV/curation Drive IDs. These references do not change the reviewed source identity, canonical PP video identity, primary video selection, or underlying text identity. The shared normalizer is mirrored in PP's `functions/footage-provenance.js`.
+
+PP receiver change: https://github.com/samvancook/poetryplease-org/pull/313. It must be deployed through PP's existing Firebase workflow before enabling this sender. PP stores the references privately, preserves them on resends/edits, displays Footage sources in Admin Content Library, and returns the exact acknowledged references in the import result and protected video receipt. Weaver checks the exact references as well as counts; a missing or different association is not a confirmed handoff. Later receipt refreshes cannot silently lose previously acknowledged references.
+
+Legacy payloads without this metadata remain compatible. PAGES still needs actual curation before its first PP transfer; local contract tests do not stand in for a real video import.
+
+Calendar Command Center was inspected read-only. Its primary rows distinguish Media Link, Content ID / File Name, Post Record ID and poem_key, and its approved-excerpt handoff pins an exact approved Weaver excerpt. These are separate from a PP receipt. No calendar row, approved cut, excerpt approval or catalog key is inferred or written by this bridge.
+
 ## Progress return and retry reliability — 2026-10-30
 
 **Check Weaver receipt** reads current Weaver reviews and decisions by exact curation event/file IDs. Helper shows the latest review count per person, linked excerpt count, editing/held/ready state, and the last saved Poetry Please acknowledgement (including canonical video link and media-copy state when present). It reports the check time. An unreadable ledger is shown as unavailable, never as zero work. Calendar placement remains explicitly not checked; a saved PP receipt does not prove scheduling or publication. Historical reviews on another Drive ID are not silently transferred.
