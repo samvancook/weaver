@@ -1739,6 +1739,8 @@ function renderVideoCurationCandidates() {
       <summary><strong>${rankByCandidate.get(candidate)}. ${escapeHtml(candidate.sourceFileName || "Untitled video")}</strong> · Score ${Number(candidate.candidateScore || 0).toFixed(2)} · ${Number(candidate.reviewCount || 0)} reviews · ${candidate.excerptRecordIds.length} excerpts</summary>
       <p>${escapeHtml(candidate.prioritySetLabel || "")} · ${escapeHtml(candidate.sourceMediaType || "unknown")} · Average ${Number(candidate.baseScore || 0).toFixed(2)} + excerpt bonus ${Number(candidate.excerptBonus || 0).toFixed(2)}${candidate.isEligible ? "" : " · Below candidate threshold"}</p>
       <p><a href="https://drive.google.com/file/d/${encodeURIComponent(candidate.sourceFileId)}/view" target="_blank" rel="noopener noreferrer">Open source video</a></p>
+      ${candidate.existingCanonicalVideoId ? `<p>Existing Poetry Please video: ${escapeHtml(candidate.existingCanonicalVideoId)}. Additional resolutions and formats need a verified rendition registration. This send form does not replace the primary video.</p>` : ""}
+      ${(candidate.knownAssets || []).length > 1 ? `<details><summary>Known files for this video (${candidate.knownAssets.length})</summary><ul>${candidate.knownAssets.map(asset => `<li><a href="${escapeAttribute(asset.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(asset.fileId)}</a> · ${escapeHtml((asset.roles || []).join(", "))}</li>`).join("")}</ul><p>These links show known file lineage. Resolution and format are not verified here.</p></details>` : ""}
       <h5>Reviews</h5>
       <ul>${(candidate.ratings || []).map(rating => `<li>${escapeHtml(rating.reviewerEmail || "Reviewer")}: ${escapeHtml(rating.rating || "Unrated")}${rating.ratingSource === "legacy_import" && rating.legacyScore !== null && rating.legacyScore !== "" && Number.isFinite(Number(rating.legacyScore)) ? ` (${Number(rating.legacyScore).toFixed(1)}/10)` : ""}${rating.notes ? ` · ${escapeHtml(rating.notes)}` : ""}</li>`).join("") || "<li>No reviews</li>"}</ul>
       ${candidate.isEligible || candidate.gate ? `
@@ -1755,7 +1757,7 @@ function renderVideoCurationCandidates() {
       <p>${escapeHtml(gate.poetryPleaseHandoff?.status || gate.handoffStatus || "")}</p>
       ${gate.poetryPleaseHandoff?.durableCopyStatus ? `<p>PP copy: ${escapeHtml(gate.poetryPleaseHandoff.durableCopyStatus)}${gate.poetryPleaseHandoff.durableByteCount ? ` · ${Number(gate.poetryPleaseHandoff.durableByteCount).toLocaleString()} bytes` : ""}${gate.poetryPleaseHandoff.reviewOnly ? " · Review only" : ""}${gate.poetryPleaseHandoff.durableCopyError ? ` · ${escapeHtml(gate.poetryPleaseHandoff.durableCopyError)}` : ""}</p>` : ""}
       <button type="button" class="button button--secondary" data-action="save">Save Decision</button>
-      ${gate.decision === "ready_for_poetry_please" && !gate.poetryPleaseHandoff?.status ? '<button type="button" class="button" data-action="handoff">Send to Poetry Please</button>' : ""}
+      ${gate.decision === "ready_for_poetry_please" && !gate.poetryPleaseHandoff?.status && !candidate.existingCanonicalVideoId ? '<button type="button" class="button" data-action="handoff">Send to Poetry Please</button>' : ""}
       ${gate.poetryPleaseHandoff?.status === "sent_to_poetry_please" && gate.poetryPleaseHandoff?.canonicalVideoId ? '<button type="button" class="button button--secondary" data-action="receipt">Refresh PP receipt</button>' : ""}
       ` : ""}
       `;

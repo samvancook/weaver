@@ -1800,7 +1800,7 @@ class FirestoreLedgerClient:
             )
         ]
         records.sort(key=lambda item: str(item.get("createdAt") or ""))
-        page_limit = max(1, min(int(limit or 100), 500))
+        page_limit = max(1, min(int(limit or 100), 501))
         return [queue_card_record(record) for record in records[offset:offset + page_limit]]
 
     def upsert_graphics_request(self, request: dict[str, Any]) -> str:
@@ -2498,7 +2498,7 @@ def get_graphics_handoff_queue(
         ORDER BY created_at ASC
         LIMIT ? OFFSET ?
         """,
-        (max(1, min(int(limit or 100), 500)), offset),
+        (max(1, min(int(limit or 100), 501)), offset),
     ).fetchall()
     return [
         queue_card_record(record)

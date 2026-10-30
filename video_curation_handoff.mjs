@@ -124,6 +124,37 @@ export function poetryPleaseVideoIdForSourceFile(sourceFileId, gates = []) {
   return ids.size === 1 ? [...ids][0] : "";
 }
 
+export function assertExistingCanonicalReceipt(receipt, sourceRecordId, canonicalVideoId, sourceEvent) {
+  if (receipt?.ok !== true || receipt.received !== true || receipt.ambiguousVideoMatch
+    || clean(receipt.sourceRecordId) !== clean(sourceRecordId)
+    || clean(receipt.canonicalVideoId) !== clean(canonicalVideoId)
+    || clean(receipt.event?.sourceEvent) !== clean(sourceEvent)) {
+    throw new Error("The existing Poetry Please video identity could not be verified; no update was sent.");
+  }
+}
+
+export function listKnownVideoAssets(currentFile, historicalSourceIds = [], gates = [], sourceReviewFileId = "") {
+  const currentId = clean(currentFile?.id);
+  const root = clean(sourceReviewFileId) || currentId;
+  const assets = new Map();
+  const add = (fileId, role, url = "") => {
+    const id = clean(fileId);
+    if (!id) return;
+    const prior = assets.get(id) || { fileId: id, url: `https://drive.google.com/file/d/${encodeURIComponent(id)}/view`, roles: [] };
+    if (url.startsWith("https://") && driveFileId(url) === id) prior.url = url;
+    if (!prior.roles.includes(role)) prior.roles.push(role);
+    assets.set(id, prior);
+  };
+  add(currentId, "current_candidate", clean(currentFile?.webViewLink));
+  for (const id of historicalSourceIds) add(id, "review_history");
+  for (const gate of gates) {
+    if (clean(gate.sourceReviewFileId) !== root && clean(gate.sourceFileId) !== root) continue;
+    add(gate.sourceFileId, "saved_gate");
+    add(driveFileId(gate.publishableAssetUrl), "saved_final", clean(gate.publishableAssetUrl));
+  }
+  return [...assets.values()];
+}
+
 export function resolveVideoReviewSourceFileId(sourceFileId, historicalSourceIds = [], gates = [], currentGate = {}) {
   const current = clean(sourceFileId);
   const historical = new Set(historicalSourceIds.map(clean).filter(id => id && id !== current));
