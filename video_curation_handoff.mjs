@@ -1,3 +1,5 @@
+import {normalizeFootageConnections,receivedFootageConnections} from './footage_provenance.mjs';
+
 function clean(value) {
   return String(value ?? "").trim();
 }
@@ -244,7 +246,10 @@ export function buildWeaverVideoImport(candidate, gate) {
     throw new Error("This finished video needs a canonical identity review before handoff.");
   }
 
+  const footageConnections=normalizeFootageConnections(candidate.footageConnections?.length
+    ? candidate.footageConnections : gate.footageConnections || []);
   return {
+    ...(footageConnections.length ? {footageContextVersion:1,footageConnections} : {}),
     contentType: "VV",
     sourceSystem: "weaver",
     sourceRecordId,
@@ -299,10 +304,17 @@ export function parsePoetryPleaseVideoImport(response, body, sourceRecordId, api
   const canonicalVideoUrl = clean(item.canonicalVideoUrl);
   const reviewsReceived = Number(item.receivedReviewCount) === Number(expected.reviewCount || 0);
   const excerptLinksReceived = Number(item.receivedSelectedExcerptIdCount) === Number(expected.selectedExcerptIdCount || 0);
+  const expectedFootage=normalizeFootageConnections(expected.footageConnections || []);
+  let receivedFootage=[],footageReceived=false;
+  try {
+    receivedFootage=normalizeFootageConnections(item.receivedFootageConnections || []);
+    footageReceived=Number(item.receivedFootageConnectionCount || 0)===expectedFootage.length
+      && JSON.stringify(receivedFootage)===JSON.stringify(expectedFootage);
+  } catch { /* Invalid receiver metadata cannot acknowledge a successful send. */ }
   const ok = response.ok && body?.ok === true && warnings.length === 0
     && ["created", "updated", "duplicate"].includes(status)
     && Boolean(canonicalVideoId && canonicalVideoUrl)
-    && reviewsReceived && excerptLinksReceived;
+    && reviewsReceived && excerptLinksReceived && footageReceived;
   return {
     ok,
     status: ok ? "sent_to_poetry_please"
@@ -312,6 +324,9 @@ export function parsePoetryPleaseVideoImport(response, body, sourceRecordId, api
     finalAssetUrl: clean(item.finalAssetUrl),
     receivedReviewCount: Number(item.receivedReviewCount || 0),
     receivedSelectedExcerptIdCount: Number(item.receivedSelectedExcerptIdCount || 0),
+    ...(expectedFootage.length ? {receivedFootageConnections:receivedFootage,
+      receivedFootageConnectionCount:receivedFootage.length} : {}),
+    ...(item.storedFootageConnectionCount != null ? {storedFootageConnectionCount:Number(item.storedFootageConnectionCount)} : {}),
     ...(item.storedReviewCount != null ? { storedReviewCount: Number(item.storedReviewCount) } : {}),
     ...(item.storedSelectedExcerptIdCount != null ? { storedSelectedExcerptIdCount: Number(item.storedSelectedExcerptIdCount) } : {}),
     ...(item.durableCopyStatus != null ? {
@@ -325,6 +340,7 @@ export function parsePoetryPleaseVideoImport(response, body, sourceRecordId, api
     warnings,
     error: ok ? "" : clean(item.error || body?.error || (
       warnings.length ? `Poetry Please import warnings: ${warnings.join(", ")}`
+        : !footageReceived ? "Poetry Please did not confirm the submitted inventory and OM/FV references"
         : !reviewsReceived || !excerptLinksReceived
           ? "Poetry Please did not confirm receipt of all reviews and excerpt links"
           : `Poetry Please returned ${response.status}`
@@ -350,6 +366,11 @@ export function parsePoetryPleaseVideoReceipt(receipt, gate) {
     throw new Error("Poetry Please receipt is missing previously received review context.");
   }
   const media = receipt.media || {};
+  const expectedFootage=normalizeFootageConnections(previous.receivedFootageConnections || []);
+  const storedFootage=normalizeFootageConnections(receipt.footage?.connections || []);
+  if (receivedFootageConnections(storedFootage,expectedFootage).length !== expectedFootage.length) {
+    throw new Error('Poetry Please receipt is missing previously received footage references.');
+  }
   const bytes = Number(media.durableByteCount || 0);
   if (clean(media.durableCopyStatus) === "verified") {
     let hosted;
@@ -366,6 +387,8 @@ export function parsePoetryPleaseVideoReceipt(receipt, gate) {
     durableByteCount: bytes, durableChecksum: clean(media.durableChecksum),
     storageMode: clean(media.storageMode), mediaStatus: clean(media.mediaStatus),
     reviewOnly: media.reviewOnly === true,
+    ...(expectedFootage.length ? {receivedFootageConnections:expectedFootage,
+      receivedFootageConnectionCount:expectedFootage.length,storedFootageConnectionCount:storedFootage.length} : {}),
     storedReviewCount: reviews, storedSelectedExcerptIdCount: excerpts,
     ...(clean(media.durableCopyStatus) === "verified" ? { finalAssetUrl: media.videoUrl } : {}),
   };

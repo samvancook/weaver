@@ -9,7 +9,7 @@ export function footageProvenanceForFile(connections, fileId) {
     inventoryEventId:c.inventoryEventId,inventoryEventName:c.inventoryEventName,
     sourceSpreadsheetId:c.sourceSpreadsheetId,sourceRow:c.sourceRow,
     familyId:c.familyId,originalMediaFileId:c.workflow?.originalMediaFileId || null,
-    finishedVideoFileId:c.workflow?.finishedVideoFileId || null,
+    finishedVideoFileId:c.workflow?.finishedVideoFileId || null,curationFileId:fileId,
   }));
 }
 

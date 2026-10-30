@@ -163,6 +163,32 @@ const gate = {
   selectedExcerptRecordIds: ["exc-1"]
 };
 
+const footageRef={inventoryEventId:'inventory-39a607f0dd29e65a111e13892bf0b17b',inventoryEventName:'PAGES footage from Rudy Francisco 2026',
+ sourceSpreadsheetId:'1npv-dpP22MV-cRs-DRjOimjbWIxf-xvbun5SdP6dl7U',sourceRow:6871,
+ familyId:'footage-family-3e64fa77f2dd9229f0b1d6c41243324b',originalMediaFileId:'1pHdxNXRNgbdzRecfUYYsvNt1VyZS7Wws',
+ finishedVideoFileId:'1Te0zeh7tmd820BBoUw2HOcDCbkBMjGwH',curationFileId:'1Te0zeh7tmd820BBoUw2HOcDCbkBMjGwH'};
+test('the PP handoff requires acknowledgement of exact inventory and OM/FV references',()=>{
+ const payload=buildWeaverVideoImport({...candidate,footageConnections:[footageRef]},gate);
+ assert.equal(payload.footageContextVersion,1);assert.deepEqual(payload.footageConnections,[footageRef]);
+ assert.equal(payload.sourceRecordId,buildWeaverVideoImport(candidate,gate).sourceRecordId);
+ const body={ok:true,results:[{sourceRecordId:payload.sourceRecordId,status:'created',canonicalVideoId:'canonical',canonicalVideoUrl:'/app?item=canonical',receivedReviewCount:0,receivedSelectedExcerptIdCount:0,
+  receivedFootageConnections:[footageRef],receivedFootageConnectionCount:1,storedFootageConnectionCount:1}]};
+ const expected={footageConnections:[footageRef]};
+ assert.equal(parsePoetryPleaseVideoImport({ok:true},body,payload.sourceRecordId,'https://poetryplease.org',expected).ok,true);
+ const wrong=structuredClone(body);wrong.results[0].receivedFootageConnections[0].originalMediaFileId='wrong_original_file_123456';
+ assert.equal(parsePoetryPleaseVideoImport({ok:true},wrong,payload.sourceRecordId,'https://poetryplease.org',expected).ok,false);
+ const dropped=structuredClone(body);delete dropped.results[0].receivedFootageConnections;delete dropped.results[0].receivedFootageConnectionCount;
+ assert.match(parsePoetryPleaseVideoImport({ok:true},dropped,payload.sourceRecordId,'https://poetryplease.org',expected).error,/OM\/FV references/);
+ const legacyGate={...gate,footageConnections:[footageRef]};
+ assert.deepEqual(buildWeaverVideoImport(candidate,legacyGate).footageConnections,[footageRef]);
+});
+test('a later PP receipt cannot lose acknowledged footage references',()=>{
+ const g={sourceEvent:'event',sourceEventLabel:'Event',selectedExcerptRecordIds:[],poetryPleaseHandoff:{sourceRecordId:'source',canonicalVideoId:'canonical',receivedFootageConnections:[footageRef]}};
+ const r={ok:true,received:true,sourceRecordId:'source',canonicalVideoId:'canonical',event:{sourceEvent:'event',sourceEventLabel:'Event'},review:{reviewCount:0,selectedExcerptIdCount:0},media:{durableCopyStatus:'pending'},footage:{schemaVersion:1,connections:[footageRef]}};
+ assert.equal(parsePoetryPleaseVideoReceipt(r,g).receivedFootageConnectionCount,1);
+ assert.throws(()=>parsePoetryPleaseVideoReceipt({...r,footage:{connections:[]}},g),/missing previously received footage/);
+});
+
 test("a replacement file retains the saved gate's excerpt associations", () => {
   const record = buildWeaverVideoImport(candidate, {
     ...gate, selectedExcerptRecordIds: ["archived-excerpt", "exc-1"],
