@@ -18,10 +18,30 @@ test('PAGES reuses its existing queue and stores distinct HV/VV assets without i
  r.accepted.forEach((t,i)=>{
   assert.equal(t.inventorySourceFileId,link.pairs[i][0]);assert.equal(t.sourceFileId,link.pairs[i][1]);assert.notEqual(t.inventorySourceFileId,t.sourceFileId);
   assert.deepEqual(t.assets.map(a=>a.format),['HV','VV']);assert.equal(t.textReference.canonicalTextId,null);
+  assert.deepEqual(t.assets.map(a=>a.mediaType),['OM','FV']);
+  assert.equal(t.workflow.originalMediaFileId,link.pairs[i][0]);
+  assert.equal(t.workflow.finishedVideoFileId,link.pairs[i][1]);
+  assert.equal(t.workflow.publicationAssetFileId,link.pairs[i][1]);
+  assert.equal(t.workflow.editingStatus,'finished_video_linked');
+  assert.equal(t.workflow.publicationStatus,'awaiting_curation_approval');
   assert.equal(t.exactDerivationVerified,false);assert.equal(t.publicationRestricted,true);
  });
  const retry=await prepareEventIntake(input(),getFile,target);
  assert.equal(retry.eventId,r.eventId);assert.equal(retry.routingDigest,r.routingDigest);assert.deepEqual(retry.accepted.map(t=>t.familyId),r.accepted.map(t=>t.familyId));
+});
+test('media role is independent of orientation, and unreviewed files remain unclassified',async()=>{
+ const target=await resolveEventTarget(input(),sets(),list,fileId);
+ const r=await prepareEventIntake(input(),async id=>({...await getFile(id),videoMediaMetadata:{width:3840,height:2160}}),target);
+ assert.deepEqual(r.accepted[0].assets.map(a=>a.format),['HV','HV']);
+ assert.deepEqual(r.accepted[0].assets.map(a=>a.mediaType),['OM','FV']);
+ const unknown=await prepareEventIntake({...input(),omFolderId:'unreviewed_folder_12345'},getFile);
+ assert.equal(unknown.accepted[0].assets[0].mediaType,'unknown');
+ assert.equal(unknown.accepted[0].workflow.publicationAssetFileId,null);
+ assert.equal(unknown.accepted[0].workflow.editingStatus,'media_type_needs_review');
+ const om=await prepareEventIntake(input(),getFile,{mode:'new_event',inventoryMediaType:'OM',mediaTypeEvidence:'Reviewed OM source'});
+ assert.equal(om.accepted[0].workflow.editingStatus,'needs_editing');
+ assert.equal(om.accepted[0].workflow.publicationAssetFileId,null);
+ assert.equal(om.accepted[0].workflow.publicationStatus,'awaiting_finished_video');
 });
 test('a missing target queue fails instead of silently creating a duplicate',async()=>{
  await assert.rejects(resolveEventTarget(input(),new Map(),list,fileId),/unavailable/);

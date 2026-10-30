@@ -4,6 +4,9 @@ import {validateEventManifest} from "./footage_event_intake.mjs";
 export const REVIEWED_EVENT_LINKS = [{
   inventoryFolderId: '1xeos0-8HxDBHdm8NP0r-KHgsex5SdrrP',
   prioritySetId: 'pages-matam-san-diego-2026-labc',
+  inventoryMediaType: 'OM',
+  curationMediaType: 'FV',
+  mediaTypeEvidence: 'User confirmed horizontal PAGES files are OM and vertical files are FV on 2026-10-30; Button branding and Rudy credit visually checked on all four FVs.',
   evidence: 'Inventory source folder PAGES Matam - San Diego 2026; existing FV folder explicitly names PAGES footage from Rudy Francisco; four reviewed title correspondences.',
   pairs: [
     ['1pHdxNXRNgbdzRecfUYYsvNt1VyZS7Wws', '1Te0zeh7tmd820BBoUw2HOcDCbkBMjGwH'],
@@ -21,7 +24,9 @@ export async function resolveEventTarget(manifest, sets, listFiles, parseFileId,
     const available = new Set((await listFiles(set)).map(f => f.id));
     const pairs = new Map(reviewed.pairs);
     return {mode:'existing_event', prioritySetId:set.id, label:set.label,
-      evidence:reviewed.evidence, pairs, available};
+      evidence:reviewed.evidence, inventoryMediaType:reviewed.inventoryMediaType,
+      curationMediaType:reviewed.curationMediaType, mediaTypeEvidence:reviewed.mediaTypeEvidence,
+      pairs, available};
   }
   // Exact file IDs can safely discover an existing queue without fuzzy title joins.
   const ids = manifest.titles.map(t => parseFileId(t.contentLink)).filter(Boolean);
