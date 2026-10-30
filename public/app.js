@@ -1483,7 +1483,7 @@ function applyGatheringVideoPlaylistItem(item, { preserveQuote = false } = {}) {
         if (!/^https:\/\/drive\.google\.com\//.test(asset.url || "")) continue;
         const link = document.createElement("a");
         link.href = asset.url; link.target = "_blank"; link.rel = "noopener noreferrer";
-        link.textContent = `${asset.format || "unknown format"} · ${asset.role === "inventory_source" ? "inventory source" : "curation version"} · ${asset.fileName}`;
+        link.textContent = `${asset.mediaType || "unknown media type"} · ${asset.format || "unknown format"} · ${asset.role === "inventory_source" ? "inventory source" : "curation version"} · ${asset.fileName}`;
         const p = document.createElement("p"); p.append(link); box.append(p);
       }
     }

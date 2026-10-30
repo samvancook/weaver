@@ -1,5 +1,16 @@
 # Footage Inventory → Weaver bridge
 
+## OM/FV routing — 2026-10-30
+
+Media role and orientation are separate fields: `mediaType=OM|FV|unknown` and `format=HV|VV|square|unknown`.
+The reviewed PAGES correspondence explicitly classifies its four inventory files as OM and its four existing Weaver files as FV, based on the user's confirmation and visual branding/credit checks. Orientation alone never assigns a media role.
+
+Each accepted title carries `workflow.originalMediaFileId`, `finishedVideoFileId`, `publicationAssetFileId`, `editingStatus`, and `publicationStatus`. A linked FV sets `finished_video_linked`, preventing this connection from implying a fresh editing job. OM without FV is `needs_editing`; unidentified media remains `media_type_needs_review`. These are routing descriptors, not writes to an editing queue. Existing Weaver curation decisions still control actual editing and Poetry Please handoffs.
+
+Only the FV is selected as the publication asset. The existing Poetry Please sender still requires actual curation approval and a verified final FV. No scores, excerpts, identity approvals or publication clearance are fabricated from a successful Helper receipt. Calendar integration must refer to the canonical video received by Poetry Please; no calendar posts are created by this bridge.
+
+PAGES currently has zero saved video reviews, video-linked excerpts or curation gates (authoritative ledger checked 2026-10-30). Its four video relationships are saved, but a live Poetry Please transfer remains pending actual curation work. Existing book excerpts by Pages Matam are separate and are not treated as video curation.
+
 The bridge reads current open-event titles from Helper, previews their Weaver connection, then saves a receipt when a person chooses Link / Send. It never writes to Footage Inventory sheets, moves media, publishes to Poetry Please, or closes events.
 
 Source Helper: https://script.google.com/home/projects/1aGmHhfSQujviWDRN7WY5mMJEVbG3t81O0MucZ0JWLN266vbvoNoWa0k1/edit

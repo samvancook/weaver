@@ -235,14 +235,18 @@
             if (!/^https:\/\/drive\.google\.com\//.test(a.url || '')) return;
             if (i) group.append(document.createTextNode(' · '));
             const link = document.createElement('a'); link.href = a.url; link.target = '_blank'; link.rel = 'noopener noreferrer';
-            link.textContent = (a.format || 'unknown format') + (a.role === 'inventory_source' ? ' inventory source' : ' curation version');
+            link.textContent = (a.mediaType || 'unknown media type') + ' · ' + (a.format || 'unknown format') +
+              (a.role === 'inventory_source' ? ' · inventory source' : ' · curation version');
             group.append(link);
           });
+          if (t.workflow && t.workflow.editingStatus === 'finished_video_linked') {
+            group.append(document.createTextNode(' — FV already linked; no new editing job. FV proceeds through curation approval before Poetry Please.'));
+          }
           status.append(group);
         });
         if ((r.families || []).length) {
           const text = document.createElement('p');
-          text.textContent = 'HV and VV remain separate assets. Reviews stay on the version reviewed. Canonical text links have not yet been recorded.';
+          text.textContent = 'OM/FV identifies the workflow; HV/VV identifies the format. OM needs editing only when no finished video is linked. Only approved FV proceeds to Poetry Please and calendars. Reviews stay on the version reviewed. Canonical text links have not yet been recorded.';
           status.append(text);
         }
         (r.blocked || []).forEach(t => {

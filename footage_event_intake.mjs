@@ -28,11 +28,12 @@ export function validateEventManifest(input) {
 function validVideo(file, id) {
   return file?.id === id && !file.trashed && String(file.mimeType || '').startsWith('video/');
 }
-export function describeVideoAsset(file, url, role) {
+export function describeVideoAsset(file, url, role, mediaType = 'unknown', mediaTypeEvidence = '') {
   const width = Number(file.videoMediaMetadata?.width) || null;
   const height = Number(file.videoMediaMetadata?.height) || null;
   return {assetId:'drive:'+file.id,driveFileId:file.id,fileName:text(file.name),url,
-    mimeType:file.mimeType,role,format:width && height ? (width>height?'HV':height>width?'VV':'square'):'unknown',
+    mimeType:file.mimeType,role,mediaType:['OM','FV'].includes(mediaType)?mediaType:'unknown',mediaTypeEvidence,
+    format:width && height ? (width>height?'HV':height>width?'VV':'square'):'unknown',
     width,height,durationMillis:file.videoMediaMetadata?.durationMillis || null};
 }
 function resultStatus(record, complete) {
@@ -60,15 +61,19 @@ export async function prepareEventIntake(input, getFile, target = {mode:'new_eve
         if (!validVideo(source,id) || !validVideo(curation,targetId)) reason='not_an_accessible_video';
         else {
           seen.add(id);
-          const sourceAsset=describeVideoAsset(source,title.contentLink,'inventory_source');
+          const sourceAsset=describeVideoAsset(source,title.contentLink,'inventory_source',target.inventoryMediaType,target.mediaTypeEvidence);
           const curationAsset=targetId===id ? sourceAsset : describeVideoAsset(curation,
-            text(curation.webViewLink)||`https://drive.google.com/file/d/${targetId}/view`,'existing_curation');
+            text(curation.webViewLink)||`https://drive.google.com/file/d/${targetId}/view`,'existing_curation',target.curationMediaType,target.mediaTypeEvidence);
+          const finishedVideoFileId=curationAsset.mediaType==='FV'?targetId:sourceAsset.mediaType==='FV'?id:null;
           accepted.push({...title,sourceFileId:targetId,sourceFileName:text(curation.name),mimeType:curation.mimeType,
             inventorySourceFileId:id,sourceVideoUrl:curationAsset.url,
             videoReleaseStatus:'inventory_curation_only',publicationRestricted:true,
             familyId:'footage-family-'+hash([target.prioritySetId||eventId,targetId]).slice(0,32),
             textReference:{author:title.performer,title:title.title,canonicalTextId:null,status:'not_linked'},
             assets:targetId===id?[sourceAsset]:[sourceAsset,curationAsset],
+            workflow:{originalMediaFileId:sourceAsset.mediaType==='OM'?id:null,finishedVideoFileId,
+              editingStatus:finishedVideoFileId?'finished_video_linked':sourceAsset.mediaType==='OM'?'needs_editing':'media_type_needs_review',
+              publicationAssetFileId:finishedVideoFileId,publicationStatus:finishedVideoFileId?'awaiting_curation_approval':'awaiting_finished_video'},
             relationship:targetId===id?'same_asset':'corresponding_event_versions',
             derivationEvidence:target.evidence||'Inventory-linked individual video.',
             exactDerivationVerified:false});
@@ -83,7 +88,7 @@ export async function prepareEventIntake(input, getFile, target = {mode:'new_eve
   return {schemaVersion:2,eventId,prioritySetId,digest,manifest,eventName:manifest.eventName,
     mode,targetEventName:target.label||manifest.eventName,
     routingDigest:hash([mode,prioritySetId,manifest.titles.map(t=>[fileId(t.contentLink),target.mode==='existing_event'?target.pairs?.get(fileId(t.contentLink))||'':fileId(t.contentLink)])]),
-    sourceFolderId:manifest.omFolderId,sourceMediaType:'unknown',accepted,blocked,
+    sourceFolderId:manifest.omFolderId,sourceMediaType:target.inventoryMediaType||'unknown',accepted,blocked,
     submittedCount:manifest.titles.length,acceptedCount:accepted.length,blockedCount:blocked.length,
     linkedExistingCount:mode==='existing_event'?accepted.length:0,
     inventoryAssetCount:new Set(accepted.map(t=>t.inventorySourceFileId)).size,

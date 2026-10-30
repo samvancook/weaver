@@ -73,7 +73,7 @@ function weaverReceiptForUi_(r) {
     targetEventName:r.targetEventName, transferComplete:!!r.transferComplete,
     eventCompleteness:'not_assessed', canonicalTextLinkStatus:r.canonicalTextLinkStatus || 'not_linked',
     families:(r.accepted || []).map(function(t) {return {sourceRow:t.sourceRow,performer:t.performer,title:t.title,
-      familyId:t.familyId,sourceFileId:t.sourceFileId,assets:t.assets || []};}),
+      familyId:t.familyId,sourceFileId:t.sourceFileId,assets:t.assets || [],workflow:t.workflow || {}};}),
     status:r.status, submittedCount:r.submittedCount,
     acceptedCount:r.acceptedCount, blockedCount:r.blockedCount,
     readyForClosureReview:r.readyForClosureReview, checkedAt:r.checkedAt,
