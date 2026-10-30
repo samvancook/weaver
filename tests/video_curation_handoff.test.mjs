@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildReviewerProgressExport, buildWeaverVideoImport, classifyDriveFolderPath, parsePoetryPleaseVideoImport, parsePoetryPleaseVideoReceipt, poetryPleaseVideoIdForSourceFile, reconcileVideoReviews, requiresManualVideoIdentityReview, resolveCurrentVideoFileId, resolveVideoReviewSourceFileId } from "../video_curation_handoff.mjs";
+import { assertExistingCanonicalReceipt, buildReviewerProgressExport, buildWeaverVideoImport, classifyDriveFolderPath, listKnownVideoAssets, parsePoetryPleaseVideoImport, parsePoetryPleaseVideoReceipt, poetryPleaseVideoIdForSourceFile, reconcileVideoReviews, requiresManualVideoIdentityReview, resolveCurrentVideoFileId, resolveVideoReviewSourceFileId } from "../video_curation_handoff.mjs";
 
 test("receipt refresh accepts only the same event, identity, retained context and verified hosted copy", () => {
   const gate = { sourceEvent: "event", sourceEventLabel: "Event", selectedExcerptRecordIds: ["excerpt"],
@@ -36,6 +36,36 @@ test("multiple historical files resolve through a unique earlier canonical recei
     ...earlier, poetryPleaseHandoff: { ...earlier.poetryPleaseHandoff, canonicalVideoId: "conflicting-canonical" },
   }], {}), "");
   assert.equal(resolveVideoReviewSourceFileId("final-2160", ["reviewed-720"], [], {}), "reviewed-720");
+});
+
+test("multiple resolutions and formats retain one canonical source identity", () => {
+  const gates = [
+    { prioritySetId: "event", sourceFileId: "vertical-1080", sourceReviewFileId: "review-720",
+      poetryPleaseHandoff: { status: "sent_to_poetry_please", sourceRecordId: "weaver:video:review-720", canonicalVideoId: "canonical" } },
+    { prioritySetId: "event", sourceFileId: "horizontal-mp4", sourceReviewFileId: "review-720",
+      poetryPleaseHandoff: { status: "sent_to_poetry_please", sourceRecordId: "weaver:video:review-720", canonicalVideoId: "canonical" } },
+  ];
+  for (const fileId of ["vertical-2160", "square-webm"]) {
+    assert.equal(resolveVideoReviewSourceFileId(fileId,
+      ["review-720", "vertical-1080", "horizontal-mp4"], gates, { prioritySetId: "event" }), "review-720");
+  }
+  assert.equal(poetryPleaseVideoIdForSourceFile("review-720", gates), "canonical");
+  const assets = listKnownVideoAssets({ id: "square-webm" },
+    ["review-720", "vertical-1080", "horizontal-mp4"],
+    [...gates, { sourceFileId: "unrelated", sourceReviewFileId: "someone-else",
+      publishableAssetUrl: "https://drive.google.com/file/d/unrelated-final/view" }], "review-720");
+  assert.deepEqual(assets.map(asset => asset.fileId),
+    ["square-webm", "review-720", "vertical-1080", "horizontal-mp4"]);
+  assert.equal(assets.some(asset => asset.fileId === "unrelated-final"), false);
+  const receipt = { ok: true, received: true, sourceRecordId: "weaver:video:review-720",
+    canonicalVideoId: "canonical", event: { sourceEvent: "BPL Charm City 2026" } };
+  assert.doesNotThrow(() => assertExistingCanonicalReceipt(receipt, receipt.sourceRecordId, "canonical", "BPL Charm City 2026"));
+  for (const changed of [
+    { ...receipt, canonicalVideoId: "another" },
+    { ...receipt, ambiguousVideoMatch: true },
+    { ...receipt, event: { sourceEvent: "another event" } },
+    { ...receipt, received: false },
+  ]) assert.throws(() => assertExistingCanonicalReceipt(changed, receipt.sourceRecordId, "canonical", "BPL Charm City 2026"));
 });
 
 test("a failed legacy attempt preserves its explicit original source identity", () => {

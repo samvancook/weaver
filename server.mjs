@@ -7,7 +7,7 @@ import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildReviewerProgressExport, buildWeaverVideoImport, classifyDriveFolderPath, driveFileId, parsePoetryPleaseVideoImport, parsePoetryPleaseVideoReceipt, poetryPleaseVideoIdForSourceFile, reconcileVideoReviews, requiresManualVideoIdentityReview, resolveCurrentVideoFileId, resolveVideoReviewSourceFileId } from "./video_curation_handoff.mjs";
+import { buildReviewerProgressExport, buildWeaverVideoImport, classifyDriveFolderPath, driveFileId, listKnownVideoAssets, parsePoetryPleaseVideoImport, parsePoetryPleaseVideoReceipt, poetryPleaseVideoIdForSourceFile, reconcileVideoReviews, requiresManualVideoIdentityReview, resolveCurrentVideoFileId, resolveVideoReviewSourceFileId } from "./video_curation_handoff.mjs";
 import { verifyProgressExportCaller } from "./weaver_progress_auth.mjs";
 import { findApprovedTextExcerptMatch } from "./video_excerpt_folding.mjs";
 import { poemKeyForExcerptText, POEM_KEY_SEED_SOURCE } from "./poem_key_seed.mjs";
@@ -2637,6 +2637,11 @@ async function getVideoCurationCandidates(prioritySetId = "") {
       const sourceReviewFileId = resolveVideoReviewSourceFileId(sourceFileId, historicalSourceIds,
         Array.isArray(gateResult?.records) ? gateResult.records : [],
         { ...(existingGate || {}), prioritySetId: set.id });
+      const existingCanonicalVideoId = sourceReviewFileId
+        ? poetryPleaseVideoIdForSourceFile(sourceReviewFileId, Array.isArray(gateResult?.records) ? gateResult.records : [])
+        : "";
+      const knownAssets = listKnownVideoAssets(file, historicalSourceIds,
+        Array.isArray(gateResult?.records) ? gateResult.records : [], sourceReviewFileId);
       const bookMeta = resolvePublishingBookMeta(firstReview.bookTitle, firstReview.bookTitle);
       const candidate = {
         candidateId,
@@ -2646,6 +2651,8 @@ async function getVideoCurationCandidates(prioritySetId = "") {
         sourceFileId,
         ...sourceMedia,
         sourceReviewFileId,
+        existingCanonicalVideoId,
+        knownAssets,
         sourceFileName: cleanSheetWhitespace(file.name),
         sourceVideoUrl: cleanSheetWhitespace(file.webViewLink)
           || `https://drive.google.com/file/d/${encodeURIComponent(sourceFileId)}/view`,
@@ -2734,6 +2741,9 @@ async function handoffVideoCurationGate(payload = {}) {
   const candidates = await getVideoCurationCandidates(prioritySetId);
   const candidate = candidates.candidates.find(item => item.prioritySetId === prioritySetId && item.sourceFileId === sourceFileId);
   if (!candidate?.gate) throw new Error("Save the video gate before sending it to Poetry Please.");
+  if (candidate.existingCanonicalVideoId) {
+    throw new Error("This video already exists in Poetry Please. Register a verified rendition under its canonical video ID; the video import would replace its primary media.");
+  }
   if (candidate.publicationRestricted) throw new Error("A publication-restricted source cannot be sent to Poetry Please.");
   if (!candidate.excerptRecordIds.length) throw new Error("At least one excerpt must be pulled before sending this video to Poetry Please.");
   const finalAssetUrl = cleanSheetWhitespace(candidate.gate.publishableAssetUrl);
@@ -2826,6 +2836,9 @@ async function autoAdvanceVideoCuration(prioritySetId, sourceFileId) {
   }
   if (requiresManualVideoIdentityReview(candidate, publishableAssetUrl, candidate.gate)) {
     return { status: "ready_for_poetry_please", requiresManualIdentityReview: true };
+  }
+  if (candidate.existingCanonicalVideoId && !candidate.gate?.poetryPleaseHandoff?.status) {
+    return { status: "ready_for_poetry_please", requiresExistingCanonicalReconciliation: true };
   }
   const handoff = await handoffVideoCurationGate({ prioritySetId, sourceFileId });
   return { status: handoff.ok ? "sent_to_poetry_please" : "already_started", ...handoff };

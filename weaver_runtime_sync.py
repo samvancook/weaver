@@ -794,6 +794,12 @@ def upsert_video_curation_gate(connection, payload: dict[str, Any]) -> dict[str,
     gate_id = hashlib.sha256(f"{priority_set_id}|{source_file_id}".encode("utf-8")).hexdigest()[:32]
     now = utc_now_iso()
     existing = connection.get_raw_document(FIRESTORE_VIDEO_CURATION_GATES_COLLECTION, gate_id) or {}
+    accepted_handoff = existing.get("poetryPleaseHandoff") or {}
+    if normalize_text(accepted_handoff.get("status")) == "sent_to_poetry_please":
+        accepted_source = normalize_text(accepted_handoff.get("sourceRecordId"))
+        incoming_source = normalize_text(source.get("sourceReviewFileId")) or source_file_id
+        if accepted_source and accepted_source != f"weaver:video:{incoming_source}":
+            raise ValueError("An accepted video cannot change its original review source")
     selected_excerpt_record_ids = sorted({
         normalize_text(value)
         for value in (source.get("selectedExcerptRecordIds") or [])
@@ -821,8 +827,10 @@ def upsert_video_curation_gate(connection, payload: dict[str, Any]) -> dict[str,
             "at": now,
         })
     handoff_status = "ready" if decision == "ready_for_poetry_please" else "not_applicable"
-    if handoff_update:
-        handoff_status = normalize_text(handoff_update.get("status")) or handoff_status
+    # A later decision edit must not make a held or completed attempt appear
+    # ready again. The attempt result remains authoritative until reconciled.
+    if poetry_please_handoff.get("status"):
+        handoff_status = normalize_text(poetry_please_handoff.get("status"))
     record = {
         **existing,
         "gateId": gate_id,
@@ -985,8 +993,8 @@ def upsert_handoff_requests(connection, payload: dict[str, Any]) -> dict[str, An
 
 
 def fetch_handoff_queue(connection, payload: dict[str, Any]) -> dict[str, Any]:
-    limit = int(payload.get("limit") or 100)
-    cursor = int(payload.get("cursor") or 0)
+    limit = max(1, min(int(payload.get("limit") or 100), 500))
+    cursor = max(0, int(payload.get("cursor") or 0))
     records = get_graphics_handoff_queue(
         connection,
         limit + 1,
