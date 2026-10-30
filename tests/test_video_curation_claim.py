@@ -1,6 +1,6 @@
 import unittest
 
-from weaver_runtime_sync import claim_video_curation_handoff, finish_video_curation_handoff, refresh_video_curation_receipt
+from weaver_runtime_sync import claim_video_curation_handoff, finish_video_curation_handoff, refresh_video_curation_receipt, upsert_video_curation_gate
 
 
 class FakeGateConnection:
@@ -20,6 +20,40 @@ class FakeGateConnection:
 
 
 class VideoCurationClaimTest(unittest.TestCase):
+    def test_decision_save_keeps_existing_handoff_result_visible(self):
+        class FakeSaveConnection:
+            def __init__(self, handoff):
+                self.record = {"poetryPleaseHandoff": handoff, "handoffStatus": handoff["status"]}
+
+            def get_raw_document(self, _collection, _document_id):
+                return dict(self.record)
+
+            def write_raw_document(self, _collection, _document_id, record):
+                self.record = record
+                return record
+
+        for status in ("blocked", "needs_reconciliation", "sent_to_poetry_please"):
+            with self.subTest(status=status):
+                connection = FakeSaveConnection({"status": status, "attemptId": "existing-attempt",
+                    "sourceRecordId": "weaver:video:original-review"})
+                result = upsert_video_curation_gate(connection, {"gate": {
+                    "prioritySetId": "bpl-charm-city-2026", "sourceFileId": "new-final",
+                    "decision": "ready_for_poetry_please",
+                    "publishableAssetUrl": "https://drive.google.com/file/d/new-final/view",
+                    "sourceReviewFileId": "original-review",
+                }})
+                self.assertEqual(result["record"]["handoffStatus"], status)
+                self.assertEqual(result["record"]["poetryPleaseHandoff"]["attemptId"], "existing-attempt")
+                self.assertEqual(result["record"]["sourceReviewFileId"], "original-review")
+                if status == "sent_to_poetry_please":
+                    with self.assertRaisesRegex(ValueError, "cannot change its original review source"):
+                        upsert_video_curation_gate(connection, {"gate": {
+                            "prioritySetId": "bpl-charm-city-2026", "sourceFileId": "new-final",
+                            "decision": "ready_for_poetry_please",
+                            "publishableAssetUrl": "https://drive.google.com/file/d/new-final/view",
+                            "sourceReviewFileId": "another-review",
+                        }})
+
     def test_receipt_refresh_updates_only_the_same_accepted_attempt(self):
         original = {
             "decision": "ready_for_poetry_please", "decidedAt": "original-time",
