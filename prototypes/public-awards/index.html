@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="description" content="Explore award-winning and recognized Button Poetry books.">
+  <title>Awards & Honors — Button Poetry (Preview)</title>
+  <link rel="stylesheet" href="./styles.css">
+  <script src="./app.js" type="module"></script>
+</head>
+<body>
+  <a class="skip" href="#results">Skip to awards</a>
+  <div class="site">
+    <header class="hero">
+      <div class="eyebrow">BUTTON POETRY <span aria-hidden="true">/</span> AWARDS & HONORS</div>
+      <div class="hero-grid"><div>
+        <h1>Words worth celebrating.</h1>
+        <p>Explore books recognized by independent literary awards and organizations.</p>
+      </div><div class="hero-mark" aria-hidden="true">“</div></div>
+      <p class="preview"><strong>Development preview.</strong> Six verified sample records. Not yet published to the Button Poetry website.</p>
+    </header>
+    <main>
+      <section class="toolbar" aria-labelledby="filter-title">
+        <div class="toolbar-heading">
+          <h2 id="filter-title">Explore recognitions</h2>
+          <span id="result-count" role="status" aria-live="polite">Loading awards…</span>
+        </div>
+        <div class="filters">
+          <label class="search-field">Search by book, author, or award
+            <input type="search" id="search" placeholder="Search the collection…" autocomplete="off">
+          </label>
+          <label>Year <select id="year"><option value="">All years</option></select></label>
+          <label>Result <select id="result"><option value="">All results</option></select></label>
+          <label>Award organization <select id="organization"><option value="">All organizations</option></select></label>
+        </div>
+        <div class="toolbar-actions"><button type="button" id="reset">Clear filters</button><button type="button" id="copy-link">Copy filtered view link</button></div>
+      </section>
+      <section id="results" class="results" aria-label="Award recognitions" tabindex="-1">
+        <div id="error" class="error" hidden role="alert"></div>
+        <div id="cards" class="cards"></div>
+        <div id="empty" class="empty" hidden><h3>No matching awards</h3><p>Try clearing or adjusting your filters.</p></div>
+      </section>
+    </main>
+    <footer><strong>Button Poetry</strong><span>Recognitions are linked to organizer sources whenever available.</span><span>Preview dataset · No changes to products or store.</span></footer>
+  </div>
+</body>
+</html>
