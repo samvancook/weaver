@@ -67,6 +67,7 @@ FIRESTORE_HANDOFF_ACTIONS = {
     "get_curation_reviews",
     "upsert_video_curation_gate",
     "claim_video_curation_handoff",
+    "release_video_curation_handoff_claim",
     "finish_video_curation_handoff",
     "refresh_video_curation_receipt",
     "get_video_curation_gates",
@@ -911,6 +912,29 @@ def claim_video_curation_handoff(connection, payload: dict[str, Any]) -> dict[st
     }
     saved = connection.write_raw_document_if_unchanged(FIRESTORE_VIDEO_CURATION_GATES_COLLECTION, gate_id, record, update_time)
     return {"ok": True, "claimed": bool(saved), "reason": "" if saved else "concurrent_claim", "record": saved}
+
+
+def release_video_curation_handoff_claim(connection, payload: dict[str, Any]) -> dict[str, Any]:
+    priority_set_id = normalize_text(payload.get("prioritySetId"))
+    source_file_id = normalize_text(payload.get("sourceFileId"))
+    attempt_id = normalize_text(payload.get("attemptId"))
+    if not priority_set_id or not source_file_id or not attempt_id:
+        raise ValueError("A claimed video handoff is required")
+    gate_id = hashlib.sha256(f"{priority_set_id}|{source_file_id}".encode("utf-8")).hexdigest()[:32]
+    existing, update_time = connection.get_raw_document_versioned(FIRESTORE_VIDEO_CURATION_GATES_COLLECTION, gate_id)
+    handoff = (existing or {}).get("poetryPleaseHandoff") or {}
+    if normalize_text(handoff.get("status")) != "sending" or normalize_text(handoff.get("attemptId")) != attempt_id:
+        return {"ok": True, "released": False, "reason": "handoff_attempt_changed", "record": existing}
+    now = utc_now_iso()
+    record = {
+        **existing,
+        "poetryPleaseHandoff": {},
+        "handoffStatus": "ready",
+        "updatedAt": now,
+        "history": (list(existing.get("history") or []) + [{"event": "poetry_please_handoff", "status": "claim_released_before_send", "attemptId": attempt_id, "at": now}])[-20:],
+    }
+    saved = connection.write_raw_document_if_unchanged(FIRESTORE_VIDEO_CURATION_GATES_COLLECTION, gate_id, record, update_time)
+    return {"ok": True, "released": bool(saved), "reason": "" if saved else "concurrent_update", "record": saved}
 
 
 def finish_video_curation_handoff(connection, payload: dict[str, Any]) -> dict[str, Any]:
@@ -2027,6 +2051,8 @@ def main() -> int:
             result = upsert_video_curation_gate(connection, payload)
         elif action == "claim_video_curation_handoff":
             result = claim_video_curation_handoff(connection, payload)
+        elif action == "release_video_curation_handoff_claim":
+            result = release_video_curation_handoff_claim(connection, payload)
         elif action == "finish_video_curation_handoff":
             result = finish_video_curation_handoff(connection, payload)
         elif action == "refresh_video_curation_receipt":

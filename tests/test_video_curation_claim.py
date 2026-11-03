@@ -1,6 +1,6 @@
 import unittest
 
-from weaver_runtime_sync import claim_video_curation_handoff, finish_video_curation_handoff, refresh_video_curation_receipt, upsert_video_curation_gate
+from weaver_runtime_sync import claim_video_curation_handoff, finish_video_curation_handoff, refresh_video_curation_receipt, release_video_curation_handoff_claim, upsert_video_curation_gate
 
 
 class FakeGateConnection:
@@ -110,6 +110,19 @@ class VideoCurationClaimTest(unittest.TestCase):
         self.assertEqual(second["reason"], "handoff_already_started")
         self.assertEqual(connection.record["poetryPleaseHandoff"]["status"], "sending")
         self.assertTrue(connection.record["poetryPleaseHandoff"]["attemptId"])
+
+    def test_unsent_claim_can_be_released_only_by_its_attempt(self):
+        connection = FakeGateConnection({"decision": "ready_for_poetry_please", "poetryPleaseHandoff": {}})
+        identity = {"prioritySetId": "event", "sourceFileId": "video-1"}
+        claim = claim_video_curation_handoff(connection, identity)
+        attempt_id = claim["record"]["poetryPleaseHandoff"]["attemptId"]
+        self.assertFalse(release_video_curation_handoff_claim(connection, {**identity, "attemptId": "other"})["released"])
+        released = release_video_curation_handoff_claim(connection, {**identity, "attemptId": attempt_id})
+        self.assertTrue(released["released"])
+        self.assertEqual(released["record"]["handoffStatus"], "ready")
+        self.assertEqual(released["record"]["poetryPleaseHandoff"], {})
+        self.assertEqual(released["record"]["history"][-1]["status"], "claim_released_before_send")
+        self.assertTrue(claim_video_curation_handoff(connection, identity)["claimed"])
 
     def test_only_claimed_attempt_can_finish_without_rewriting_decision(self):
         connection = FakeGateConnection({
