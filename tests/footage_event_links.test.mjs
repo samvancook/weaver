@@ -10,6 +10,19 @@ const set={id:link.prioritySetId,label:'PAGES Matam in San Diego - 2026'};
 const sets=()=>new Map([[set.id,set]]);
 const list=async()=>link.pairs.map(([,id])=>({id}));
 const getFile=async id=>({id,mimeType:'video/mp4',name:id,videoMediaMetadata:link.pairs.some(([x])=>x===id)?{width:3840,height:2160,durationMillis:'200000'}:{width:2160,height:3840,durationMillis:'190000'}});
+test('closed MPMU connects sixteen distinct intake sources to existing FVs without reopening or replacing the queue',async()=>{
+ const mp=REVIEWED_EVENT_LINKS.find(x=>x.prioritySetId==='mpmu-2026-finals');
+ const m={...input(),eventName:'Vertical Versions - MPMU 2026 Finals',omFolderId:mp.inventoryFolderId,closed:true,
+  titles:mp.pairs.map(([id],i)=>({...input().titles[0],sourceRow:6049+i,contentLink:`https://drive.google.com/file/d/${id}/view`}))};
+ const original={id:mp.prioritySetId,label:'MPMU 2026 Finals'};
+ const target=await resolveEventTarget(m,new Map([[original.id,original]]),async()=>mp.pairs.map(([,id])=>({id})),fileId);
+ const r=await prepareEventIntake(m,getFile,target);
+ assert.equal(r.acceptedCount,16);assert.equal(r.blockedCount,0);assert.equal(r.manifest.closed,true);
+ assert.equal(r.prioritySetId,original.id);assert.equal(footageEventAsSet(r),null);
+ assert.equal(new Set(r.accepted.map(t=>t.sourceFileId)).size,16);
+ assert.ok(r.accepted.every(t=>t.sourceFileId!==t.inventorySourceFileId && t.workflow.finishedVideoFileId===t.sourceFileId && !t.workflow.originalMediaFileId));
+ assert.ok(r.accepted.every(t=>!t.exactDerivationVerified));
+});
 test('PAGES reuses its existing queue and stores distinct HV/VV assets without inventing canonical text identity',async()=>{
  const target=await resolveEventTarget(input(),sets(),list,fileId);
  const r=await prepareEventIntake(input(),getFile,target);

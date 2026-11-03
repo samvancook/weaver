@@ -71,7 +71,7 @@ test('Helper rebuilds current manifest server-side and stale receipts never conf
  assert.equal(api.sendEventToWeaver('Pilot').acceptedCount,1);assert.equal(receivedPayload.titles[0].sourceRow,6000);
  assert.equal(api.checkWeaverEvent('Pilot').transferComplete,true);assert.equal(api.checkWeaverEvent('Pilot').readyForClosureReview,false);
  report.titles[0].title='Changed in inventory';assert.equal(api.checkWeaverEvent('Pilot').status,'inventory_changed');
- report.closed=true;assert.throws(()=>api.sendEventToWeaver('Pilot'),/already closed/);
+ report.closed=true;api.sendEventToWeaver('Pilot');assert.equal(receivedPayload.closed,true);
 });
 test('only the deploying owner can configure the fixed live-test target or read connection identity',()=>{
  const source=readFileSync(new URL('../integrations/footage-helper/ConnectionSetup.gs',import.meta.url),'utf8');

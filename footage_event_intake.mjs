@@ -15,14 +15,14 @@ export function fileId(url) {
 export function validateEventManifest(input) {
   if (input?.sourceSpreadsheetId !== INVENTORY_ID) throw new Error('Unsupported source inventory.');
   if (!text(input.eventName) || !text(input.omFolderId).match(/^[-\w]{15,}$/)) throw new Error('Event name and OM event folder ID are required.');
-  if (input.closed !== false) throw new Error('This MVP accepts open events only.');
+  if (typeof input.closed !== 'boolean') throw new Error('Inventory closure status is required.');
   if (!Array.isArray(input.titles) || !input.titles.length || input.titles.length > 500) throw new Error('Send between 1 and 500 title records.');
   const titles = input.titles.map(t => {
     if (!Number.isSafeInteger(t.sourceRow) || t.sourceRow < 2) throw new Error('Every title needs its source response row.');
     return { sourceRow: t.sourceRow, performer: text(t.performer), title: text(t.title), rights: text(t.rights), contentLink: text(t.contentLink) };
   }).sort((a,b) => a.sourceRow-b.sourceRow);
   if (new Set(titles.map(t=>t.sourceRow)).size !== titles.length) throw new Error('Duplicate source response row.');
-  const manifest = { sourceSpreadsheetId: INVENTORY_ID, eventName: text(input.eventName).replace(/\s+/g,' '), omFolderId: text(input.omFolderId), closed: false, titles };
+  const manifest = { sourceSpreadsheetId: INVENTORY_ID, eventName: text(input.eventName).replace(/\s+/g,' '), omFolderId: text(input.omFolderId), closed: input.closed, titles };
   return { manifest, eventId: 'inventory-' + hash([INVENTORY_ID,manifest.omFolderId,key(manifest.eventName)]).slice(0,32), digest: hash(manifest) };
 }
 function validVideo(file, id) {
@@ -43,6 +43,7 @@ function resultStatus(record, complete) {
 // A receipt acknowledges queue registration/association, never event completeness.
 export async function prepareEventIntake(input, getFile, target = {mode:'new_event'}) {
   const {manifest,eventId,digest} = validateEventManifest(input);
+  if (manifest.closed && target.mode !== 'existing_event') throw new Error('Closed inventory events can only link to an existing Weaver event. No event was reopened or created.');
   const accepted=[],blocked=[],seen=new Set();
   for (const title of manifest.titles) {
     const id=fileId(title.contentLink);
