@@ -4,13 +4,12 @@
 function weaverManifest_(eventName) {
   const report = getIntakeReport(eventName);
   if (!report.event) throw new Error('No Add Event record was found.');
-  if (report.closed) throw new Error('This event is already closed.');
   const folder = String(report.event.omFolderLink || '').match(/folders\/([-\w]+)/);
   if (!folder) throw new Error('The event needs an OM folder link.');
   return {
     sourceSpreadsheetId: RETITLE_CONFIG.spreadsheetId,
     eventName: String(report.eventName).replace(/\s+/g, ' ').trim(),
-    omFolderId: folder[1], closed: false,
+    omFolderId: folder[1], closed: !!report.closed,
     titles: report.titles.map(function(t) {
       return {sourceRow:t.rowNumber, performer:t.performer, title:t.title,
         rights:t.rights, contentLink:t.contentLink};
@@ -63,13 +62,13 @@ function checkWeaverEvent(eventName) {
   const current = manifest.titles.map(function(t) {
     return {sourceRow:t.sourceRow, performer:clean(t.performer), title:clean(t.title), rights:clean(t.rights), contentLink:clean(t.contentLink)};
   }).sort(function(a,b){return a.sourceRow-b.sourceRow;});
-  if (JSON.stringify(current) !== JSON.stringify(receipt.manifest.titles)) {
+  if (manifest.closed !== receipt.manifest.closed || JSON.stringify(current) !== JSON.stringify(receipt.manifest.titles)) {
     receipt.transferComplete=false; receipt.readyForClosureReview=false; receipt.status='inventory_changed';
   }
   return weaverReceiptForUi_(receipt);
 }
 function weaverReceiptForUi_(r) {
-  return {eventId:r.eventId, prioritySetId:r.prioritySetId, mode:r.mode, preview:!!r.preview,
+  return {eventId:r.eventId, prioritySetId:r.prioritySetId, mode:r.mode, preview:!!r.preview, inventoryClosed:!!r.manifest.closed,
     targetEventName:r.targetEventName, transferComplete:!!r.transferComplete,progressCheck:r.progressCheck || {status:'not_checked'},
     eventCompleteness:'not_assessed', canonicalTextLinkStatus:r.canonicalTextLinkStatus || 'not_linked',
     families:(r.accepted || []).map(function(t) {return {sourceRow:t.sourceRow,performer:t.performer,title:t.title,
@@ -79,6 +78,16 @@ function weaverReceiptForUi_(r) {
     readyForClosureReview:r.readyForClosureReview, checkedAt:r.checkedAt,
     currentUnavailableFileIds:r.currentUnavailableFileIds || [],targetQueueAvailable:r.targetQueueAvailable,
     blocked:(r.blocked || []).map(function(t){return {sourceRow:t.sourceRow, performer:t.performer, title:t.title, reason:t.reason};})};
+}
+
+// Owner-authenticated POST entry point for a controlled connection. The server
+// rebuilds the manifest from current inventory; the caller supplies only a name.
+function doPost(e) {
+  weaverRequireOwner_();
+  const input = JSON.parse(e && e.postData && e.postData.contents || '{}');
+  if (input.action !== 'linkWeaverEvent' || !String(input.eventName || '').trim()) throw new Error('Unsupported Helper action.');
+  return ContentService.createTextOutput(JSON.stringify(sendEventToWeaver(input.eventName)))
+    .setMimeType(ContentService.MimeType.JSON);
 }
 
 // Owner-only editor diagnostic. Never returns or logs the bearer token.

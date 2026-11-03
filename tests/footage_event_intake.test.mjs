@@ -30,7 +30,14 @@ test('receipt recheck detects loss of Weaver access',async()=>{
  const r=await prepareEventIntake(manifest(),file);
  const updated=await currentEventReceipt(r,async()=>{throw Error('404');});assert.equal(updated.readyForClosureReview,false);assert.deepEqual(updated.currentUnavailableFileIds,[id]);
 });
-test('closed events, wrong inventory, no titles and duplicate source rows are rejected',()=>{
- assert.throws(()=>validateEventManifest({...manifest(),closed:true}));assert.throws(()=>validateEventManifest({...manifest(),sourceSpreadsheetId:'other'}));
+test('closure status is preserved; wrong inventory, no titles and duplicate source rows are rejected',()=>{
+ assert.equal(validateEventManifest({...manifest(),closed:true}).manifest.closed,true);assert.throws(()=>validateEventManifest({...manifest(),sourceSpreadsheetId:'other'}));
  assert.throws(()=>validateEventManifest({...manifest(),titles:[]}));const m=manifest();m.titles.push({...m.titles[0]});assert.throws(()=>validateEventManifest(m));
+});
+test('closed inventory cannot create a new queue but can link to a verified existing queue',async()=>{
+ const m={...manifest(),closed:true};
+ await assert.rejects(prepareEventIntake(m,file),/only link to an existing/);
+ const r=await prepareEventIntake(m,file,{mode:'existing_event',prioritySetId:'existing',pairs:new Map([[id,id]]),available:new Set([id])});
+ assert.equal(r.manifest.closed,true);assert.equal(r.status,'linked_existing_event');
+ assert.equal(footageEventAsSet(r),null);assert.equal(r.closedAutomatically,false);assert.equal(r.readyForClosureReview,false);
 });

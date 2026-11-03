@@ -51,7 +51,7 @@
         <div id="reportMeta" class="detail"></div>
 
         <h3 class="section-title">Connect this event to Weaver</h3>
-        <p class="detail">Preview existing Weaver matches and video versions, then link or send this event. This confirms only the listed titles and links; it does not certify that the event is complete or ready to close.</p>
+        <p class="detail">Preview existing Weaver matches and video versions, then link or send this event. Closed inventory events can link to an existing Weaver event and stay closed. This confirms only the listed titles and links; it does not certify that the event is complete or ready to close.</p>
         <button type="button" id="weaverConnect">Connect Weaver (owner)</button>
         <button type="button" id="weaverPreview" disabled>Preview Weaver connection</button>
         <button type="button" id="weaverSend" disabled>Link / send event to Weaver</button>
@@ -336,11 +336,11 @@
       document.getElementById('weaverCheck').onclick = () => runWeaver('check');
       function renderReport(r) {
         weaverEventName = r.eventName;
-        weaverReportEligible = !!r.event && !r.closed && !!r.titles.length;
+        weaverReportEligible = !!r.event && !!r.titles.length;
         document.getElementById('weaverPreview').disabled = !weaverReportEligible || weaverBusy;
         document.getElementById('weaverSend').textContent = 'Link / send event to Weaver';
-        document.getElementById('weaverSend').disabled = !r.event || r.closed || !r.titles.length || weaverBusy;
-        document.getElementById('weaverCheck').disabled = !r.event || r.closed || weaverBusy;
+        document.getElementById('weaverSend').disabled = !weaverReportEligible || weaverBusy;
+        document.getElementById('weaverCheck').disabled = !r.event || weaverBusy;
         checklistEl.innerHTML = '';
         (r.flags || []).forEach(f => {
           const div = document.createElement('div');
