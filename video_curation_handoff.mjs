@@ -133,6 +133,44 @@ export function assertExistingCanonicalReceipt(receipt, sourceRecordId, canonica
   }
 }
 
+export function assertVideoImportPreflight(receipt, sourceRecordId) {
+  if (receipt?.ok !== true || clean(receipt.sourceRecordId) !== sourceRecordId
+    || receipt.received !== false || receipt.ambiguousVideoMatch
+    || clean(receipt.canonicalVideoId) || receipt.ledger?.count !== 0) {
+    throw new Error("Poetry Please already has this source or its receipt needs reconciliation; no video was sent.");
+  }
+}
+
+export function assertVideoImportReadback(receipt, record, result) {
+  let driveHost = "";
+  try { driveHost = new URL(receipt?.media?.driveLink).hostname; } catch {}
+  if (receipt?.ok !== true || receipt.received !== true || receipt.ambiguousVideoMatch
+    || clean(receipt.sourceRecordId) !== record.sourceRecordId
+    || clean(receipt.canonicalVideoId) !== result.canonicalVideoId
+    || clean(receipt.event?.sourceEvent) !== record.sourceEvent
+    || clean(receipt.event?.sourceEventLabel) !== record.sourceEventLabel
+    || driveHost !== "drive.google.com"
+    || driveFileId(receipt.media?.driveLink) !== driveFileId(record.finalAssetUrl)
+    || !driveFileId(record.finalAssetUrl)
+    || receipt.media?.reviewOnly !== true
+    || receipt.review?.reviewCount !== record.reviews.length
+    || receipt.review?.selectedExcerptIdCount !== record.selectedExcerptRecordIds.length) {
+    throw new Error("Poetry Please import response was not confirmed by its current receipt; reconcile this attempt before another send.");
+  }
+}
+
+export function assertVideoClaimMatchesRecord(claimedGate, record) {
+  const excerpts = [...new Set((claimedGate?.selectedExcerptRecordIds || []).map(clean).filter(Boolean))].sort();
+  if (clean(claimedGate?.decision) !== "ready_for_poetry_please"
+    || clean(claimedGate?.videoRecordId) !== record.sourceRecordId
+    || clean(claimedGate?.sourceEvent) !== record.sourceEvent
+    || clean(claimedGate?.sourceEventLabel) !== record.sourceEventLabel
+    || clean(claimedGate?.publishableAssetUrl) !== record.finalAssetUrl
+    || JSON.stringify(excerpts) !== JSON.stringify([...record.selectedExcerptRecordIds].sort())) {
+    throw new Error("The saved video gate changed during send preparation; this attempt is held for reconciliation.");
+  }
+}
+
 export function listKnownVideoAssets(currentFile, historicalSourceIds = [], gates = [], sourceReviewFileId = "") {
   const currentId = clean(currentFile?.id);
   const root = clean(sourceReviewFileId) || currentId;

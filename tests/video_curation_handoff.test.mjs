@@ -1,6 +1,50 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { assertExistingCanonicalReceipt, buildReviewerProgressExport, buildWeaverVideoImport, classifyDriveFolderPath, listKnownVideoAssets, parsePoetryPleaseVideoImport, parsePoetryPleaseVideoReceipt, poetryPleaseVideoIdForSourceFile, reconcileVideoReviews, requiresManualVideoIdentityReview, resolveCurrentVideoFileId, resolveVideoReviewSourceFileId } from "../video_curation_handoff.mjs";
+import { assertExistingCanonicalReceipt, assertVideoClaimMatchesRecord, assertVideoImportPreflight, assertVideoImportReadback, buildReviewerProgressExport, buildWeaverVideoImport, classifyDriveFolderPath, listKnownVideoAssets, parsePoetryPleaseVideoImport, parsePoetryPleaseVideoReceipt, poetryPleaseVideoIdForSourceFile, reconcileVideoReviews, requiresManualVideoIdentityReview, resolveCurrentVideoFileId, resolveVideoReviewSourceFileId } from "../video_curation_handoff.mjs";
+
+test("video send requires an empty receiver receipt and a matching saved readback", () => {
+  const sourceRecordId = "weaver:video:reviewed-source";
+  const empty = { ok: true, sourceRecordId, received: false, ambiguousVideoMatch: false,
+    canonicalVideoId: "", ledger: { count: 0 } };
+  assert.doesNotThrow(() => assertVideoImportPreflight(empty, sourceRecordId));
+  for (const changed of [
+    { ...empty, received: true }, { ...empty, canonicalVideoId: "existing" },
+    { ...empty, ledger: { count: 1 } }, { ...empty, sourceRecordId: "other" },
+    { ...empty, ledger: {} }, { ...empty, ok: false },
+  ]) assert.throws(() => assertVideoImportPreflight(changed, sourceRecordId));
+
+  const record = { sourceRecordId, sourceEvent: "BPL Charm City 2026", sourceEventLabel: "BPL Charm City 2026",
+    finalAssetUrl: "https://drive.google.com/file/d/current-fv/view", reviews: [{}, {}], selectedExcerptRecordIds: ["e1"] };
+  const result = { canonicalVideoId: "WEAVER-VV-EXISTING" };
+  const receipt = { ok: true, received: true, sourceRecordId, canonicalVideoId: result.canonicalVideoId,
+    ambiguousVideoMatch: false, event: { sourceEvent: record.sourceEvent, sourceEventLabel: record.sourceEventLabel },
+    media: { driveLink: record.finalAssetUrl, reviewOnly: true }, review: { reviewCount: 2, selectedExcerptIdCount: 1 } };
+  assert.doesNotThrow(() => assertVideoImportReadback(receipt, record, result));
+  for (const changed of [
+    { ...receipt, canonicalVideoId: "other" },
+    { ...receipt, media: { ...receipt.media, driveLink: "https://drive.google.com/file/d/older-fv/view" } },
+    { ...receipt, media: { ...receipt.media, reviewOnly: false } },
+    { ...receipt, review: { ...receipt.review, reviewCount: 1 } },
+    { ...receipt, review: { ...receipt.review, selectedExcerptIdCount: 2 } },
+    { ...receipt, review: {} },
+    { ...receipt, event: { ...receipt.event, sourceEvent: "another event" } },
+  ]) assert.throws(() => assertVideoImportReadback(changed, record, result));
+});
+
+test("a send uses the gate snapshot that was actually claimed", () => {
+  const record = { sourceRecordId: "weaver:video:original", sourceEvent: "event", sourceEventLabel: "Event",
+    finalAssetUrl: "https://drive.google.com/file/d/final-video/view", selectedExcerptRecordIds: ["e1", "e2"] };
+  const gate = { decision: "ready_for_poetry_please", videoRecordId: record.sourceRecordId,
+    sourceEvent: record.sourceEvent, sourceEventLabel: record.sourceEventLabel,
+    publishableAssetUrl: record.finalAssetUrl, selectedExcerptRecordIds: ["e2", "e1"] };
+  assert.doesNotThrow(() => assertVideoClaimMatchesRecord(gate, record));
+  for (const changed of [
+    { ...gate, videoRecordId: "weaver:video:other" },
+    { ...gate, publishableAssetUrl: "https://drive.google.com/file/d/other-final/view" },
+    { ...gate, selectedExcerptRecordIds: ["e1"] },
+    { ...gate, sourceEvent: "other event" },
+  ]) assert.throws(() => assertVideoClaimMatchesRecord(changed, record));
+});
 
 test("receipt refresh accepts only the same event, identity, retained context and verified hosted copy", () => {
   const gate = { sourceEvent: "event", sourceEventLabel: "Event", selectedExcerptRecordIds: ["excerpt"],
