@@ -1320,6 +1320,44 @@ function getRequestedVideoPlaylistUrl() {
     || "";
 }
 
+function getRequestedVideoSetId() {
+  const id = cleanSheetWhitespace(contributorShellParams.get("videoSet"));
+  if (contributorShellParams.has("videoSet") && !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,119}$/.test(id)) throw new Error("This Weaver curation task link is invalid.");
+  return id;
+}
+
+function resolveVideoPlaylistRequest(selectedSet, enteredUrl) {
+  let linkedSet = "";
+  try {
+    const url = new URL(enteredUrl);
+    linkedSet = url.searchParams.get("videoSet") || "";
+    if (linkedSet && url.origin !== window.location.origin) throw new Error("Open that Weaver curation task link directly in its own Weaver site.");
+    if (linkedSet && !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,119}$/.test(linkedSet)) throw new Error("This Weaver curation task link is invalid.");
+  } catch (error) {
+    if (linkedSet) throw error;
+  }
+  return {prioritySetId:linkedSet || selectedSet, formUrl:linkedSet ? "" : enteredUrl};
+}
+
+async function openRequestedVideoTask() {
+  try {
+    const id = getRequestedVideoSetId();
+    if (!id) return;
+    setActiveModule("gathering");
+    setGatheringMode("video", {refreshVideoSets:false});
+    await refreshPriorityVideoSetVisibility();
+    const option = Array.from(elements.gatheringVideoPrioritySet.options).find(option => option.value === id);
+    if (!option) throw new Error("This curation task is not available in Weaver. Check its event connection in Footage Helper.");
+    elements.gatheringVideoPrioritySet.value = id;
+    elements.gatheringVideoPlaylistUrl.value = "";
+    await loadGatheringVideoPlaylist({auto:true});
+  } catch (error) {
+    currentGatheringVideoPlaylist = null;
+    updateGatheringVideoPlaylistUi();
+    setStatus(`Curation task could not be opened: ${error.message}`);
+  }
+}
+
 const GATHERING_GUIDANCE_BY_MODE = {
   book: {
     lead: "<strong>Working rule of thumb:</strong> copy and paste from the manuscript, capture only the strongest lines, and keep moving past maybes.",
@@ -1574,11 +1612,11 @@ async function refreshPriorityVideoSetVisibility() {
     select.append(videoGroup);
   }
   options.forEach(option => {
-    option.hidden = completed.has(option.value);
-    option.disabled = completed.has(option.value);
+    option.hidden = completed.has(option.value) && option.value !== getRequestedVideoSetId();
+    option.disabled = option.hidden;
     (regular.has(option.value) ? videoGroup : priorityGroup).append(option);
   });
-  if (completed.has(select.value)) select.value = "";
+  if (completed.has(select.value) && select.value !== getRequestedVideoSetId()) select.value = "";
 }
 
 function getCurrentGatheringVideoPlaylistItem() {
@@ -1839,8 +1877,10 @@ async function refreshVideoCurationReceipt(candidate) {
 
 async function loadGatheringVideoPlaylist({ auto = false } = {}) {
   try {
-    const formUrl = elements.gatheringVideoPlaylistUrl?.value.trim() || "";
-    const prioritySetId = elements.gatheringVideoPrioritySet?.value.trim() || "";
+    const {formUrl, prioritySetId} = resolveVideoPlaylistRequest(
+      elements.gatheringVideoPrioritySet?.value.trim() || "",
+      elements.gatheringVideoPlaylistUrl?.value.trim() || ""
+    );
     if (!formUrl && !prioritySetId) {
       throw new Error("Choose a priority set or add a curation form URL first.");
     }
@@ -1853,6 +1893,7 @@ async function loadGatheringVideoPlaylist({ auto = false } = {}) {
       prioritySetId,
       reviewerEmail
     });
+    if (prioritySetId && result.prioritySetId !== prioritySetId) throw new Error("Weaver returned a different curation task; no videos were loaded.");
     if (reviewerEmail !== (elements.gatheringEmail?.value.trim() || "")) {
       throw new Error("Reviewer email changed; load the playlist again.");
     }
@@ -1974,11 +2015,11 @@ function openGatheringVideoPlaylistItem() {
   setStatus("Opened the Drive player. If Drive shows Sign in, sign in with the Button account entered above.");
 }
 
-function setGatheringMode(mode) {
+function setGatheringMode(mode, {refreshVideoSets = true} = {}) {
   if (!elements.gatheringMode) return;
   elements.gatheringMode.value = mode;
   updateGatheringModeUi();
-  if (mode === "video") refreshPriorityVideoSetVisibility().catch(() => {});
+  if (mode === "video" && refreshVideoSets) refreshPriorityVideoSetVisibility().catch(() => {});
 }
 
 function setActiveModule(moduleName) {
@@ -7294,6 +7335,11 @@ async function initializeApp() {
   renderGraphicsFolderImportPreview(null);
   const contributorShell = currentContributorAccess || isContributorShellRequested();
   setActiveModule(contributorShell ? "gathering" : "review");
+  if (contributorShellParams.has("videoSet")) {
+    setStatus("Opening curation task...");
+    await openRequestedVideoTask();
+    return;
+  }
   setStatus(`Ready${runtimeConfig.appVersion ? ` (${runtimeConfig.appVersion})` : ""}. Loading books...`);
   if (contributorShell) {
     loadGatheringOptions().catch(error => {
@@ -7303,6 +7349,7 @@ async function initializeApp() {
     loadBooks();
   }
   if (getRequestedVideoPlaylistUrl()) {
+    setActiveModule("gathering");
     setGatheringMode("video");
     loadGatheringVideoPlaylist({ auto: true });
   }

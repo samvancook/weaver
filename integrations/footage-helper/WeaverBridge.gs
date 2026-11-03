@@ -68,7 +68,9 @@ function checkWeaverEvent(eventName) {
   return weaverReceiptForUi_(receipt);
 }
 function weaverReceiptForUi_(r) {
-  return {eventId:r.eventId, prioritySetId:r.prioritySetId, mode:r.mode, preview:!!r.preview, inventoryClosed:!!r.manifest.closed,
+  const taskUrl = !r.preview && r.transferComplete && r.prioritySetId && r.status !== 'inventory_changed'
+    ? WEAVER_REVIEWED_TEST_URL + '/?videoSet=' + encodeURIComponent(r.prioritySetId) : '';
+  return {eventId:r.eventId, prioritySetId:r.prioritySetId, curationTaskUrl:taskUrl, mode:r.mode, preview:!!r.preview, inventoryClosed:!!r.manifest.closed,
     targetEventName:r.targetEventName, transferComplete:!!r.transferComplete,progressCheck:r.progressCheck || {status:'not_checked'},
     eventCompleteness:'not_assessed', canonicalTextLinkStatus:r.canonicalTextLinkStatus || 'not_linked',
     families:(r.accepted || []).map(function(t) {return {sourceRow:t.sourceRow,performer:t.performer,title:t.title,
