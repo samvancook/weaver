@@ -61,7 +61,7 @@ test('Helper rebuilds current manifest server-side and stale receipts never conf
  let receivedPayload;
  const receipt={...manifest,eventId:'inventory-example',manifest,acceptedCount:1,submittedCount:1,blockedCount:0,transferComplete:true,readyForClosureReview:false,blocked:[]};
  const api=runInNewContext(source+`;({sendEventToWeaver,checkWeaverEvent,previewEventToWeaver})`,{
-  RETITLE_CONFIG:{spreadsheetId:INVENTORY_ID},getIntakeReport:()=>structuredClone(report),intakeKey_:x=>String(x).trim().toLowerCase(),
+  WEAVER_REVIEWED_TEST_URL:'https://weaver.example.com',RETITLE_CONFIG:{spreadsheetId:INVENTORY_ID},getIntakeReport:()=>structuredClone(report),intakeKey_:x=>String(x).trim().toLowerCase(),
   Utilities:{DigestAlgorithm:{SHA_256:'SHA256'},computeDigest:()=>[1,2,3]},
   ScriptApp:{getIdentityToken:()=> 'identity-token'},
   PropertiesService:{getScriptProperties:()=>({getProperty:key=>key==='WEAVER_BRIDGE_ENABLED'?'true':key==='WEAVER_BRIDGE_URL'?'https://weaver.example.com':pointers.get(key),setProperty:(k,v)=>pointers.set(k,v)})},

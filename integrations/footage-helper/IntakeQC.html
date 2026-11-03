@@ -227,6 +227,16 @@
           'Event completeness and readiness to close have not been assessed. Playback and publication approval are not confirmed.';
         document.getElementById('weaverSend').textContent = existing ? 'Link to existing Weaver event' : 'Send new event to Weaver';
         status.appendChild(p);
+        if (r.curationTaskUrl) {
+          const task = document.createElement('p');
+          const link = document.createElement('a');
+          link.href = r.curationTaskUrl; link.target = '_blank'; link.rel = 'noopener noreferrer';
+          link.textContent = 'Open this event’s curation task in Weaver';
+          task.append(link); status.append(task);
+          const help = document.createElement('p');
+          help.textContent = 'This event-specific link can be shared with curators. It opens the existing queue and preserves their progress.';
+          status.append(help);
+        }
         (r.currentUnavailableFileIds || []).forEach(id => {
           const missing = document.createElement('p');
           missing.textContent='Video unavailable to Weaver; saved link retained: ';
