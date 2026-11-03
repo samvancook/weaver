@@ -2777,8 +2777,10 @@ async function handoffVideoCurationGate(payload = {}) {
   try {
     assertVideoClaimMatchesRecord(claim.record, record);
   } catch (error) {
-    await persist({ status: "needs_reconciliation", sourceRecordId: record.sourceRecordId,
-      error: error.message, updatedAt: new Date().toISOString() });
+    const released = await syncWeaverRuntimeDb("release_video_curation_handoff_claim", {
+      prioritySetId, sourceFileId, attemptId
+    });
+    if (!released?.released) throw new Error("Video gate changed and its unsent claim could not be released; reconcile this gate before another send.");
     throw error;
   }
   const endpoint = `${poetryPleaseApiUrl.replace(/\/$/, "")}/internal/weaverVideoImport`;
