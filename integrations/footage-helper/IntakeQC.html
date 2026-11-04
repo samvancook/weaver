@@ -60,6 +60,7 @@
 
         <h3 class="section-title">Curation link registration — test workspace</h3>
         <p class="detail">Owner test: record this event’s verified Weaver task link and inspect its history. These controls write only to a separate test spreadsheet. Withdrawal keeps the audit trail and does not undo reviews in Weaver.</p>
+        <button type="button" id="curationLivePreview">Preview live inventory change (read only)</button>
         <button type="button" id="curationSetup">Create / open test workspace</button>
         <button type="button" id="curationPreview">Preview link registration</button>
         <button type="button" id="curationRegister" disabled>Register in test workspace</button>
@@ -231,12 +232,12 @@
         if (!weaverEventName || curationBusy) return;
         const eventName = weaverEventName;
         curationBusy = true;
-        ['Setup','Preview','Register','Withdraw','Reconcile','History'].forEach(id => document.getElementById('curation'+id).disabled = true);
+        ['Setup','Preview','Register','Withdraw','Reconcile','History','LivePreview'].forEach(id => document.getElementById('curation'+id).disabled = true);
         const status = document.getElementById('curationRegistrationStatus');
         status.textContent = 'Checking the test workspace…';
         const finish = () => {
           curationBusy = false;
-          ['Setup','Preview','History'].forEach(id => document.getElementById('curation'+id).disabled = false);
+          ['Setup','Preview','History','LivePreview'].forEach(id => document.getElementById('curation'+id).disabled = false);
           return eventName === weaverEventName;
         };
         const runner = google.script.run.withSuccessHandler(r => {
@@ -245,6 +246,7 @@
           curationOperationId = r.operationId || '';
           status.replaceChildren();
           const descriptions = {
+            PRODUCTION_PREVIEW_ONLY:'Live inventory preview only. Recording is not enabled.',
             PREVIEW:'Preview ready. The event link can be recorded in the test workspace.',
             VERIFIED:'Test registration saved and verified.',
             WITHDRAWN:'Test registration withdrawn. Its history is retained.',
@@ -256,6 +258,7 @@
             HISTORY:'No Helper registration history for this event yet.'
           };
           const state = document.createElement('p'); state.textContent = (descriptions[r.state]||r.state) + (r.error ? ': '+r.error : ''); status.append(state);
+          if(r.previewSummary) {const p=document.createElement('p');p.textContent=r.previewSummary;status.append(p);}
           if(r.message) {const p=document.createElement('p');p.textContent=r.message;status.append(p);}
           if(r.taskUrl) {const p=document.createElement('p');p.textContent='Event: '+r.eventName+' · Link: '+r.taskUrl;status.append(p);}
           if(r.sandboxUrl) {const a=document.createElement('a');a.href=r.sandboxUrl;a.target='_blank';a.rel='noopener noreferrer';a.textContent='Open test spreadsheet and full Audit';status.append(a);}
@@ -265,14 +268,15 @@
           document.getElementById('curationWithdraw').disabled = r.state!=='VERIFIED' || !curationOperationId;
           document.getElementById('curationReconcile').disabled = !curationOperationId || r.state!=='RECONCILIATION_REQUIRED';
         }).withFailureHandler(err => {if(finish())status.textContent=(err.message||String(err))+' Use Show registration history / Preview before retrying.';});
-        if(action==='setup')runner.setupCurationRegistrationSandbox(eventName);
+        if(action==='livepreview')runner.previewInventoryCurationRegistration(eventName);
+        else if(action==='setup')runner.setupCurationRegistrationSandbox(eventName);
         else if(action==='preview')runner.previewCurationRegistration(eventName);
         else if(action==='register')runner.registerCurationLinkSandbox(eventName,curationPreviewKey);
         else if(action==='withdraw')runner.withdrawCurationLinkSandbox(eventName,curationOperationId);
         else if(action==='reconcile')runner.reconcileCurationRegistration(eventName,curationOperationId);
         else runner.getCurationRegistrationHistory(eventName);
       }
-      ['Setup','Preview','Register','Withdraw','Reconcile','History'].forEach(id => document.getElementById('curation'+id).onclick=()=>runCurationRegistration(id.toLowerCase()));
+      ['Setup','Preview','Register','Withdraw','Reconcile','History','LivePreview'].forEach(id => document.getElementById('curation'+id).onclick=()=>runCurationRegistration(id.toLowerCase()));
       let weaverEventName = '';
       let weaverBusy = false;
       let weaverReportEligible = false;

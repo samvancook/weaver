@@ -42,3 +42,44 @@ test('history restores operation controls and original link after reload or an u
  const f=fixture(),r=f.register();f.context.taskUrl='';const h=f.run('history');assert.equal(h.state,'VERIFIED');assert.equal(h.operationId,r.operationId);assert.match(h.taskUrl,/videoSet=pages/);
  f.state.failWithdraw=true;f.run('withdraw',{operationId:r.operationId});assert.equal(f.run('history').state,'RECONCILIATION_REQUIRED');
 });
+test('a picker failure is uncertain; explicit derived recovery never appends the registration twice',()=>{
+ const f=fixture();let pickerMatches=false,refreshFails=true,refreshCount=0;
+ const verifySource=f.store.verify;
+ f.store.sourceState=op=>f.rows.some(r=>r.op.operationId===op.operationId&&!r.changed)?f.rows[0].withdrawn?'withdrawn':'active':'changed';
+ f.store.verify=(op,withdrawn)=>verifySource(op,withdrawn)&&pickerMatches;
+ f.store.refreshDerived=()=>{refreshCount++;if(refreshFails)throw Error('picker unavailable');pickerMatches=true;return {closePicker:['PAGES']};};
+ const r=f.register();assert.equal(r.state,'RECONCILIATION_REQUIRED');assert.equal(f.run('reconcile',{operationId:r.operationId}).state,'RECONCILIATION_REQUIRED');
+ assert.equal(f.register().state,'RECONCILIATION_REQUIRED');assert.equal(f.rows.length,1);
+ refreshFails=false;assert.equal(f.run('repairDerived',{operationId:r.operationId}).state,'VERIFIED');assert.equal(f.rows.length,1);assert.equal(refreshCount,2);
+ assert.ok(f.audit.some(x=>x.state==='DERIVED_REPAIR_INTENT'));
+ f.rows[0].changed=true;assert.equal(f.run('repairDerived',{operationId:r.operationId}).state,'CHANGED_RECORD_PRESERVED');assert.equal(refreshCount,2);
+});
+test('a crash after derived update remains unresolved and recoverable from history',()=>{
+ const f=fixture();f.store.refreshDerived=()=>({closePicker:['PAGES']});f.state.failAudit='VERIFIED';const r=f.register();assert.equal(r.state,'RECONCILIATION_REQUIRED');assert.equal(f.run('history').state,'RECONCILIATION_REQUIRED');assert.equal(f.register().state,'RECONCILIATION_REQUIRED');assert.equal(f.rows.length,1);
+});
+const integrationScope={};vm.createContext(integrationScope);vm.runInContext(fs.readFileSync(new URL('../integrations/footage-helper/CurationRegistrationIntegration.gs',import.meta.url),'utf8'),integrationScope);
+test('derived verifier requires exact open-event changes, picker parity, retained other links and unchanged closure',()=>{
+ const before={curationLinks:[['legacy','old']],needingCuration:['open','closed'],eventsNeedingCuration:['open','closed'],readyToClose:['legacy'],closed:['closed'],closePicker:['legacy']};
+ const after={curationLinks:[['legacy','old'],['open','new']],needingCuration:['closed'],eventsNeedingCuration:['closed'],readyToClose:['legacy','open'],closed:['closed'],closePicker:['legacy','open']};
+ const verify=integrationScope.curationIntegrationVerifyDerived_;
+ assert.equal(verify(before,after,'open','new',false),true);
+ for(const key of ['curationLinks','needingCuration','eventsNeedingCuration','readyToClose','closed','closePicker']){const bad=structuredClone(after);bad[key]=[];assert.equal(verify(before,bad,'open','new',false),false,key);}
+ assert.equal(verify(before,before,'open','new',true),true);
+});
+test('a registered closed event never becomes available to close; empty picker uses canonical placeholder',()=>{
+ const before={curationLinks:[],needingCuration:['closed'],eventsNeedingCuration:['closed'],readyToClose:[],closed:['closed'],closePicker:['— No events to close —']};
+ const after={...before,curationLinks:[['closed','new']],needingCuration:[],eventsNeedingCuration:[]};
+ assert.equal(integrationScope.curationIntegrationVerifyDerived_(before,after,'closed','new',false),true);
+ const bad=structuredClone(after);bad.readyToClose=['closed'];bad.closePicker=['closed'];assert.equal(integrationScope.curationIntegrationVerifyDerived_(before,bad,'closed','new',false),false);
+});
+test('live preflight reads current receipt, closure and picker without exposing a production write',()=>{
+ const state={ownerChecks:0,links:[],closed:[],picker:['— No events to close —']};
+ const live={...integrationScope,weaverRequireOwner_:()=>state.ownerChecks++,curationRegistrationSourceContext_:()=>({eventName:'PAGES',taskUrl:'https://weaver.test/task',sourceEventId:'receipt',prioritySetId:'pages',sourceSnapshot:{closed:false,existingCurationLinks:state.links}}),
+ getRetitleSpreadsheet_:()=>({getId:()=> 'production-id'}),Session:{getActiveUser:()=>({getEmail:()=> 'sam@test'})},
+ FormApp:{ItemType:{MULTIPLE_CHOICE:'MC'},openById:()=>({getItemById:()=>({getType:()=> 'MC',asMultipleChoiceItem:()=>({getChoices:()=>state.picker.map(value=>({getValue:()=>value}))})})})}};
+ vm.createContext(live);vm.runInContext(fs.readFileSync(new URL('../integrations/footage-helper/CurationRegistrationIntegration.gs',import.meta.url),'utf8'),live);
+ live.curationIntegrationColumn_=(_book,sheet,col)=>col===9?state.closed:col===10?[]:['PAGES'];
+ const r=live.previewInventoryCurationRegistration('PAGES');assert.equal(r.productionEnabled,false);assert.equal(r.canRegister,false);assert.equal(r.blockers.length,0);assert.equal(r.plannedEffect.addToClosePicker,true);assert.equal(state.ownerChecks,1);
+ state.picker=['stale'];assert.match(live.previewInventoryCurationRegistration('PAGES').blockers.join(' '),/picker differs/);
+ state.links=[{url:'legacy'}];assert.match(live.previewInventoryCurationRegistration('PAGES').blockers.join(' '),/existing curation link/);
+});

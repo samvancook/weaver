@@ -10,6 +10,8 @@ function curationRegistrationHash_(value) {
     .map(function(b){return ('0'+((b+256)%256).toString(16)).slice(-2);}).join('');
 }
 
+function curationRegistrationPending_(record){return ['VERIFIED','WITHDRAWN','WITHDRAW_REFUSED'].indexOf(record.state)<0;}
+
 // Pure coordinator; every side effect is supplied by a store. Intent precedes
 // mutation. An ambiguous result never causes an automatic second append.
 function curationRegistrationEngine_(store, action, input) {
@@ -34,16 +36,16 @@ function curationRegistrationEngine_(store, action, input) {
   }
   if(action==='history') {
     const latest=history[history.length-1];
-    const unresolved=operations.find(function(r){return /INTENT|UNCERTAIN|SOURCE_WRITTEN/.test(r.state);});
+    const unresolved=operations.find(function(r){return curationRegistrationPending_(r);});
     const selected=unresolved||latest;
     return result(unresolved?'RECONCILIATION_REQUIRED':latest?latest.state:'HISTORY',selected?{operationId:selected.operationId,taskUrl:selected.details.operation.taskUrl}:{});
   }
   if(action==='preview') return result(protectedLinks.length?'EXISTING_LINK_PRESERVED':'PREVIEW',{
-    canRegister:!protectedLinks.length && !operations.some(function(r){return /INTENT|UNCERTAIN|SOURCE_WRITTEN/.test(r.state);}),
+    canRegister:!protectedLinks.length && !operations.some(function(r){return curationRegistrationPending_(r);}),
     existingLinks:protectedLinks,previewKey:store.fingerprint({context:context,active:active}),
     message:'Test workspace only. Production inventory will not be changed.'});
   if(action==='register') {
-    const unresolved=operations.find(function(r){return /INTENT|UNCERTAIN|SOURCE_WRITTEN/.test(r.state);});
+    const unresolved=operations.find(function(r){return curationRegistrationPending_(r);});
     if(unresolved)return result('RECONCILIATION_REQUIRED',{operationId:unresolved.operationId});
     if(protectedLinks.length) return result('EXISTING_LINK_PRESERVED',{existingLinks:protectedLinks,
       operationId:active.length===1?active[0].operationId||'':''});
@@ -56,6 +58,7 @@ function curationRegistrationEngine_(store, action, input) {
     try {
       const source=store.append(op);
       log(op,'SOURCE_WRITTEN',{source:source});
+      if(store.refreshDerived)log(op,'DERIVED_UPDATED',{derived:store.refreshDerived(op,false)});
       if(!store.verify(op,false))throw new Error('Source or effective curation link did not verify.');
       log(op,'VERIFIED',{source:source});
       return result('VERIFIED',{operationId:op.operationId});
@@ -79,12 +82,26 @@ function curationRegistrationEngine_(store, action, input) {
     try {
       const source=store.withdraw(op);
       log(op,'WITHDRAW_SOURCE_WRITTEN',{source:source});
+      if(store.refreshDerived)log(op,'WITHDRAW_DERIVED_UPDATED',{derived:store.refreshDerived(op,true)});
       if(!store.verify(op,true))throw new Error('Withdrawal did not verify in source and curation view.');
       log(op,'WITHDRAWN',{source:source});return result('WITHDRAWN',{operationId:op.operationId});
     } catch(error) {
       try {log(op,'UNCERTAIN_WITHDRAW',{error:String(error.message||error)});}catch(ignore){}
       return result('RECONCILIATION_REQUIRED',{operationId:op.operationId,error:String(error.message||error)});
     }
+  }
+  if(action==='repairDerived') {
+    if(!store.sourceState || !store.refreshDerived)throw new Error('Derived-state recovery is unavailable for this workspace.');
+    const sourceState=store.sourceState(op);
+    if(sourceState!=='active'&&sourceState!=='withdrawn')return result('CHANGED_RECORD_PRESERVED',{operationId:op.operationId});
+    const withdrawn=sourceState==='withdrawn';
+    log(op,'DERIVED_REPAIR_INTENT');
+    try {
+      const derived=store.refreshDerived(op,withdrawn);
+      if(!store.verify(op,withdrawn))throw new Error('Derived-state recovery did not verify.');
+      log(op,withdrawn?'WITHDRAWN':'VERIFIED',{derived:derived,recovered:true});
+      return result(withdrawn?'WITHDRAWN':'VERIFIED',{operationId:op.operationId});
+    }catch(error){log(op,'UNCERTAIN_DERIVED_REPAIR',{error:String(error.message||error)});return result('RECONCILIATION_REQUIRED',{operationId:op.operationId});}
   }
   if(action==='reconcile') {
     if(store.verify(op,true)) {log(op,'WITHDRAWN',{reconciled:true});return result('WITHDRAWN',{operationId:op.operationId});}
@@ -133,11 +150,20 @@ function curationRegistrationStore_(eventName,action) {
   const id=PropertiesService.getScriptProperties().getProperty(CURATION_REGISTRATION_SANDBOX_PROP);
   if(!id)throw new Error('Create the test workspace first.');
   if(id===RETITLE_CONFIG.spreadsheetId)throw new Error('Production inventory is not an allowed destination.');
-  const book=SpreadsheetApp.openById(id),source=book.getSheetByName('Form Responses 1'),audit=book.getSheetByName('Audit'),view=book.getSheetByName('Curation');
-  if(!source||!audit||!view)throw new Error('Sandbox structure is incomplete.');
+  const book=SpreadsheetApp.openById(id);
   const context=(action==='preview'||action==='register')?curationRegistrationSourceContext_(eventName):{eventName:eventName,taskUrl:'',sourceSnapshot:{existingCurationLinks:[]}};
-  function rows(){const n=source.getLastRow();return n<2?[]:source.getRange(2,1,n-1,51).getValues().map(function(v,i){return {row:i+2,values:v,note:source.getRange(i+2,1).getNote()};});}
-  function expected(op,withdrawn){const row=new Array(51).fill('');row[0]=new Date(op.plannedAt);row[1]=withdrawn?'Withdrawn Weaver curation link':'Add Curation Form';row[47]=op.actor;row[49]=op.eventName;row[50]=op.taskUrl;return row;}
+  return curationRegistrationSpreadsheetStore_(book,context);
+}
+
+// Shared test adapter. The production ID is forbidden even for internal callers.
+function curationRegistrationSpreadsheetStore_(book,context) {
+  const id=book.getId();
+  if(id===RETITLE_CONFIG.spreadsheetId)throw new Error('Production inventory is not an allowed destination.');
+  const source=book.getSheetByName('Form Responses 1'),audit=book.getSheetByName('Audit'),view=book.getSheetByName('Curation');
+  if(!source||!audit||!view)throw new Error('Sandbox structure is incomplete.');
+  const sourceWidth=Math.max(51,source.getLastColumn());
+  function rows(){const n=source.getLastRow();return n<2?[]:source.getRange(2,1,n-1,sourceWidth).getValues().map(function(v,i){return {row:i+2,values:v,note:source.getRange(i+2,1).getNote()};});}
+  function expected(op,withdrawn){const row=new Array(sourceWidth).fill('');row[0]=new Date(op.plannedAt);row[1]=withdrawn?'Withdrawn Weaver curation link':'Add Curation Form';row[47]=op.actor;row[49]=op.eventName;row[50]=op.taskUrl;return row;}
   function own(op){const found=rows().filter(function(r){return r.note==='helper-curation:'+op.operationId || (r.values[0] instanceof Date && r.values[0].toISOString()===op.plannedAt && r.values[47]===op.actor && r.values[49]===op.eventName && r.values[50]===op.taskUrl);});if(found.length!==1)return null;return found[0];}
   function same(a,b){return JSON.stringify(a)===JSON.stringify(b);}
   return {id:function(){return id;},url:function(){return book.getUrl();},context:function(){return context;},
@@ -147,6 +173,7 @@ function curationRegistrationStore_(eventName,action) {
     history:function(name){const n=audit.getLastRow();return n<2?[]:audit.getRange(2,1,n-1,7).getValues().filter(function(v){return curationRegistrationKey_(v[1])===curationRegistrationKey_(name);}).map(function(v){return {operationId:v[0],eventName:v[1],action:v[2],state:v[3],actor:v[4],at:v[5],details:JSON.parse(v[6])};});},
     audit:function(entry){const values=[entry.operationId,entry.eventName,entry.action,entry.state,entry.actor,entry.at,JSON.stringify(entry.details)];audit.appendRow(values);SpreadsheetApp.flush();if(!same(audit.getRange(audit.getLastRow(),1,1,7).getValues()[0],values))throw new Error('Audit entry readback failed.');},
     append:function(op){source.appendRow(expected(op,false));SpreadsheetApp.flush();const r=own(op);if(!r)throw new Error('Written source row could not be uniquely identified.');source.getRange(r.row,1).setNote('helper-curation:'+op.operationId);return {row:r.row,after:r.values};},
+    sourceState:function(op){const r=own(op);return !r?'missing':same(r.values,expected(op,false))?'active':same(r.values,expected(op,true))?'withdrawn':'changed';},
     verify:function(op,withdrawn){const r=own(op);if(!r||!same(r.values,expected(op,withdrawn)))return false;SpreadsheetApp.flush();const n=view.getLastRow(),links=n<2?[]:view.getRange(2,1,n-1,2).getDisplayValues();const present=links.some(function(v){return v[0]===op.eventName&&v[1]===op.taskUrl;});return withdrawn?!present:present;},
     withdraw:function(op){const r=own(op);if(!r||!same(r.values,expected(op,false)))throw new Error('The owned source row changed; nothing was withdrawn.');source.getRange(r.row,2).setValue('Withdrawn Weaver curation link');SpreadsheetApp.flush();return {row:r.row,before:r.values,after:expected(op,true)};}
   };
