@@ -91,6 +91,7 @@ function doPost(e) {
   if (!String(input.eventName || '').trim()) throw new Error('Event name is required.');
   let result;
   switch(input.action) {
+    case 'testEricSourceRepairUndo': result=testEricSourceRepairUndo();break;
     case 'previewEricReportedRepairs': result=previewEricReportedRepairs();break;
     case 'applyEricReportedRepairs': result=applyEricReportedRepairs(input.previewKey);break;
     case 'recheckEricReportedRepairs': result=recheckEricReportedRepairs();break;

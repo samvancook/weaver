@@ -1,0 +1,333 @@
+{
+  "verifiedOn": "2026-11-04",
+  "helperVersion": 59,
+  "normalHelperVersion": 43,
+  "state": "VERIFIED",
+  "operationId": "31b3bf52-ae4e-4fba-ace7-1c4503ce7698",
+  "auditUrl": "https://docs.google.com/spreadsheets/d/19EGO_7NooedZ0uRkW7gic2KuwKrITGJSiMqIxdaEo4o/edit",
+  "sourceOnly": true,
+  "sourceInputs": [
+    {
+      "sheet": "Form Responses 1",
+      "a1": "AW6647",
+      "row": 6647,
+      "col": 49,
+      "before": "https://drive.google.com/drive/folders/1vJZo1VaqPcCs-nEaLTF0HzjVfg5umzA1",
+      "after": "https://drive.google.com/file/d/0B_-uqSs_rEYCdUxra1JFelBhWFE/view?usp=drivesdk&resourcekey=0-bSNAdLucFo76vAw75L937w",
+      "caseId": "donte-links"
+    },
+    {
+      "sheet": "Form Responses 1",
+      "a1": "O6647",
+      "row": 6647,
+      "col": 15,
+      "before": "",
+      "after": "Clip #17.mov",
+      "caseId": "donte-links"
+    },
+    {
+      "sheet": "Form Responses 1",
+      "a1": "AW6648",
+      "row": 6648,
+      "col": 49,
+      "before": "https://drive.google.com/drive/folders/1vJZo1VaqPcCs-nEaLTF0HzjVfg5umzA1",
+      "after": "https://drive.google.com/file/d/0B_-uqSs_rEYCYlloaGNydHJmUk0/view?usp=drivesdk&resourcekey=0-35pZuke3_4emVpwTkNuFew",
+      "caseId": "donte-links"
+    },
+    {
+      "sheet": "Form Responses 1",
+      "a1": "O6648",
+      "row": 6648,
+      "col": 15,
+      "before": "",
+      "after": "Clip #18.mov",
+      "caseId": "donte-links"
+    },
+    {
+      "sheet": "Form Responses 1",
+      "a1": "AW6649",
+      "row": 6649,
+      "col": 49,
+      "before": "https://drive.google.com/drive/folders/1vJZo1VaqPcCs-nEaLTF0HzjVfg5umzA1",
+      "after": "https://drive.google.com/file/d/0B_-uqSs_rEYCaW03ZHZaZU1nb00/view?usp=drivesdk&resourcekey=0-I9c1r-PQ_yJaNj-XSk4Hyw",
+      "caseId": "donte-links"
+    },
+    {
+      "sheet": "Form Responses 1",
+      "a1": "O6649",
+      "row": 6649,
+      "col": 15,
+      "before": "",
+      "after": "Clip #19.mov",
+      "caseId": "donte-links"
+    },
+    {
+      "sheet": "Form Responses 1",
+      "a1": "AW6650",
+      "row": 6650,
+      "col": 49,
+      "before": "https://drive.google.com/drive/folders/1vJZo1VaqPcCs-nEaLTF0HzjVfg5umzA1",
+      "after": "https://drive.google.com/file/d/0B_-uqSs_rEYCYW5ybnAwdUJjNkU/view?usp=drivesdk&resourcekey=0-JBEbRmbTK2rhvJtSui9pLg",
+      "caseId": "donte-links"
+    },
+    {
+      "sheet": "Form Responses 1",
+      "a1": "O6650",
+      "row": 6650,
+      "col": 15,
+      "before": "",
+      "after": "Clip #20.mov",
+      "caseId": "donte-links"
+    },
+    {
+      "sheet": "Form Responses 1",
+      "a1": "AW6651",
+      "row": 6651,
+      "col": 49,
+      "before": "https://drive.google.com/drive/folders/1vJZo1VaqPcCs-nEaLTF0HzjVfg5umzA1",
+      "after": "https://drive.google.com/file/d/0B_-uqSs_rEYCZG5iMlFDN21mSTA/view?usp=drivesdk&resourcekey=0-NAZlG2iQ9koYzAq2HhcCJA",
+      "caseId": "donte-links"
+    },
+    {
+      "sheet": "Form Responses 1",
+      "a1": "O6651",
+      "row": 6651,
+      "col": 15,
+      "before": "",
+      "after": "Clip #21.mov",
+      "caseId": "donte-links"
+    },
+    {
+      "sheet": "Form Responses 1",
+      "a1": "AW6652",
+      "row": 6652,
+      "col": 49,
+      "before": "https://drive.google.com/drive/folders/1vJZo1VaqPcCs-nEaLTF0HzjVfg5umzA1",
+      "after": "https://drive.google.com/file/d/0B_-uqSs_rEYCQ1EtY1lQNjBjMnc/view?usp=drivesdk&resourcekey=0-EzPnrnGajTWROlH6MAc2Yw",
+      "caseId": "donte-links"
+    },
+    {
+      "sheet": "Form Responses 1",
+      "a1": "O6652",
+      "row": 6652,
+      "col": 15,
+      "before": "",
+      "after": "Clip #22.mov",
+      "caseId": "donte-links"
+    },
+    {
+      "sheet": "Form Responses 1",
+      "a1": "C30",
+      "row": 30,
+      "col": 3,
+      "before": "Krystal Garner",
+      "after": "",
+      "caseId": "garner-duplicate"
+    },
+    {
+      "sheet": "Form Responses 1",
+      "a1": "CH6974",
+      "row": 6974,
+      "col": 86,
+      "before": "Joe Bauman",
+      "after": "",
+      "caseId": "joe-duplicate"
+    },
+    {
+      "sheet": "Form Responses 1",
+      "a1": "CH6822",
+      "row": 6822,
+      "col": 86,
+      "before": "Miriam Tadesse",
+      "after": "Mariam Tadesse",
+      "caseId": "mariam-spelling"
+    },
+    {
+      "sheet": "Form Responses 1",
+      "a1": "L6823",
+      "row": 6823,
+      "col": 12,
+      "before": "Miriam Tadesse",
+      "after": "Mariam Tadesse",
+      "caseId": "mariam-spelling"
+    },
+    {
+      "sheet": "Form Responses 1",
+      "a1": "L6837",
+      "row": 6837,
+      "col": 12,
+      "before": "Miriam Tadesse",
+      "after": "Mariam Tadesse",
+      "caseId": "mariam-spelling"
+    },
+    {
+      "sheet": "Form Responses 1",
+      "a1": "L6839",
+      "row": 6839,
+      "col": 12,
+      "before": "Miriam Tadesse",
+      "after": "Mariam Tadesse",
+      "caseId": "mariam-spelling"
+    },
+    {
+      "sheet": "Form Responses 1",
+      "a1": "L6842",
+      "row": 6842,
+      "col": 12,
+      "before": "Miriam Tadesse",
+      "after": "Mariam Tadesse",
+      "caseId": "mariam-spelling"
+    },
+    {
+      "sheet": "Form Responses 1",
+      "a1": "AT6705",
+      "row": 6705,
+      "col": 46,
+      "before": "No video release",
+      "after": "All Button Authors, All features, All workshop instructors - contract is not stored with video releases",
+      "caseId": "kyle-rights"
+    }
+  ],
+  "checkedColumns": [
+    {
+      "column": 3,
+      "header": "Select Performer"
+    },
+    {
+      "column": 12,
+      "header": "Select Performer"
+    },
+    {
+      "column": 15,
+      "header": "Include the file name including the extension (ex 103.mov)"
+    },
+    {
+      "column": 46,
+      "header": "Rights Management"
+    },
+    {
+      "column": 49,
+      "header": "Copy and paste the link of the file on the drive"
+    },
+    {
+      "column": 86,
+      "header": "If not listed, enter performer here:"
+    }
+  ],
+  "generatedFilenames": [
+    {
+      "sourceRow": 6647,
+      "titleRow": 4526,
+      "url": "https://drive.google.com/file/d/0B_-uqSs_rEYCdUxra1JFelBhWFE/view?usp=drivesdk&resourcekey=0-bSNAdLucFo76vAw75L937w",
+      "name": "Clip #17.mov",
+      "filenameBefore": ""
+    },
+    {
+      "sourceRow": 6648,
+      "titleRow": 4527,
+      "url": "https://drive.google.com/file/d/0B_-uqSs_rEYCYlloaGNydHJmUk0/view?usp=drivesdk&resourcekey=0-35pZuke3_4emVpwTkNuFew",
+      "name": "Clip #18.mov",
+      "filenameBefore": ""
+    },
+    {
+      "sourceRow": 6649,
+      "titleRow": 4528,
+      "url": "https://drive.google.com/file/d/0B_-uqSs_rEYCaW03ZHZaZU1nb00/view?usp=drivesdk&resourcekey=0-I9c1r-PQ_yJaNj-XSk4Hyw",
+      "name": "Clip #19.mov",
+      "filenameBefore": ""
+    },
+    {
+      "sourceRow": 6650,
+      "titleRow": 4529,
+      "url": "https://drive.google.com/file/d/0B_-uqSs_rEYCYW5ybnAwdUJjNkU/view?usp=drivesdk&resourcekey=0-JBEbRmbTK2rhvJtSui9pLg",
+      "name": "Clip #20.mov",
+      "filenameBefore": ""
+    },
+    {
+      "sourceRow": 6651,
+      "titleRow": 4530,
+      "url": "https://drive.google.com/file/d/0B_-uqSs_rEYCZG5iMlFDN21mSTA/view?usp=drivesdk&resourcekey=0-NAZlG2iQ9koYzAq2HhcCJA",
+      "name": "Clip #21.mov",
+      "filenameBefore": ""
+    },
+    {
+      "sourceRow": 6652,
+      "titleRow": 4531,
+      "url": "https://drive.google.com/file/d/0B_-uqSs_rEYCQ1EtY1lQNjBjMnc/view?usp=drivesdk&resourcekey=0-EzPnrnGajTWROlH6MAc2Yw",
+      "name": "Clip #22.mov",
+      "filenameBefore": ""
+    }
+  ],
+  "result": {
+    "verified": true,
+    "errors": [],
+    "unrelatedSourceAndFormulasUnchanged": true,
+    "relevantNames": [
+      "Garner",
+      "Joel Bauman",
+      "Mariam Tadesse",
+      "Symone Johnson-Hawkins"
+    ],
+    "pickers": [
+      {
+        "id": "1479705159",
+        "hash": "d1c1133f0cde002e694bb55e92bed964641b887cc9a8263981b987cb9c7ba685",
+        "count": 838,
+        "relevant": [
+          "Garner",
+          "Joel Bauman",
+          "Mariam Tadesse",
+          "Symone Johnson-Hawkins"
+        ]
+      },
+      {
+        "id": "1675652896",
+        "hash": "d1c1133f0cde002e694bb55e92bed964641b887cc9a8263981b987cb9c7ba685",
+        "count": 838,
+        "relevant": [
+          "Garner",
+          "Joel Bauman",
+          "Mariam Tadesse",
+          "Symone Johnson-Hawkins"
+        ]
+      }
+    ],
+    "changedCells": 20
+  },
+  "rollbackProof": {
+    "state": "ROLLBACK_PROVED",
+    "spreadsheetUrl": "https://docs.google.com/spreadsheets/d/1SGDgVqsp_e9ulDrR5p29CX0bE0GsKsuLhlNHk1ndCeM/edit",
+    "formUrl": "https://docs.google.com/forms/d/1gNenQURznt6gPchOREw5fQPoli1jVemQ0AILGgVWbLI/edit",
+    "operationId": "51493593-2cd7-4aaa-89ee-8e907f26b0d0",
+    "sourceInputCells": 20,
+    "generatedFilenameOutputs": 6,
+    "sourceRestored": true,
+    "titlesRestored": true,
+    "allFormulasRestored": true,
+    "exactFormSettingsRestored": true,
+    "formAcceptingResponses": false,
+    "productionWritten": false
+  },
+  "independentReadback": {
+    "all20SourceInputs": true,
+    "sixGeneratedFilenameAndLinkRows": true,
+    "registry": {
+      "Garner": 1,
+      "Krystal Garner": 0,
+      "Joel Bauman": 1,
+      "Joe Bauman": 0,
+      "Mariam Tadesse": 1,
+      "Miriam Tadesse": 0,
+      "Symone Johnson-Hawkins": 1,
+      "Symone Jenkins-Hawkins": 0
+    },
+    "titles": {
+      "Mariam Tadesse": 4,
+      "Miriam Tadesse": 0,
+      "Joel Bauman": 1,
+      "Symone Johnson-Hawkins": 6,
+      "Krystal Garner": 10
+    }
+  },
+  "productionUndoExecuted": false
+}
