@@ -1,0 +1,221 @@
+{
+  "verifiedOn": "2026-11-04",
+  "state": "STAGED_AWAITING_PRODUCTION_EXCEPTION",
+  "auditUrl": "https://docs.google.com/spreadsheets/d/19EGO_7NooedZ0uRkW7gic2KuwKrITGJSiMqIxdaEo4o/edit",
+  "patches": [
+    {
+      "sheet": "Form Responses 1",
+      "a1": "AW6647",
+      "row": 6647,
+      "col": 49,
+      "before": "https://drive.google.com/drive/folders/1vJZo1VaqPcCs-nEaLTF0HzjVfg5umzA1",
+      "after": "https://drive.google.com/file/d/0B_-uqSs_rEYCdUxra1JFelBhWFE/view?usp=drivesdk&resourcekey=0-bSNAdLucFo76vAw75L937w",
+      "caseId": "donte-links"
+    },
+    {
+      "sheet": "All titles w/performer & Event",
+      "a1": "E4526",
+      "row": 4526,
+      "col": 5,
+      "before": "",
+      "after": "Clip #17.mov",
+      "caseId": "donte-links"
+    },
+    {
+      "sheet": "Form Responses 1",
+      "a1": "AW6648",
+      "row": 6648,
+      "col": 49,
+      "before": "https://drive.google.com/drive/folders/1vJZo1VaqPcCs-nEaLTF0HzjVfg5umzA1",
+      "after": "https://drive.google.com/file/d/0B_-uqSs_rEYCYlloaGNydHJmUk0/view?usp=drivesdk&resourcekey=0-35pZuke3_4emVpwTkNuFew",
+      "caseId": "donte-links"
+    },
+    {
+      "sheet": "All titles w/performer & Event",
+      "a1": "E4527",
+      "row": 4527,
+      "col": 5,
+      "before": "",
+      "after": "Clip #18.mov",
+      "caseId": "donte-links"
+    },
+    {
+      "sheet": "Form Responses 1",
+      "a1": "AW6649",
+      "row": 6649,
+      "col": 49,
+      "before": "https://drive.google.com/drive/folders/1vJZo1VaqPcCs-nEaLTF0HzjVfg5umzA1",
+      "after": "https://drive.google.com/file/d/0B_-uqSs_rEYCaW03ZHZaZU1nb00/view?usp=drivesdk&resourcekey=0-I9c1r-PQ_yJaNj-XSk4Hyw",
+      "caseId": "donte-links"
+    },
+    {
+      "sheet": "All titles w/performer & Event",
+      "a1": "E4528",
+      "row": 4528,
+      "col": 5,
+      "before": "",
+      "after": "Clip #19.mov",
+      "caseId": "donte-links"
+    },
+    {
+      "sheet": "Form Responses 1",
+      "a1": "AW6650",
+      "row": 6650,
+      "col": 49,
+      "before": "https://drive.google.com/drive/folders/1vJZo1VaqPcCs-nEaLTF0HzjVfg5umzA1",
+      "after": "https://drive.google.com/file/d/0B_-uqSs_rEYCYW5ybnAwdUJjNkU/view?usp=drivesdk&resourcekey=0-JBEbRmbTK2rhvJtSui9pLg",
+      "caseId": "donte-links"
+    },
+    {
+      "sheet": "All titles w/performer & Event",
+      "a1": "E4529",
+      "row": 4529,
+      "col": 5,
+      "before": "",
+      "after": "Clip #20.mov",
+      "caseId": "donte-links"
+    },
+    {
+      "sheet": "Form Responses 1",
+      "a1": "AW6651",
+      "row": 6651,
+      "col": 49,
+      "before": "https://drive.google.com/drive/folders/1vJZo1VaqPcCs-nEaLTF0HzjVfg5umzA1",
+      "after": "https://drive.google.com/file/d/0B_-uqSs_rEYCZG5iMlFDN21mSTA/view?usp=drivesdk&resourcekey=0-NAZlG2iQ9koYzAq2HhcCJA",
+      "caseId": "donte-links"
+    },
+    {
+      "sheet": "All titles w/performer & Event",
+      "a1": "E4530",
+      "row": 4530,
+      "col": 5,
+      "before": "",
+      "after": "Clip #21.mov",
+      "caseId": "donte-links"
+    },
+    {
+      "sheet": "Form Responses 1",
+      "a1": "AW6652",
+      "row": 6652,
+      "col": 49,
+      "before": "https://drive.google.com/drive/folders/1vJZo1VaqPcCs-nEaLTF0HzjVfg5umzA1",
+      "after": "https://drive.google.com/file/d/0B_-uqSs_rEYCQ1EtY1lQNjBjMnc/view?usp=drivesdk&resourcekey=0-EzPnrnGajTWROlH6MAc2Yw",
+      "caseId": "donte-links"
+    },
+    {
+      "sheet": "All titles w/performer & Event",
+      "a1": "E4531",
+      "row": 4531,
+      "col": 5,
+      "before": "",
+      "after": "Clip #22.mov",
+      "caseId": "donte-links"
+    },
+    {
+      "sheet": "Form Responses 1",
+      "a1": "C30",
+      "row": 30,
+      "col": 3,
+      "before": "Krystal Garner",
+      "after": "",
+      "caseId": "garner-duplicate"
+    },
+    {
+      "sheet": "Form Responses 1",
+      "a1": "CH6974",
+      "row": 6974,
+      "col": 86,
+      "before": "Joe Bauman",
+      "after": "",
+      "caseId": "joe-duplicate"
+    },
+    {
+      "sheet": "Form Responses 1",
+      "a1": "CH6822",
+      "row": 6822,
+      "col": 86,
+      "before": "Miriam Tadesse",
+      "after": "Mariam Tadesse",
+      "caseId": "mariam-spelling"
+    },
+    {
+      "sheet": "Form Responses 1",
+      "a1": "L6823",
+      "row": 6823,
+      "col": 12,
+      "before": "Miriam Tadesse",
+      "after": "Mariam Tadesse",
+      "caseId": "mariam-spelling"
+    },
+    {
+      "sheet": "Form Responses 1",
+      "a1": "L6837",
+      "row": 6837,
+      "col": 12,
+      "before": "Miriam Tadesse",
+      "after": "Mariam Tadesse",
+      "caseId": "mariam-spelling"
+    },
+    {
+      "sheet": "Form Responses 1",
+      "a1": "L6839",
+      "row": 6839,
+      "col": 12,
+      "before": "Miriam Tadesse",
+      "after": "Mariam Tadesse",
+      "caseId": "mariam-spelling"
+    },
+    {
+      "sheet": "Form Responses 1",
+      "a1": "L6842",
+      "row": 6842,
+      "col": 12,
+      "before": "Miriam Tadesse",
+      "after": "Mariam Tadesse",
+      "caseId": "mariam-spelling"
+    },
+    {
+      "sheet": "Form Responses 1",
+      "a1": "AT6705",
+      "row": 6705,
+      "col": 46,
+      "before": "No video release",
+      "after": "All Button Authors, All features, All workshop instructors - contract is not stored with video releases",
+      "caseId": "kyle-rights"
+    }
+  ],
+  "mariam": [
+    {
+      "sourceRow": 6823,
+      "titleRow": 4651,
+      "title": "B****",
+      "link": "https://drive.google.com/drive/u/0/folders/1L7oiio6q8D9R7ixzyetwu4KyX7kCC367",
+      "oldContentId": "Miriam Tadesse - B****"
+    },
+    {
+      "sourceRow": 6837,
+      "titleRow": 4663,
+      "title": "Black dont crack",
+      "link": "https://drive.google.com/file/d/1F-1M4k_M8yWeFQhEIRwGNNzL5VKwxt_t/view?usp=sharing",
+      "oldContentId": "Miriam Tadesse - Black dont crack"
+    },
+    {
+      "sourceRow": 6839,
+      "titleRow": 4665,
+      "title": "Inferno",
+      "link": "https://drive.google.com/file/d/1fyjeLTzV7uYd-CYHOFSMmXEL8QL5aXvr/view?usp=sharing",
+      "oldContentId": "Miriam Tadesse - Inferno"
+    },
+    {
+      "sourceRow": 6842,
+      "titleRow": 4668,
+      "title": "B****",
+      "link": "https://drive.google.com/file/d/1Ol-QKNrX7nHkEtqdwhMiSpdIomA3rInO/view?usp=sharing",
+      "oldContentId": "Miriam Tadesse - B****"
+    }
+  ],
+  "sourceEmail": "https://mail.google.com/mail/u/0/#all/FMfcgzQhWfXrsZpvZRPkVDTggCrnSHpn",
+  "mutationsExecuted": false,
+  "approvalReview": "Rejected: existing-production writes conflict with the standing new-sheets-only instruction",
+  "symone": "Already corrected; current registry and six title labels checked"
+}

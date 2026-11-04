@@ -145,3 +145,9 @@ Operational rules:
 The narrow production adapter is implemented and deployed to the test Helper, with history visible there and audit in a separate Helper-owned file. 45 focused tests pass. Live preparation verified the disabled state; an unauthorized register request was refused, with zero audit records and zero PAGES curation-source rows independently read back. No production registration or picker write has been executed.
 
 The next action is an explicitly approved exception to the prior “new sheets only” instruction: append one PAGES curation-link registration and refresh only the canonical close-event picker. Preserve formulas, existing registrations, closure state and reviews. Then verify the full affected state. Production withdrawal remains unverified until a specifically scoped live exercise; synthetic reversal and failure recovery passed earlier.
+
+### Eric's reported corrections and repair intake — 2026-11-04
+
+A fixed executor and read-only Helper report now stage five remaining reports from Eric's email; Symone's earlier correction was verified complete. The exact plan is 20 literal cells with separate before/after audit and targeted performer-picker refresh. Automatic approval review rejected production execution because of the standing new-sheets-only instruction; no repairs have been applied. Await the specific exception before retrying. The PAGES registration pilot remains separately disabled.
+
+[Reported repair plan and system roadmap](integrations/footage-helper/REPORTED_REPAIRS.md) records the source evidence, dependencies, extra Donte/Mariam issues, historical Garner alias and implementation boundaries. Next product slice: report issues from an event/title in Helper, catch folder/video and exact-identity mistakes during intake, then let the video team approve narrowly supported fixes with audit/undo. General issue intake and staff permissions are not implemented yet.
