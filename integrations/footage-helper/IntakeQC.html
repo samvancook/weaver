@@ -60,6 +60,7 @@
 
         <h3 class="section-title">Curation link registration — test workspace</h3>
         <p class="detail">Owner test: record this event’s verified Weaver task link and inspect its history. These controls write only to a separate test spreadsheet. Withdrawal keeps the audit trail and does not undo reviews in Weaver.</p>
+        <button type="button" id="curationInventoryHistory">Show live registration history</button>
         <button type="button" id="curationLivePreview">Preview live inventory change (read only)</button>
         <button type="button" id="curationSetup">Create / open test workspace</button>
         <button type="button" id="curationPreview">Preview link registration</button>
@@ -232,12 +233,12 @@
         if (!weaverEventName || curationBusy) return;
         const eventName = weaverEventName;
         curationBusy = true;
-        ['Setup','Preview','Register','Withdraw','Reconcile','History','LivePreview'].forEach(id => document.getElementById('curation'+id).disabled = true);
+        ['Setup','Preview','Register','Withdraw','Reconcile','History','LivePreview','InventoryHistory'].forEach(id => document.getElementById('curation'+id).disabled = true);
         const status = document.getElementById('curationRegistrationStatus');
-        status.textContent = 'Checking the test workspace…';
+        status.textContent = action==='livepreview'||action==='inventoryhistory'?'Reading live inventory registration…':'Checking the test workspace…';
         const finish = () => {
           curationBusy = false;
-          ['Setup','Preview','History','LivePreview'].forEach(id => document.getElementById('curation'+id).disabled = false);
+          ['Setup','Preview','History','LivePreview','InventoryHistory'].forEach(id => document.getElementById('curation'+id).disabled = false);
           return eventName === weaverEventName;
         };
         const runner = google.script.run.withSuccessHandler(r => {
@@ -248,8 +249,8 @@
           const descriptions = {
             PRODUCTION_PREVIEW_ONLY:'Live inventory preview only. Recording is not enabled.',
             PREVIEW:'Preview ready. The event link can be recorded in the test workspace.',
-            VERIFIED:'Test registration saved and verified.',
-            WITHDRAWN:'Test registration withdrawn. Its history is retained.',
+            VERIFIED:r.destination==='inventory'?'Inventory registration saved and verified.':'Test registration saved and verified.',
+            WITHDRAWN:r.destination==='inventory'?'Inventory registration withdrawn. Its history is retained.':'Test registration withdrawn. Its history is retained.',
             EXISTING_LINK_PRESERVED:'This event already has a curation link. It was preserved.',
             RECONCILIATION_REQUIRED:'The outcome needs a recheck. No additional registration will be written.',
             CHANGED_RECORD_PRESERVED:'The record changed. Withdrawal was refused and the record was preserved.',
@@ -261,14 +262,15 @@
           if(r.previewSummary) {const p=document.createElement('p');p.textContent=r.previewSummary;status.append(p);}
           if(r.message) {const p=document.createElement('p');p.textContent=r.message;status.append(p);}
           if(r.taskUrl) {const p=document.createElement('p');p.textContent='Event: '+r.eventName+' · Link: '+r.taskUrl;status.append(p);}
-          if(r.sandboxUrl) {const a=document.createElement('a');a.href=r.sandboxUrl;a.target='_blank';a.rel='noopener noreferrer';a.textContent='Open test spreadsheet and full Audit';status.append(a);}
+          if(r.sandboxUrl) {const a=document.createElement('a');a.href=r.sandboxUrl;a.target='_blank';a.rel='noopener noreferrer';a.textContent=r.destination==='inventory'?'Open live registration audit':'Open test spreadsheet and full Audit';status.append(a);}
           (r.existingLinks||[]).forEach(link => {const p=document.createElement('p');p.textContent='Existing link preserved: '+link.url;status.append(p);});
           (r.history||[]).slice(-20).forEach(entry => {const p=document.createElement('p');p.textContent=entry.at+' · '+entry.actor+' · '+entry.state+' · '+entry.operationId;status.append(p);});
           document.getElementById('curationRegister').disabled = !r.canRegister;
-          document.getElementById('curationWithdraw').disabled = r.state!=='VERIFIED' || !curationOperationId;
-          document.getElementById('curationReconcile').disabled = !curationOperationId || r.state!=='RECONCILIATION_REQUIRED';
+          document.getElementById('curationWithdraw').disabled = r.destination==='inventory' || r.state!=='VERIFIED' || !curationOperationId;
+          document.getElementById('curationReconcile').disabled = r.destination==='inventory' || !curationOperationId || r.state!=='RECONCILIATION_REQUIRED';
         }).withFailureHandler(err => {if(finish())status.textContent=(err.message||String(err))+' Use Show registration history / Preview before retrying.';});
-        if(action==='livepreview')runner.previewInventoryCurationRegistration(eventName);
+        if(action==='inventoryhistory')runner.getInventoryCurationRegistrationHistory(eventName);
+        else if(action==='livepreview')runner.previewInventoryCurationRegistration(eventName);
         else if(action==='setup')runner.setupCurationRegistrationSandbox(eventName);
         else if(action==='preview')runner.previewCurationRegistration(eventName);
         else if(action==='register')runner.registerCurationLinkSandbox(eventName,curationPreviewKey);
@@ -276,7 +278,7 @@
         else if(action==='reconcile')runner.reconcileCurationRegistration(eventName,curationOperationId);
         else runner.getCurationRegistrationHistory(eventName);
       }
-      ['Setup','Preview','Register','Withdraw','Reconcile','History','LivePreview'].forEach(id => document.getElementById('curation'+id).onclick=()=>runCurationRegistration(id.toLowerCase()));
+      ['Setup','Preview','Register','Withdraw','Reconcile','History','LivePreview','InventoryHistory'].forEach(id => document.getElementById('curation'+id).onclick=()=>runCurationRegistration(id.toLowerCase()));
       let weaverEventName = '';
       let weaverBusy = false;
       let weaverReportEligible = false;

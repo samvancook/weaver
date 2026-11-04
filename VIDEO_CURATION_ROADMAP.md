@@ -139,3 +139,9 @@ Operational rules:
 - Test Helper v53 includes a read-only live inventory preview. PAGES has no preflight blockers; MPMU already has a curation link and is closed, so preserve it.
 - No production writer has been enabled or implemented. Next: the narrow PAGES-only production adapter and scoped pilot, with its audit stored in a Helper-owned file. The remaining production boundary is explicit; synthetic tests do not establish live production reversal.
 - Full production-copy testing was rejected by automatic approval review. No full copy was made; the harness uses synthetic event records and the relevant formulas instead.
+
+### Prepared next step: PAGES-only live adapter, disabled (v54)
+
+The narrow production adapter is implemented and deployed to the test Helper, with history visible there and audit in a separate Helper-owned file. 45 focused tests pass. Live preparation verified the disabled state; an unauthorized register request was refused, with zero audit records and zero PAGES curation-source rows independently read back. No production registration or picker write has been executed.
+
+The next action is an explicitly approved exception to the prior “new sheets only” instruction: append one PAGES curation-link registration and refresh only the canonical close-event picker. Preserve formulas, existing registrations, closure state and reviews. Then verify the full affected state. Production withdrawal remains unverified until a specifically scoped live exercise; synthetic reversal and failure recovery passed earlier.
