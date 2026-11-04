@@ -61,7 +61,7 @@ function curationIntegrationSnapshot_(book,form,itemId) {
     eventsNeedingCuration:curationIntegrationColumn_(book,'Events',19),
     readyToClose:curationIntegrationColumn_(book,'Event Worksheet',10),
     closed:curationIntegrationColumn_(book,'Event Worksheet',9),
-    closePicker:form.getItemById(itemId).asMultipleChoiceItem().getChoices().map(function(c){return c.getValue();})};
+    closePicker:curationRegistrationChoiceValues_(form,itemId)};
 }
 function curationIntegrationVerifyDerived_(before,after,eventName,taskUrl,withdrawn) {
   function sameSet(a,b){return JSON.stringify(a.slice().sort())===JSON.stringify(b.slice().sort());}
@@ -120,4 +120,11 @@ function previewInventoryCurationRegistration(eventName) {
     plannedSource:{spreadsheetId:book.getId(),sheet:'Form Responses 1',action:'Add Curation Form',email:Session.getActiveUser().getEmail(),event:context.eventName,url:context.taskUrl,columns:['A','B','AV','AX','AY']},
     plannedEffect:{removeFromNeedsCuration:true,addToClosePicker:!isClosed,preserveClosedState:true,refreshOnlyCloseItemId:466810607},
     current:{closed:isClosed,needsCuration:needs.includes(context.eventName),eventsNeedsCuration:eventNeeds.includes(context.eventName),readyToClose:ready.includes(context.eventName),closePickerMatchesSource:pickerMatches,readyEventCount:ready.length,closePickerChoiceCount:picker.length}};
+}
+
+function curationRegistrationChoiceValues_(form,itemId) {
+  const item=form.getItemById(itemId);if(!item)throw new Error('Close picker is missing.');
+  const type=item.getType(),choiceItem=type===FormApp.ItemType.MULTIPLE_CHOICE?item.asMultipleChoiceItem():type===FormApp.ItemType.LIST?item.asListItem():type===FormApp.ItemType.CHECKBOX?item.asCheckboxItem():null;
+  if(!choiceItem)throw new Error('Close picker type changed.');
+  return choiceItem.getChoices().map(function(c){return c.getValue();});
 }

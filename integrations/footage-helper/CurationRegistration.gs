@@ -22,7 +22,7 @@ function curationRegistrationEngine_(store, action, input) {
   const latestById={};history.forEach(function(r){latestById[r.operationId]=r;});
   const operations=Object.keys(latestById).map(function(id){return latestById[id];});
   function result(state, extra) {return Object.assign({state:state,eventName:context.eventName,
-    taskUrl:context.taskUrl,destination:'sandbox',sandboxUrl:store.url(),history:store.history(context.eventName)},extra||{});}
+    taskUrl:context.taskUrl,destination:store.destination?store.destination():'sandbox',sandboxUrl:store.url(),auditUrl:store.auditUrl?store.auditUrl():'',history:store.history(context.eventName)},extra||{});}
   function log(op, state, details) {
     const entry={operationId:op.operationId,eventName:context.eventName,action:action,state:state,
       actor:store.actor(),at:store.now(),details:Object.assign({operation:op},details||{})};
@@ -54,6 +54,7 @@ function curationRegistrationEngine_(store, action, input) {
       actor:store.actor(),plannedAt:store.now(),sourceEventId:context.sourceEventId,
       prioritySetId:context.prioritySetId,sourceSnapshot:context.sourceSnapshot,
       before:active,destinationId:store.id()};
+    if(store.authorization)op.authorization=store.authorization();
     log(op,'INTENT');
     try {
       const source=store.append(op);
@@ -155,14 +156,20 @@ function curationRegistrationStore_(eventName,action) {
   return curationRegistrationSpreadsheetStore_(book,context);
 }
 
-// Shared test adapter. The production ID is forbidden even for internal callers.
-function curationRegistrationSpreadsheetStore_(book,context) {
+// Shared row/audit adapter. Production requires the PAGES pilot and a separate audit file.
+function curationRegistrationSpreadsheetStore_(book,context,options) {
+  options=options||{};
   const id=book.getId();
-  if(id===RETITLE_CONFIG.spreadsheetId)throw new Error('Production inventory is not an allowed destination.');
-  const source=book.getSheetByName('Form Responses 1'),audit=book.getSheetByName('Audit'),view=book.getSheetByName('Curation');
-  if(!source||!audit||!view)throw new Error('Sandbox structure is incomplete.');
+  const production=id===RETITLE_CONFIG.spreadsheetId;
+  if(production){
+    if(!options.pilot||!options.auditBook||options.auditBook.getId()===id)throw new Error('Production inventory is not an allowed destination.');
+    curationProductionGuard_(context.eventName,false);
+  }
+  function guardWrite(){if(production)curationProductionGuard_(context.eventName,options.action==='register');}
+  const source=book.getSheetByName('Form Responses 1'),audit=(options.auditBook||book).getSheetByName('Audit'),view=book.getSheetByName('Curation');
+  if(!source||!audit||!view)throw new Error('Registration workspace structure is incomplete.');
   const sourceWidth=Math.max(51,source.getLastColumn());
-  function rows(){const n=source.getLastRow();return n<2?[]:source.getRange(2,1,n-1,sourceWidth).getValues().map(function(v,i){return {row:i+2,values:v,note:source.getRange(i+2,1).getNote()};});}
+  function rows(){const n=source.getLastRow();if(n<2)return [];const values=source.getRange(2,1,n-1,sourceWidth).getValues(),notes=source.getRange(2,1,n-1,1).getNotes();return values.map(function(v,i){return {row:i+2,values:v,note:notes[i][0]};});}
   function expected(op,withdrawn){const row=new Array(sourceWidth).fill('');row[0]=new Date(op.plannedAt);row[1]=withdrawn?'Withdrawn Weaver curation link':'Add Curation Form';row[47]=op.actor;row[49]=op.eventName;row[50]=op.taskUrl;return row;}
   function own(op){const found=rows().filter(function(r){return r.note==='helper-curation:'+op.operationId || (r.values[0] instanceof Date && r.values[0].toISOString()===op.plannedAt && r.values[47]===op.actor && r.values[49]===op.eventName && r.values[50]===op.taskUrl);});if(found.length!==1)return null;return found[0];}
   function same(a,b){return JSON.stringify(a)===JSON.stringify(b);}
@@ -172,10 +179,10 @@ function curationRegistrationSpreadsheetStore_(book,context) {
     active:function(name){return rows().filter(function(r){return r.values[1]==='Add Curation Form'&&curationRegistrationKey_(r.values[49])===curationRegistrationKey_(name);}).map(function(r){return {row:r.row,eventName:r.values[49],url:r.values[50],operationId:r.note.replace(/^helper-curation:/,'')};});},
     history:function(name){const n=audit.getLastRow();return n<2?[]:audit.getRange(2,1,n-1,7).getValues().filter(function(v){return curationRegistrationKey_(v[1])===curationRegistrationKey_(name);}).map(function(v){return {operationId:v[0],eventName:v[1],action:v[2],state:v[3],actor:v[4],at:v[5],details:JSON.parse(v[6])};});},
     audit:function(entry){const values=[entry.operationId,entry.eventName,entry.action,entry.state,entry.actor,entry.at,JSON.stringify(entry.details)];audit.appendRow(values);SpreadsheetApp.flush();if(!same(audit.getRange(audit.getLastRow(),1,1,7).getValues()[0],values))throw new Error('Audit entry readback failed.');},
-    append:function(op){source.appendRow(expected(op,false));SpreadsheetApp.flush();const r=own(op);if(!r)throw new Error('Written source row could not be uniquely identified.');source.getRange(r.row,1).setNote('helper-curation:'+op.operationId);return {row:r.row,after:r.values};},
+    append:function(op){guardWrite();source.appendRow(expected(op,false));SpreadsheetApp.flush();const r=own(op);if(!r)throw new Error('Written source row could not be uniquely identified.');source.getRange(r.row,1).setNote('helper-curation:'+op.operationId);return {row:r.row,after:r.values};},
     sourceState:function(op){const r=own(op);return !r?'missing':same(r.values,expected(op,false))?'active':same(r.values,expected(op,true))?'withdrawn':'changed';},
     verify:function(op,withdrawn){const r=own(op);if(!r||!same(r.values,expected(op,withdrawn)))return false;SpreadsheetApp.flush();const n=view.getLastRow(),links=n<2?[]:view.getRange(2,1,n-1,2).getDisplayValues();const present=links.some(function(v){return v[0]===op.eventName&&v[1]===op.taskUrl;});return withdrawn?!present:present;},
-    withdraw:function(op){const r=own(op);if(!r||!same(r.values,expected(op,false)))throw new Error('The owned source row changed; nothing was withdrawn.');source.getRange(r.row,2).setValue('Withdrawn Weaver curation link');SpreadsheetApp.flush();return {row:r.row,before:r.values,after:expected(op,true)};}
+    withdraw:function(op){guardWrite();const r=own(op);if(!r||!same(r.values,expected(op,false)))throw new Error('The owned source row changed; nothing was withdrawn.');source.getRange(r.row,2).setValue('Withdrawn Weaver curation link');SpreadsheetApp.flush();return {row:r.row,before:r.values,after:expected(op,true)};}
   };
 }
 

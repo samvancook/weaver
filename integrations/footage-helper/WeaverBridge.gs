@@ -97,6 +97,12 @@ function doPost(e) {
     case 'registerCurationLinkSandbox': result=registerCurationLinkSandbox(input.eventName,input.previewKey);break;
     case 'withdrawCurationLinkSandbox': result=withdrawCurationLinkSandbox(input.eventName,input.operationId);break;
     case 'reconcileCurationRegistration': result=reconcileCurationRegistration(input.eventName,input.operationId);break;
+    case 'prepareInventoryCurationRegistration': result=prepareInventoryCurationRegistration(input.eventName);break;
+    case 'authorizeInventoryCurationPilot': result=authorizeInventoryCurationPilot(input.eventName,input.previewKey);break;
+    case 'registerInventoryCurationLink': result=registerInventoryCurationLink(input.eventName,input.previewKey);break;
+    case 'withdrawInventoryCurationLink': result=withdrawInventoryCurationLink(input.eventName,input.operationId);break;
+    case 'repairInventoryCurationDerivedState': result=repairInventoryCurationDerivedState(input.eventName,input.operationId);break;
+    case 'getInventoryCurationRegistrationHistory': result=getInventoryCurationRegistrationHistory(input.eventName);break;
     case 'previewInventoryCurationRegistration': result=previewInventoryCurationRegistration(input.eventName);break;
     case 'testCurationRegistrationIntegration': result=testCurationRegistrationIntegration(input.fixture);break;
     case 'getCurationRegistrationHistory': result=getCurationRegistrationHistory(input.eventName);break;

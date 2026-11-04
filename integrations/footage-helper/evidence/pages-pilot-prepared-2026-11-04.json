@@ -1,0 +1,18 @@
+{
+  "verifiedOn": "2026-11-04T16:09:07.692Z",
+  "helperVersion": 54,
+  "event": "PAGES footage from Rudy Francisco 2026",
+  "taskUrl": "https://footage-bridge---weaver-iasomqy6ja-uc.a.run.app/?videoSet=pages-matam-san-diego-2026-labc",
+  "auditUrl": "https://docs.google.com/spreadsheets/d/1bzvyiq8p2sGqJiWTTzSWo9lOvmIsVjyrug9VvNW_dwo/edit",
+  "productionEnabled": false,
+  "canRegister": false,
+  "historyRows": 0,
+  "unauthorizedRegister": "Refused: production pilot is not authorized",
+  "independentSheetReadback": {
+    "auditRows": 0,
+    "sourceSearch": "Form Responses 1 AX1:AY7002",
+    "matchingPagesCurationRows": 0
+  },
+  "normalHelperVersion": 43,
+  "productionExecution": "Not authorized or attempted; only refusal path was tested"
+}

@@ -67,3 +67,19 @@ Current live results on 2026-11-04:
 - Vertical Versions - MPMU 2026 Finals: already has a curation link and is closed. Preserve its registration and closed state; do not replace its existing link as part of the pilot.
 
 Remaining work: implement the one-event production adapter with its audit in a Helper-owned file, then conduct an explicitly scoped PAGES pilot. Append only the timestamp/action/email/event/URL source record; refresh only close-event picker 466810607 from the existing formula result. Do not modify formulas, execute the broad submit handler, close an event, or alter existing registrations. These Helper-origin records would be source-sheet actions with their own audit, not Google Forms responses; document that distinction rather than claiming Forms response deletion reverses them. Production withdrawal must preserve history and verify every affected view/picker as the synthetic harness now does.
+
+## PAGES-only production adapter prepared — test Helper v54
+
+`CurationRegistrationPilot.gs` now implements the narrow adapter. It remains **disabled and unapplied**. The backend permits only the exact PAGES event and the deploying owner. It requires authorization of the exact fresh preview before registering. A second append is prohibited once the pilot has an INTENT, including after withdrawal. Current receipt validation is required to register, while history and owned-record withdrawal do not depend on a later receipt remaining current.
+
+The source action appends only timestamp A, action B (`Add Curation Form`), actor AV, exact event AX, and task URL AY; all other source fields are blank. The only form mutation is refresh of close-event item 466810607 from existing Event Worksheet J. It does not create a Forms response, invoke the general form-submit handler, edit formulas, update FV indexing, close an event, change a score, or send anything to Poetry Please/calendars.
+
+The separate Helper-owned audit stores the intent, authorization, source before/after, exact operation ID, derived readback and outcomes. It stores hashes of unrelated event lists instead of copying those lists into the audit. Withdrawal requires the unchanged Helper-created source row; it changes that row's action, preserves the original fields/history, refreshes the same picker, and verifies restoration. Unrelated inventory/picker changes cause refusal or an unresolved outcome; do not claim automatic reversal is guaranteed after other work has changed those dependencies.
+
+Verified live, without authorizing the pilot: preparation returned `productionEnabled=false`, `canRegister=false`, and zero history entries. A register request was refused before a production write. Independent readback confirmed zero audit records and no PAGES curation-source row in AX:AY through the current source bounds (7,002 rows). 45 focused tests pass. Production registration/withdrawal themselves remain unverified until the scoped pilot is approved and executed.
+
+Prepared audit: https://docs.google.com/spreadsheets/d/1bzvyiq8p2sGqJiWTTzSWo9lOvmIsVjyrug9VvNW_dwo/edit
+
+Execution after approval: prepare a fresh preview; authorize its hash; register once; read back source, audit, Curation, both needs-curation lists, closed state and close picker. A lost response requires history/readback before retry. The owner can inspect the separate audit through **Show live registration history** in the test Helper. Withdrawal and derived recovery are owner-only backend actions in this MVP; normal employee Helper remains v43.
+
+Approval needed: the user's earlier instruction restricts writes to newly created sheets. The first live pilot therefore needs a specific exception to append this one registration in the existing inventory and refresh its live close-event picker. Do not infer approval from the existence of the adapter or its deployment.
