@@ -20,8 +20,8 @@
       <h1>Intake QC</h1>
       <p class="intro">
         Review an event's intake before closing it. This only shows what was entered and flags
-        possible gaps &mdash; it never changes anything, and closing stays a manual step in the
-        form.
+        possible gaps. Production inventory is read-only here; the labelled test controls use a
+        separate spreadsheet. Closing stays a manual step in the form.
       </p>
 
       <section class="panel">
@@ -57,6 +57,16 @@
         <button type="button" id="weaverSend" disabled>Link / send event to Weaver</button>
         <button type="button" id="weaverCheck" disabled>Check Weaver receipt</button>
         <div id="weaverStatus" class="detail" role="status"></div>
+
+        <h3 class="section-title">Curation link registration — test workspace</h3>
+        <p class="detail">Owner test: record this event’s verified Weaver task link and inspect its history. These controls write only to a separate test spreadsheet. Withdrawal keeps the audit trail and does not undo reviews in Weaver.</p>
+        <button type="button" id="curationSetup">Create / open test workspace</button>
+        <button type="button" id="curationPreview">Preview link registration</button>
+        <button type="button" id="curationRegister" disabled>Register in test workspace</button>
+        <button type="button" id="curationWithdraw" disabled>Withdraw test registration</button>
+        <button type="button" id="curationReconcile" disabled>Recheck uncertain result</button>
+        <button type="button" id="curationHistory">Show registration history</button>
+        <div id="curationRegistrationStatus" class="detail" role="status"></div>
 
         <h3 class="section-title">Review checklist</h3>
         <div id="checklist" class="results"></div>
@@ -211,6 +221,58 @@
           .getIntakeReport(eventName);
       }
 
+      let curationPreviewKey = '', curationOperationId = '', curationBusy = false;
+      function resetCurationRegistration() {
+        curationPreviewKey = ''; curationOperationId = '';
+        document.getElementById('curationRegistrationStatus').replaceChildren();
+        ['Register','Withdraw','Reconcile'].forEach(id => document.getElementById('curation'+id).disabled = true);
+      }
+      function runCurationRegistration(action) {
+        if (!weaverEventName || curationBusy) return;
+        const eventName = weaverEventName;
+        curationBusy = true;
+        ['Setup','Preview','Register','Withdraw','Reconcile','History'].forEach(id => document.getElementById('curation'+id).disabled = true);
+        const status = document.getElementById('curationRegistrationStatus');
+        status.textContent = 'Checking the test workspace…';
+        const finish = () => {
+          curationBusy = false;
+          ['Setup','Preview','History'].forEach(id => document.getElementById('curation'+id).disabled = false);
+          return eventName === weaverEventName;
+        };
+        const runner = google.script.run.withSuccessHandler(r => {
+          if (!finish()) return;
+          curationPreviewKey = r.previewKey || '';
+          curationOperationId = r.operationId || '';
+          status.replaceChildren();
+          const descriptions = {
+            PREVIEW:'Preview ready. The event link can be recorded in the test workspace.',
+            VERIFIED:'Test registration saved and verified.',
+            WITHDRAWN:'Test registration withdrawn. Its history is retained.',
+            EXISTING_LINK_PRESERVED:'This event already has a curation link. It was preserved.',
+            RECONCILIATION_REQUIRED:'The outcome needs a recheck. No additional registration will be written.',
+            CHANGED_RECORD_PRESERVED:'The record changed. Withdrawal was refused and the record was preserved.',
+            WITHDRAW_REFUSED:'The record changed. It needs review before withdrawal.',
+            SANDBOX_CREATED:'Test workspace created. Production inventory was not changed.',
+            HISTORY:'No Helper registration history for this event yet.'
+          };
+          const state = document.createElement('p'); state.textContent = (descriptions[r.state]||r.state) + (r.error ? ': '+r.error : ''); status.append(state);
+          if(r.message) {const p=document.createElement('p');p.textContent=r.message;status.append(p);}
+          if(r.taskUrl) {const p=document.createElement('p');p.textContent='Event: '+r.eventName+' · Link: '+r.taskUrl;status.append(p);}
+          if(r.sandboxUrl) {const a=document.createElement('a');a.href=r.sandboxUrl;a.target='_blank';a.rel='noopener noreferrer';a.textContent='Open test spreadsheet and full Audit';status.append(a);}
+          (r.existingLinks||[]).forEach(link => {const p=document.createElement('p');p.textContent='Existing link preserved: '+link.url;status.append(p);});
+          (r.history||[]).slice(-20).forEach(entry => {const p=document.createElement('p');p.textContent=entry.at+' · '+entry.actor+' · '+entry.state+' · '+entry.operationId;status.append(p);});
+          document.getElementById('curationRegister').disabled = !r.canRegister;
+          document.getElementById('curationWithdraw').disabled = r.state!=='VERIFIED' || !curationOperationId;
+          document.getElementById('curationReconcile').disabled = !curationOperationId || r.state!=='RECONCILIATION_REQUIRED';
+        }).withFailureHandler(err => {if(finish())status.textContent=(err.message||String(err))+' Use Show registration history / Preview before retrying.';});
+        if(action==='setup')runner.setupCurationRegistrationSandbox(eventName);
+        else if(action==='preview')runner.previewCurationRegistration(eventName);
+        else if(action==='register')runner.registerCurationLinkSandbox(eventName,curationPreviewKey);
+        else if(action==='withdraw')runner.withdrawCurationLinkSandbox(eventName,curationOperationId);
+        else if(action==='reconcile')runner.reconcileCurationRegistration(eventName,curationOperationId);
+        else runner.getCurationRegistrationHistory(eventName);
+      }
+      ['Setup','Preview','Register','Withdraw','Reconcile','History'].forEach(id => document.getElementById('curation'+id).onclick=()=>runCurationRegistration(id.toLowerCase()));
       let weaverEventName = '';
       let weaverBusy = false;
       let weaverReportEligible = false;
@@ -345,6 +407,7 @@
       document.getElementById('weaverSend').onclick = () => runWeaver('send');
       document.getElementById('weaverCheck').onclick = () => runWeaver('check');
       function renderReport(r) {
+        resetCurationRegistration();
         weaverEventName = r.eventName;
         weaverReportEligible = !!r.event && !!r.titles.length;
         document.getElementById('weaverPreview').disabled = !weaverReportEligible || weaverBusy;

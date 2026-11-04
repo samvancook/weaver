@@ -1,0 +1,30 @@
+{
+  "verifiedOn": "2026-11-04",
+  "scope": "Helper-owned sandbox; production recording disabled",
+  "initialTestVersion": 50,
+  "uiVersion": 51,
+  "normalEmployeeVersion": 43,
+  "spreadsheetId": "1oEl-qQ4LpKnwuoBamEk8Dzhcwpl_BdDmqQdxS_knm0g",
+  "operationId": "ddd147d3-1143-4d5c-aeed-3130060fa059",
+  "sourceRows": 1,
+  "effectiveCurationRows": 0,
+  "auditRows": 6,
+  "retainedSource": {
+    "action": "Withdrawn Weaver curation link",
+    "actor": "sam@buttonpoetry.com",
+    "event": "PAGES footage from Rudy Francisco 2026",
+    "url": "https://footage-bridge---weaver-iasomqy6ja-uc.a.run.app/?videoSet=pages-matam-san-diego-2026-labc"
+  },
+  "auditStates": [
+    "INTENT",
+    "SOURCE_WRITTEN",
+    "VERIFIED",
+    "WITHDRAW_INTENT",
+    "WITHDRAW_SOURCE_WRITTEN",
+    "WITHDRAWN"
+  ],
+  "duplicateRegistration": "EXISTING_LINK_PRESERVED",
+  "repeatedWithdrawal": "WITHDRAWN; no additional audit entries",
+  "mpmuExistingForm": "EXISTING_LINK_PRESERVED",
+  "failureInjection": "local test stores only; not injected into Google services"
+}

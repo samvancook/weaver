@@ -1,6 +1,18 @@
 # Weaver Video Curation Roadmap
 
-Last reviewed: 2026-10-01
+Last reviewed: 2026-11-04 (registration work; older validation snapshots retain their dates)
+
+## 2026-11-04: Audited Helper curation-link registration
+
+Goal: after a verified event connection, Helper records the event-specific Weaver task URL as the curation destination. This does not approve videos, close the event, or publish content.
+
+1. Implement and exercise the operation in a separate Helper-owned test spreadsheet: preview, register, read back source plus effective Curation view, inspect history, withdraw, verify absence from the effective view.
+2. Verify duplicate clicks, stale previews, interrupted writes, audit failures, changed records, and recovery. Keep uncertain results unresolved until readback confirms them.
+3. Show operation ID, actor, time, destination and status in Helper, with a link to the durable audit. Withdrawal preserves historical source data and audit entries.
+4. Preserve all existing Google Form registrations. Do not replace them automatically.
+5. Before enabling production, implement the narrow canonical registration adapter and prove its derived-state reversal. The existing bound handler also indexes FV and updates closure state; do not call it wholesale. Production registration remains disabled in this implementation.
+
+Implementation/runbook: [Curation registration](integrations/footage-helper/CURATION_REGISTRATION.md). Current code is a sandbox implementation; local tests alone do not establish live deployment or production readiness.
 
 ## Task Routing Resolution
 
