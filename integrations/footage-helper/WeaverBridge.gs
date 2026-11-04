@@ -1,4 +1,5 @@
-// Inventory is read-only. Only receipt pointers are stored in Script Properties.
+// Production inventory is read-only. Receipt pointers and the test-workspace ID
+// are stored in Script Properties; CurationRegistration writes only to that workspace.
 // Configure WEAVER_BRIDGE_URL to the reviewed Weaver HTTPS origin, and
 // WEAVER_BRIDGE_ENABLED=true after the receiver and OAuth trust are configured.
 function weaverManifest_(eventName) {
@@ -87,8 +88,19 @@ function weaverReceiptForUi_(r) {
 function doPost(e) {
   weaverRequireOwner_();
   const input = JSON.parse(e && e.postData && e.postData.contents || '{}');
-  if (input.action !== 'linkWeaverEvent' || !String(input.eventName || '').trim()) throw new Error('Unsupported Helper action.');
-  return ContentService.createTextOutput(JSON.stringify(sendEventToWeaver(input.eventName)))
+  if (!String(input.eventName || '').trim()) throw new Error('Event name is required.');
+  let result;
+  switch(input.action) {
+    case 'linkWeaverEvent': result=sendEventToWeaver(input.eventName);break;
+    case 'setupCurationRegistrationSandbox': result=setupCurationRegistrationSandbox(input.eventName);break;
+    case 'previewCurationRegistration': result=previewCurationRegistration(input.eventName);break;
+    case 'registerCurationLinkSandbox': result=registerCurationLinkSandbox(input.eventName,input.previewKey);break;
+    case 'withdrawCurationLinkSandbox': result=withdrawCurationLinkSandbox(input.eventName,input.operationId);break;
+    case 'reconcileCurationRegistration': result=reconcileCurationRegistration(input.eventName,input.operationId);break;
+    case 'getCurationRegistrationHistory': result=getCurationRegistrationHistory(input.eventName);break;
+    default: throw new Error('Unsupported Helper action.');
+  }
+  return ContentService.createTextOutput(JSON.stringify(result))
     .setMimeType(ContentService.MimeType.JSON);
 }
 
