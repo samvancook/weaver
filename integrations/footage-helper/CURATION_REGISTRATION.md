@@ -39,3 +39,31 @@ Live proof must additionally record deployment version, owned test workbook URL,
 Test Helper version 50 completed the PAGES registration → duplicate click → history → withdrawal → repeated withdrawal cycle. Operation `ddd147d3-1143-4d5c-aeed-3130060fa059` has exactly six audit entries. Independent Sheets readback confirmed one retained source row, action `Withdrawn Weaver curation link`, original event/URL intact, and zero effective Curation rows. MPMU preview preserved its existing Google Form link without writing a registration. Normal employee deployment remained version 43.
 
 [Owned test spreadsheet / audit](https://docs.google.com/spreadsheets/d/1oEl-qQ4LpKnwuoBamEk8Dzhcwpl_BdDmqQdxS_knm0g/edit). Runtime failures were exercised with injected stores in local tests; they were not deliberately injected into the live Google service. Production derived-state reversal is still unverified and production registration is disabled.
+
+## Derived-state integration — 2026-11-04
+
+Test Helper v52/v53 adds `CurationRegistrationIntegration.gs`. It is a synthetic-only harness with three fixed events, the relevant current inventory formulas, and a newly created Google Form whose responses are closed. It does not copy production event or rights records. Automatic approval review rejected a full production-workbook copy into the shared test folder; that copy was not made.
+
+Verified live:
+
+- Open synthetic event: registration removes the event from both needs-curation lists, adds its URL to Curation, adds the event to Event Worksheet J and the test close-event picker, and preserves the closed-event list. Withdrawal restores the exact prior snapshot.
+- Closed synthetic event: registration adds its link, but never makes it available to close or reopens it. Withdrawal restores the prior snapshot.
+- Existing-link event: preview preserves its link; no registration is written.
+- Duplicate register clicks: no second source row or audit operation.
+- Injected failure before the test form setter: the source remains saved and the operation becomes unresolved. Repeated registration and read-only reconciliation do not duplicate or finish the mutation. Explicit `repairDerived` records a recovery intent, refreshes the picker from the worksheet, and verifies the result without appending a source row. The same scenario was tested and recovered after withdrawal.
+
+Final independent Sheets readback: three retained Helper-created source rows are withdrawn, one baseline legacy link remains effective, the closed-event list is unchanged, and 26 audit entries remain across the three operations (8, 8, and 10). This is proof against the relevant formulas and a real test Form, not proof of a production write or of every inventory consumer.
+
+Fixture workbook: https://docs.google.com/spreadsheets/d/1HWfo6NGv7MIsSJOAusHocB7OH8C5JbBNuyKesTsI27U/edit
+Fixture Form: https://docs.google.com/forms/d/1fm9iGoTU7kZnjsGPtgBaRT1y8ZUuBIMdiWO5dqN0baE/edit
+
+## Current production preview and next slice
+
+The owner can use **Preview live inventory change (read only)** in the test Helper. It reconstructs the current Weaver connection, checks existing source registrations, compares the two needs-curation lists, checks event closure consistency, and compares the canonical close-event picker with Event Worksheet J. It returns the planned source fields and effects but never appends a row or calls a form setter. Production writes remain disabled; the shared spreadsheet store still rejects the production ID.
+
+Current live results on 2026-11-04:
+
+- PAGES footage from Rudy Francisco 2026: current Weaver receipt; no existing curation link; open; present in both needs-curation lists; not ready to close; picker matches the worksheet. No preflight blockers. This is a candidate for the first narrow production pilot, not an assessment of event completeness or curation approval.
+- Vertical Versions - MPMU 2026 Finals: already has a curation link and is closed. Preserve its registration and closed state; do not replace its existing link as part of the pilot.
+
+Remaining work: implement the one-event production adapter with its audit in a Helper-owned file, then conduct an explicitly scoped PAGES pilot. Append only the timestamp/action/email/event/URL source record; refresh only close-event picker 466810607 from the existing formula result. Do not modify formulas, execute the broad submit handler, close an event, or alter existing registrations. These Helper-origin records would be source-sheet actions with their own audit, not Google Forms responses; document that distinction rather than claiming Forms response deletion reverses them. Production withdrawal must preserve history and verify every affected view/picker as the synthetic harness now does.

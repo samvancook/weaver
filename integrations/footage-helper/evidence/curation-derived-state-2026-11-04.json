@@ -1,0 +1,106 @@
+{
+  "verifiedOn": "2026-11-04",
+  "testHelperVersions": [
+    52,
+    53
+  ],
+  "normalHelperVersion": 43,
+  "scope": "Synthetic events, live Google Sheets formulas and owned test Form; production preflight is read-only",
+  "syntheticWorkbook": "https://docs.google.com/spreadsheets/d/1HWfo6NGv7MIsSJOAusHocB7OH8C5JbBNuyKesTsI27U/edit",
+  "syntheticForm": "https://docs.google.com/forms/d/1fm9iGoTU7kZnjsGPtgBaRT1y8ZUuBIMdiWO5dqN0baE/edit",
+  "productionWrites": false,
+  "openAndClosedCycles": [
+    {
+      "event": "TEST ONLY — open event",
+      "operationId": "3ccdd79f-7f72-40c2-90f6-a211f7736710",
+      "state": "WITHDRAWN",
+      "auditRows": 8
+    },
+    {
+      "event": "TEST ONLY — closed event",
+      "operationId": "1a91659d-2765-4235-a8d3-167713e222a3",
+      "state": "WITHDRAWN",
+      "auditRows": 8
+    }
+  ],
+  "failureRecovery": {
+    "operationId": "93f3e7cb-e24c-4542-8ce0-61e1d4dd7435",
+    "state": "WITHDRAWN",
+    "sourceAppendCount": 1,
+    "auditStates": [
+      "INTENT",
+      "SOURCE_WRITTEN",
+      "UNCERTAIN",
+      "DERIVED_REPAIR_INTENT",
+      "VERIFIED",
+      "WITHDRAW_INTENT",
+      "WITHDRAW_SOURCE_WRITTEN",
+      "UNCERTAIN_WITHDRAW",
+      "DERIVED_REPAIR_INTENT",
+      "WITHDRAWN"
+    ]
+  },
+  "finalSnapshot": {
+    "curationLinks": [
+      [
+        "TEST ONLY — existing curation event",
+        "https://example.invalid/legacy-curation"
+      ]
+    ],
+    "needingCuration": [
+      "TEST ONLY — open event",
+      "TEST ONLY — closed event"
+    ],
+    "eventsNeedingCuration": [
+      "TEST ONLY — open event",
+      "TEST ONLY — closed event"
+    ],
+    "readyToClose": [
+      "TEST ONLY — existing curation event"
+    ],
+    "closed": [
+      "TEST ONLY — closed event"
+    ],
+    "closePicker": [
+      "TEST ONLY — existing curation event"
+    ]
+  },
+  "productionPreflight": [
+    {
+      "eventName": "PAGES footage from Rudy Francisco 2026",
+      "blockers": [],
+      "current": {
+        "closed": false,
+        "needsCuration": true,
+        "eventsNeedsCuration": true,
+        "readyToClose": false,
+        "closePickerMatchesSource": true,
+        "readyEventCount": 0,
+        "closePickerChoiceCount": 1
+      },
+      "productionEnabled": false
+    },
+    {
+      "eventName": "Vertical Versions - MPMU 2026 Finals",
+      "blockers": [
+        "An existing curation link must be preserved.",
+        "The two needs-curation lists do not both contain this exact event."
+      ],
+      "current": {
+        "closed": true,
+        "needsCuration": false,
+        "eventsNeedsCuration": false,
+        "readyToClose": false,
+        "closePickerMatchesSource": true,
+        "readyEventCount": 0,
+        "closePickerChoiceCount": 1
+      },
+      "productionEnabled": false
+    }
+  ],
+  "independentSheetReadback": {
+    "withdrawnSourceRows": 3,
+    "baselineEffectiveLinks": 1,
+    "auditRows": 26
+  }
+}

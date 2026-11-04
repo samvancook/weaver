@@ -131,3 +131,11 @@ Operational rules:
 
 - Continue edition and title normalization decisions in `CATALOG_RECONCILIATION_ROADMAP.md`.
 - Keep catalog ambiguity separate from missing excerpt coverage; neither should be inferred from a partial consumer export.
+
+### 2026-11-04 follow-up: derived states and live preflight
+
+- Synthetic-only integration passed against the relevant live formulas and a real, separate Google Form: open-event registration/withdrawal updates both needs-curation lists, Curation, Event Worksheet J and the close picker; closed-event registration never reopens or requeues the event.
+- Live synthetic failure injection proved recovery after picker failures in both directions without another source append. Three withdrawn source rows and 26 retained audit entries were independently read back.
+- Test Helper v53 includes a read-only live inventory preview. PAGES has no preflight blockers; MPMU already has a curation link and is closed, so preserve it.
+- No production writer has been enabled or implemented. Next: the narrow PAGES-only production adapter and scoped pilot, with its audit stored in a Helper-owned file. The remaining production boundary is explicit; synthetic tests do not establish live production reversal.
+- Full production-copy testing was rejected by automatic approval review. No full copy was made; the harness uses synthetic event records and the relevant formulas instead.

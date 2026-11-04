@@ -97,6 +97,8 @@ function doPost(e) {
     case 'registerCurationLinkSandbox': result=registerCurationLinkSandbox(input.eventName,input.previewKey);break;
     case 'withdrawCurationLinkSandbox': result=withdrawCurationLinkSandbox(input.eventName,input.operationId);break;
     case 'reconcileCurationRegistration': result=reconcileCurationRegistration(input.eventName,input.operationId);break;
+    case 'previewInventoryCurationRegistration': result=previewInventoryCurationRegistration(input.eventName);break;
+    case 'testCurationRegistrationIntegration': result=testCurationRegistrationIntegration(input.fixture);break;
     case 'getCurationRegistrationHistory': result=getCurationRegistrationHistory(input.eventName);break;
     default: throw new Error('Unsupported Helper action.');
   }
