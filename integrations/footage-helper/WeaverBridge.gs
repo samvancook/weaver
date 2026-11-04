@@ -91,6 +91,11 @@ function doPost(e) {
   if (!String(input.eventName || '').trim()) throw new Error('Event name is required.');
   let result;
   switch(input.action) {
+    case 'previewEricReportedRepairs': result=previewEricReportedRepairs();break;
+    case 'applyEricReportedRepairs': result=applyEricReportedRepairs(input.previewKey);break;
+    case 'recheckEricReportedRepairs': result=recheckEricReportedRepairs();break;
+    case 'undoEricReportedRepairs': result=undoEricReportedRepairs(input.operationId);break;
+    case 'getEricReportedRepairReport': result=getEricReportedRepairReport();break;
     case 'linkWeaverEvent': result=sendEventToWeaver(input.eventName);break;
     case 'setupCurationRegistrationSandbox': result=setupCurationRegistrationSandbox(input.eventName);break;
     case 'previewCurationRegistration': result=previewCurationRegistration(input.eventName);break;
