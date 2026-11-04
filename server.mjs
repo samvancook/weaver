@@ -8,7 +8,7 @@ import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildReviewerProgressExport, buildWeaverVideoImport, classifyDriveFolderPath, driveFileId, listKnownVideoAssets, parsePoetryPleaseVideoImport, parsePoetryPleaseVideoReceipt, poetryPleaseVideoIdForSourceFile, reconcileVideoReviews, requiresManualVideoIdentityReview, resolveCurrentVideoFileId, resolveVideoReviewSourceFileId } from "./video_curation_handoff.mjs";
+import { assertVideoClaimMatchesRecord, assertVideoImportPreflight, assertVideoImportReadback, buildReviewerProgressExport, buildWeaverVideoImport, classifyDriveFolderPath, driveFileId, listKnownVideoAssets, parsePoetryPleaseVideoImport, parsePoetryPleaseVideoReceipt, poetryPleaseVideoIdForSourceFile, reconcileVideoReviews, requiresManualVideoIdentityReview, resolveCurrentVideoFileId, resolveVideoReviewSourceFileId } from "./video_curation_handoff.mjs";
 import { verifyProgressExportCaller } from "./weaver_progress_auth.mjs";
 import { findApprovedTextExcerptMatch } from "./video_excerpt_folding.mjs";
 import { poemKeyForExcerptText, POEM_KEY_SEED_SOURCE } from "./poem_key_seed.mjs";
@@ -2765,6 +2765,16 @@ async function handoffVideoCurationGate(payload = {}) {
     ? "FV" : await getVideoAssetMediaType(finalAssetUrl);
   const gate = { ...candidate.gate, publishableAssetMediaType };
   const record = buildWeaverVideoImport(candidate, gate);
+  const receiptUrl = `${poetryPleaseApiUrl.replace(/\/$/, "")}/internal/weaverVideoReceipt?sourceRecordId=${encodeURIComponent(record.sourceRecordId)}`;
+  const readReceiverReceipt = async () => {
+    const response = await fetch(receiptUrl, {
+      headers: { "x-api-key": poetryPleaseApiKey }, signal: AbortSignal.timeout(15000)
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.error || `Poetry Please receipt lookup failed (${response.status}).`);
+    return body;
+  };
+  assertVideoImportPreflight(await readReceiverReceipt(), record.sourceRecordId);
   const claim = await syncWeaverRuntimeDb("claim_video_curation_handoff", { prioritySetId, sourceFileId });
   if (!claim?.claimed) {
     return { ok: false, error: claim?.reason || "video_handoff_claim_failed", gate: claim?.record || null };
@@ -2777,12 +2787,21 @@ async function handoffVideoCurationGate(payload = {}) {
     if (!finished?.saved) throw new Error(finished?.reason || "video_handoff_finish_failed");
     return finished;
   };
+  try {
+    assertVideoClaimMatchesRecord(claim.record, record);
+  } catch (error) {
+    const released = await syncWeaverRuntimeDb("release_video_curation_handoff_claim", {
+      prioritySetId, sourceFileId, attemptId
+    });
+    if (!released?.released) throw new Error("Video gate changed and its unsent claim could not be released; reconcile this gate before another send.");
+    throw error;
+  }
   const endpoint = `${poetryPleaseApiUrl.replace(/\/$/, "")}/internal/weaverVideoImport`;
   try {
     const response = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-api-key": poetryPleaseApiKey },
-      body: JSON.stringify(record)
+      body: JSON.stringify(record), signal: AbortSignal.timeout(120000)
     });
     const body = await response.json().catch(() => ({}));
     const result = parsePoetryPleaseVideoImport(response, body, record.sourceRecordId, poetryPleaseApiUrl, {
@@ -2790,6 +2809,15 @@ async function handoffVideoCurationGate(payload = {}) {
       selectedExcerptIdCount: record.selectedExcerptRecordIds.length,
       footageConnections:record.footageConnections || []
     });
+    if (result.ok) {
+      try {
+        assertVideoImportReadback(await readReceiverReceipt(), record, result);
+      } catch (error) {
+        const held = await persist({ ...result, status: "needs_reconciliation", ok: false,
+          sourceRecordId: record.sourceRecordId, error: error.message, updatedAt: new Date().toISOString() });
+        return { ok: false, status: "needs_reconciliation", error: error.message, gate: held.record };
+      }
+    }
     const saved = await persist({ ...result, sourceRecordId: record.sourceRecordId, updatedAt: new Date().toISOString() });
     return { ...result, gate: saved.record, poetryPlease: body };
   } catch (error) {
