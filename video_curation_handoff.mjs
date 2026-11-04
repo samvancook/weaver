@@ -141,6 +141,37 @@ export function assertVideoImportPreflight(receipt, sourceRecordId) {
   }
 }
 
+export function summarizeVideoReceiverState(candidate, receipt, versions = null) {
+  if (receipt?.ok !== true || receipt.ambiguousVideoMatch
+    || clean(receipt.sourceRecordId) !== clean(candidate.videoRecordId)) {
+    throw new Error("Poetry Please receipt does not uniquely match this reviewed source.");
+  }
+  if (receipt.received === false) {
+    if (clean(receipt.canonicalVideoId)) throw new Error("Poetry Please absence receipt contains a canonical video.");
+    return { received: false, sourceRecordId: candidate.videoRecordId, ledger: receipt.ledger || null };
+  }
+  const canonicalVideoId = clean(receipt.canonicalVideoId);
+  if (receipt.received !== true || !canonicalVideoId
+    || (candidate.existingCanonicalVideoId && canonicalVideoId !== candidate.existingCanonicalVideoId)
+    || clean(receipt.event?.sourceEvent) !== clean(candidate.sourceEvent)) {
+    throw new Error("Poetry Please canonical video or event does not match this candidate.");
+  }
+  if (versions && (versions.ok !== true || versions.schemaVersion !== "1" || !Array.isArray(versions.renditions)
+    || clean(versions.canonicalVideoId) !== canonicalVideoId
+    || clean(versions.sourceRecordId) !== clean(candidate.videoRecordId))) {
+    throw new Error("Poetry Please versions belong to a different canonical video or source.");
+  }
+  return {
+    received: true, sourceRecordId: candidate.videoRecordId, canonicalVideoId,
+    event: receipt.event, media: receipt.media, review: receipt.review,
+    currentFinalFileId: driveFileId(candidate.gate?.publishableAssetUrl || candidate.sourceVideoUrl),
+    receiverFinalFileId: driveFileId(receipt.media?.driveLink),
+    expectedReviewCount: candidate.reviewCount,
+    expectedExcerptCount: candidate.excerptRecordIds?.length || 0,
+    renditions: Array.isArray(versions?.renditions) ? versions.renditions : [],
+  };
+}
+
 export function assertVideoImportReadback(receipt, record, result) {
   let driveHost = "";
   try { driveHost = new URL(receipt?.media?.driveLink).hostname; } catch {}

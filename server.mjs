@@ -7,7 +7,7 @@ import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { assertVideoClaimMatchesRecord, assertVideoImportPreflight, assertVideoImportReadback, buildReviewerProgressExport, buildWeaverVideoImport, classifyDriveFolderPath, driveFileId, listKnownVideoAssets, parsePoetryPleaseVideoImport, parsePoetryPleaseVideoReceipt, poetryPleaseVideoIdForSourceFile, reconcileVideoReviews, requiresManualVideoIdentityReview, resolveCurrentVideoFileId, resolveVideoReviewSourceFileId } from "./video_curation_handoff.mjs";
+import { summarizeVideoReceiverState, assertVideoClaimMatchesRecord, assertVideoImportPreflight, assertVideoImportReadback, buildReviewerProgressExport, buildWeaverVideoImport, classifyDriveFolderPath, driveFileId, listKnownVideoAssets, parsePoetryPleaseVideoImport, parsePoetryPleaseVideoReceipt, poetryPleaseVideoIdForSourceFile, reconcileVideoReviews, requiresManualVideoIdentityReview, resolveCurrentVideoFileId, resolveVideoReviewSourceFileId } from "./video_curation_handoff.mjs";
 import { verifyProgressExportCaller } from "./weaver_progress_auth.mjs";
 import { findApprovedTextExcerptMatch } from "./video_excerpt_folding.mjs";
 import { poemKeyForExcerptText, POEM_KEY_SEED_SOURCE } from "./poem_key_seed.mjs";
@@ -2810,6 +2810,27 @@ async function handoffVideoCurationGate(payload = {}) {
     await persist({ status: "needs_reconciliation", sourceRecordId: record.sourceRecordId, error: error.message, updatedAt: new Date().toISOString() }).catch(() => {});
     throw error;
   }
+}
+
+async function inspectVideoReceiverState(prioritySetId, sourceFileId) {
+  if (!poetryPleaseApiKey) throw new Error("POETRY_PLEASE_API_KEY is not configured.");
+  if (!prioritySetId || !sourceFileId) throw new Error("Choose an exact video candidate.");
+  const result = await getVideoCurationCandidates(prioritySetId);
+  const candidate = result.candidates.find(item => item.prioritySetId === prioritySetId && item.sourceFileId === sourceFileId);
+  if (!candidate) throw new Error("Video candidate not found.");
+  const read = async path => {
+    const response = await fetch(`${poetryPleaseApiUrl.replace(/\/$/, "")}/internal/${path}`, {
+      headers: { "x-api-key": poetryPleaseApiKey }, signal: AbortSignal.timeout(15000)
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.error || `Poetry Please read failed (${response.status}).`);
+    return body;
+  };
+  const receipt = await read(`weaverVideoReceipt?sourceRecordId=${encodeURIComponent(candidate.videoRecordId)}`);
+  const summary = summarizeVideoReceiverState(candidate, receipt);
+  if (!summary.received) return { ok: true, checkedAt: new Date().toISOString(), receiver: summary };
+  const versions = await read(`videoRenditions?videoId=${encodeURIComponent(summary.canonicalVideoId)}`);
+  return { ok: true, checkedAt: new Date().toISOString(), receiver: summarizeVideoReceiverState(candidate, receipt, versions) };
 }
 
 async function refreshVideoCurationReceipt(payload = {}, checkedBy = "") {
@@ -8614,6 +8635,17 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, await loadPriorityVideoAssignmentExport(reviewerEmail, prioritySetId));
     } catch (error) {
       return sendJson(res, Number(error.statusCode || 500), { ok: false, error: error.message });
+    }
+  }
+
+  if (url.pathname === "/api/admin/video-curation-candidates/receiver" && req.method === "GET") {
+    try {
+      await verifyAdministrativeCaller(req);
+      return sendJson(res, 200, await inspectVideoReceiverState(
+        cleanSheetWhitespace(url.searchParams.get("prioritySetId")),
+        cleanSheetWhitespace(url.searchParams.get("sourceFileId"))));
+    } catch (error) {
+      return sendJson(res, Number(error.statusCode || 502), { ok: false, error: error.message });
     }
   }
 

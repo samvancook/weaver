@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { assertExistingCanonicalReceipt, assertVideoClaimMatchesRecord, assertVideoImportPreflight, assertVideoImportReadback, buildReviewerProgressExport, buildWeaverVideoImport, classifyDriveFolderPath, listKnownVideoAssets, parsePoetryPleaseVideoImport, parsePoetryPleaseVideoReceipt, poetryPleaseVideoIdForSourceFile, reconcileVideoReviews, requiresManualVideoIdentityReview, resolveCurrentVideoFileId, resolveVideoReviewSourceFileId } from "../video_curation_handoff.mjs";
+import { summarizeVideoReceiverState, assertExistingCanonicalReceipt, assertVideoClaimMatchesRecord, assertVideoImportPreflight, assertVideoImportReadback, buildReviewerProgressExport, buildWeaverVideoImport, classifyDriveFolderPath, listKnownVideoAssets, parsePoetryPleaseVideoImport, parsePoetryPleaseVideoReceipt, poetryPleaseVideoIdForSourceFile, reconcileVideoReviews, requiresManualVideoIdentityReview, resolveCurrentVideoFileId, resolveVideoReviewSourceFileId } from "../video_curation_handoff.mjs";
 
 test("video send requires an empty receiver receipt and a matching saved readback", () => {
   const sourceRecordId = "weaver:video:reviewed-source";
@@ -419,4 +419,35 @@ test("top-level Poetry Please warnings also fail a video import", () => {
   );
   assert.equal(result.ok, false);
   assert.deepEqual(result.warnings, ["missing_release_catalog"]);
+});
+
+
+test("receiver inspection retains legacy media and versions without clearing a held gate", () => {
+  const candidate = { videoRecordId: "weaver:video:source", existingCanonicalVideoId: "PP-original",
+    sourceEvent: "BPL Charm City 2026", reviewCount: 11, excerptRecordIds: ["a", "b"],
+    gate: { publishableAssetUrl: "https://drive.google.com/file/d/new-file/view", poetryPleaseHandoff: { status: "blocked" } } };
+  const receipt = { ok: true, received: true, sourceRecordId: candidate.videoRecordId,
+    canonicalVideoId: "PP-original", event: { sourceEvent: candidate.sourceEvent },
+    review: { reviewCount: 9, selectedExcerptIdCount: 10 },
+    media: { reviewOnly: false, driveLink: "https://drive.google.com/file/d/old-file/view" } };
+  const versions = { ok: true, schemaVersion: "1", canonicalVideoId: "PP-original",
+    sourceRecordId: candidate.videoRecordId, renditions: [{ validationState: "verified_bytes", outputFileId: "version" }] };
+  const before = JSON.stringify(candidate);
+  const summary = summarizeVideoReceiverState(candidate, receipt, versions);
+  assert.equal(summary.currentFinalFileId, "new-file");
+  assert.equal(summary.receiverFinalFileId, "old-file");
+  assert.equal(summary.media.reviewOnly, false);
+  assert.equal(summary.review.reviewCount, 9);
+  assert.equal(summary.renditions.length, 1);
+  assert.equal(JSON.stringify(candidate), before);
+  for (const altered of [{ ...receipt, sourceRecordId: "other" }, { ...receipt, ambiguousVideoMatch: true },
+    { ...receipt, canonicalVideoId: "different" }, { ...receipt, event: { sourceEvent: "different" } }]) {
+    assert.throws(() => summarizeVideoReceiverState(candidate, altered, versions));
+  }
+  for (const altered of [{ ...versions, canonicalVideoId: "different" }, { ...versions, sourceRecordId: "different" },
+    { ...versions, renditions: null }, { ...versions, ok: false }]) {
+    assert.throws(() => summarizeVideoReceiverState(candidate, receipt, altered));
+  }
+  assert.equal(summarizeVideoReceiverState(candidate, { ok: true, received: false,
+    sourceRecordId: candidate.videoRecordId, ledger: { count: 1 } }).ledger.count, 1);
 });
