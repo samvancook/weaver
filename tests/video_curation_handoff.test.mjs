@@ -1,6 +1,50 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { assertExistingCanonicalReceipt, buildReviewerProgressExport, buildWeaverVideoImport, classifyDriveFolderPath, listKnownVideoAssets, parsePoetryPleaseVideoImport, parsePoetryPleaseVideoReceipt, poetryPleaseVideoIdForSourceFile, reconcileVideoReviews, requiresManualVideoIdentityReview, resolveCurrentVideoFileId, resolveVideoReviewSourceFileId } from "../video_curation_handoff.mjs";
+import { buildVideoReviewEvidence, summarizeVideoReceiverState, assertExistingCanonicalReceipt, assertVideoClaimMatchesRecord, assertVideoImportPreflight, assertVideoImportReadback, buildReviewerProgressExport, buildWeaverVideoImport, classifyDriveFolderPath, listKnownVideoAssets, parsePoetryPleaseVideoImport, parsePoetryPleaseVideoReceipt, poetryPleaseVideoIdForSourceFile, reconcileVideoReviews, requiresManualVideoIdentityReview, resolveCurrentVideoFileId, resolveVideoReviewSourceFileId } from "../video_curation_handoff.mjs";
+
+test("video send requires an empty receiver receipt and a matching saved readback", () => {
+  const sourceRecordId = "weaver:video:reviewed-source";
+  const empty = { ok: true, sourceRecordId, received: false, ambiguousVideoMatch: false,
+    canonicalVideoId: "", ledger: { count: 0 } };
+  assert.doesNotThrow(() => assertVideoImportPreflight(empty, sourceRecordId));
+  for (const changed of [
+    { ...empty, received: true }, { ...empty, canonicalVideoId: "existing" },
+    { ...empty, ledger: { count: 1 } }, { ...empty, sourceRecordId: "other" },
+    { ...empty, ledger: {} }, { ...empty, ok: false },
+  ]) assert.throws(() => assertVideoImportPreflight(changed, sourceRecordId));
+
+  const record = { sourceRecordId, sourceEvent: "BPL Charm City 2026", sourceEventLabel: "BPL Charm City 2026",
+    finalAssetUrl: "https://drive.google.com/file/d/current-fv/view", reviews: [{}, {}], selectedExcerptRecordIds: ["e1"] };
+  const result = { canonicalVideoId: "WEAVER-VV-EXISTING" };
+  const receipt = { ok: true, received: true, sourceRecordId, canonicalVideoId: result.canonicalVideoId,
+    ambiguousVideoMatch: false, event: { sourceEvent: record.sourceEvent, sourceEventLabel: record.sourceEventLabel },
+    media: { driveLink: record.finalAssetUrl, reviewOnly: true }, review: { reviewCount: 2, selectedExcerptIdCount: 1 } };
+  assert.doesNotThrow(() => assertVideoImportReadback(receipt, record, result));
+  for (const changed of [
+    { ...receipt, canonicalVideoId: "other" },
+    { ...receipt, media: { ...receipt.media, driveLink: "https://drive.google.com/file/d/older-fv/view" } },
+    { ...receipt, media: { ...receipt.media, reviewOnly: false } },
+    { ...receipt, review: { ...receipt.review, reviewCount: 1 } },
+    { ...receipt, review: { ...receipt.review, selectedExcerptIdCount: 2 } },
+    { ...receipt, review: {} },
+    { ...receipt, event: { ...receipt.event, sourceEvent: "another event" } },
+  ]) assert.throws(() => assertVideoImportReadback(changed, record, result));
+});
+
+test("a send uses the gate snapshot that was actually claimed", () => {
+  const record = { sourceRecordId: "weaver:video:original", sourceEvent: "event", sourceEventLabel: "Event",
+    finalAssetUrl: "https://drive.google.com/file/d/final-video/view", selectedExcerptRecordIds: ["e1", "e2"] };
+  const gate = { decision: "ready_for_poetry_please", videoRecordId: record.sourceRecordId,
+    sourceEvent: record.sourceEvent, sourceEventLabel: record.sourceEventLabel,
+    publishableAssetUrl: record.finalAssetUrl, selectedExcerptRecordIds: ["e2", "e1"] };
+  assert.doesNotThrow(() => assertVideoClaimMatchesRecord(gate, record));
+  for (const changed of [
+    { ...gate, videoRecordId: "weaver:video:other" },
+    { ...gate, publishableAssetUrl: "https://drive.google.com/file/d/other-final/view" },
+    { ...gate, selectedExcerptRecordIds: ["e1"] },
+    { ...gate, sourceEvent: "other event" },
+  ]) assert.throws(() => assertVideoClaimMatchesRecord(changed, record));
+});
 
 test("receipt refresh accepts only the same event, identity, retained context and verified hosted copy", () => {
   const gate = { sourceEvent: "event", sourceEventLabel: "Event", selectedExcerptRecordIds: ["excerpt"],
@@ -194,6 +238,12 @@ test("a replacement file retains the saved gate's excerpt associations", () => {
     ...gate, selectedExcerptRecordIds: ["archived-excerpt", "exc-1"],
   });
   assert.deepEqual(record.selectedExcerptRecordIds, ["archived-excerpt", "exc-1"]);
+});
+
+test("later excerpt pulls do not change a saved gate's selected excerpts on retry", () => {
+  const record = buildWeaverVideoImport({ ...candidate, excerptRecordIds: ["exc-1", "later-pull"] }, gate);
+  assert.deepEqual(record.selectedExcerptRecordIds, ["exc-1"]);
+  assert.deepEqual(buildWeaverVideoImport(candidate, { ...gate, selectedExcerptRecordIds: [] }).selectedExcerptRecordIds, []);
 });
 
 test("video import is a single root record with stable source identity", () => {
@@ -401,4 +451,113 @@ test("top-level Poetry Please warnings also fail a video import", () => {
   );
   assert.equal(result.ok, false);
   assert.deepEqual(result.warnings, ["missing_release_catalog"]);
+});
+
+
+test("receiver inspection retains legacy media and versions without clearing a held gate", () => {
+  const candidate = { videoRecordId: "weaver:video:source", existingCanonicalVideoId: "PP-original",
+    sourceEvent: "BPL Charm City 2026", reviewCount: 11, excerptRecordIds: ["a", "b"],
+    gate: { publishableAssetUrl: "https://drive.google.com/file/d/new-file/view", poetryPleaseHandoff: { status: "blocked" } } };
+  const receipt = { ok: true, received: true, sourceRecordId: candidate.videoRecordId,
+    canonicalVideoId: "PP-original", event: { sourceEvent: candidate.sourceEvent },
+    review: { reviewCount: 9, selectedExcerptIdCount: 10 },
+    media: { reviewOnly: false, driveLink: "https://drive.google.com/file/d/old-file/view" } };
+  const versions = { ok: true, schemaVersion: "1", canonicalVideoId: "PP-original",
+    sourceRecordId: candidate.videoRecordId, renditions: [{ validationState: "verified_bytes", outputFileId: "version" }] };
+  const before = JSON.stringify(candidate);
+  const summary = summarizeVideoReceiverState(candidate, receipt, versions);
+  assert.equal(summary.currentFinalFileId, "new-file");
+  assert.equal(summary.receiverFinalFileId, "old-file");
+  assert.equal(summary.media.reviewOnly, false);
+  assert.equal(summary.review.reviewCount, 9);
+  assert.equal(summary.renditions.length, 1);
+  assert.equal(JSON.stringify(candidate), before);
+  for (const altered of [{ ...receipt, sourceRecordId: "other" }, { ...receipt, ambiguousVideoMatch: true },
+    { ...receipt, canonicalVideoId: "different" }, { ...receipt, event: { sourceEvent: "different" } }]) {
+    assert.throws(() => summarizeVideoReceiverState(candidate, altered, versions));
+  }
+  for (const altered of [{ ...versions, canonicalVideoId: "different" }, { ...versions, sourceRecordId: "different" },
+    { ...versions, renditions: null }, { ...versions, ok: false }]) {
+    assert.throws(() => summarizeVideoReceiverState(candidate, receipt, altered));
+  }
+  assert.equal(summarizeVideoReceiverState(candidate, { ok: true, received: false,
+    sourceRecordId: candidate.videoRecordId, ledger: { count: 1 } }).ledger.count, 1);
+});
+
+
+test("review evidence preserves original source IDs and separates filename aggregation from identity", () => {
+  const files = [{ id: "current", name: "Poem.mov" }, { id: "other", name: "Other.mov" }];
+  const records = [
+    { reviewId: "direct", sourceFileId: "current", sourceFileName: "Poem.mov", reviewerEmail: "one@example.com", rating: "like", excerptRecordIds: ["e1", "e1"] },
+    { reviewId: "historical", sourceFileId: "old", sourceFileName: "Poem.mov", reviewerEmail: "one@example.com", rating: "moved_me", excerptRecordIds: ["e2"] },
+    { reviewId: "unrelated", sourceFileId: "other", sourceFileName: "Other.mov", rating: "like" },
+    { reviewId: "unrated", sourceFileId: "current", rating: "" }
+  ];
+  const original = JSON.stringify(records);
+  const evidence = buildVideoReviewEvidence(files, records, "current");
+  assert.deepEqual(evidence.map(row => [row.reviewId, row.sourceFileId, row.mapping]), [
+    ["direct", "current", "direct_file_id"], ["historical", "old", "filename_reconciliation"]
+  ]);
+  assert.deepEqual(evidence.map(row => row.excerptRecordIds), [["e1"], ["e2"]]);
+  assert.equal(reconcileVideoReviews(files, records).filter(row => row.sourceFileId === "current").length, 1);
+  assert.equal(JSON.stringify(records), original);
+  assert.deepEqual(buildVideoReviewEvidence([...files, { id: "ambiguous", name: "Poem.mov" }], records, "current").map(row => row.reviewId), ["direct"]);
+});
+
+test("context-only delivery uses exact stored sources and the saved gate selection, with receiver readback", async () => {
+  const { buildVideoContextUpdate, syncVideoReviewContext } = await import('../video_curation_handoff.mjs');
+  const candidate = { videoRecordId: "weaver:video:original", existingCanonicalVideoId: "canonical", sourceReviewFileId: "original", sourceFileId: "current", sourceEvent: "event", reviewCount: 3,
+    excerptRecordIds: ["selected", "later"], gate: { decision: "ready_for_poetry_please", selectedExcerptRecordIds: ["selected"] },
+    ratings: [{ reviewId: "r1", reviewerEmail: "one@example.com" }, { reviewId: "r2", reviewerEmail: "two@example.com" }, { reviewId: "r3" }],
+    reviewEvidence: [{ reviewId: "r1", sourceFileId: "original", excerptRecordIds: ["selected"] }, { reviewId: "r2", sourceFileId: "current", excerptRecordIds: ["later"] }, { reviewId: "r3", sourceFileId: "filename-only" }] };
+  const before = { ok: true, received: true, sourceRecordId: candidate.videoRecordId, canonicalVideoId: "canonical", event: { sourceEvent: "event" }, media: { driveLink: "primary", videoUrl: "hosted", reviewOnly: false }, review: { reviewCount: 2, selectedExcerptIdCount: 1 } };
+  const body = buildVideoContextUpdate(candidate, before);
+  assert.deepEqual(body.reviews.map(r => [r.reviewId,r.sourceRecordId]), [["r1","weaver:video:original"],["r2","weaver:video:current"]]);
+  assert.deepEqual(body.selectedExcerptRecordIds, ["selected"]);
+  assert.equal(Object.hasOwn(body, "finalAssetUrl"), false);
+  assert.equal(Object.hasOwn(body, "decision"), false);
+  const context = { ok: true, canonicalVideoId: "canonical", sourceRecordId: candidate.videoRecordId, changed: true, receivedReviewCount: 2, receivedSelectedExcerptIdCount: 1, storedReviewCount: 3, storedSelectedExcerptIdCount: 1 };
+  let reads = 0, posts = 0;
+  const result = await syncVideoReviewContext(candidate, {
+    readReceipt: async () => ++reads === 1 ? before : { ...before, review: { reviewCount: 3, selectedExcerptIdCount: 1 } },
+    postContext: async record => { posts++; assert.deepEqual(record,body); return context; }
+  });
+  assert.equal(result.ok, true); assert.equal(reads, 2); assert.equal(posts, 1);
+  for (const receipt of [{ ...before, canonicalVideoId: "wrong" }, { ...before, received: false }, { ...before, event: { sourceEvent: "wrong" } }]) {
+    let sent = false;
+    await assert.rejects(syncVideoReviewContext(candidate, {readReceipt:async()=>receipt,postContext:async()=>{sent=true}}));
+    assert.equal(sent,false);
+  }
+  await assert.rejects(syncVideoReviewContext(candidate, { readReceipt: async()=>before, postContext: async()=>({...context,receivedReviewCount:1}) }), /did not verify/);
+  let calls=0;
+  await assert.rejects(syncVideoReviewContext(candidate, { readReceipt: async()=>++calls===1?before:{...before,media:{...before.media,videoUrl:"replaced"}}, postContext: async()=>context }), /Primary media changed/);
+  assert.throws(()=>buildVideoContextUpdate({...candidate,gate:{...candidate.gate,decision:"hold"}},before));
+});
+
+test("failed timeout retry requires exact empty receiver identity and the same gate snapshot", async () => {
+  const { assertVideoRetryPreflight } = await import('../video_curation_handoff.mjs');
+  const {createHash} = await import('node:crypto');
+  const record={ sourceRecordId:'weaver:video:original',sourceEvent:'event',sourceEventLabel:'Event',finalAssetUrl:'https://drive.google.com/file/d/final/view',selectedExcerptRecordIds:['e1'] };
+  const gate={decision:'ready_for_poetry_please',videoRecordId:record.sourceRecordId,sourceEvent:'event',sourceEventLabel:'Event',publishableAssetUrl:record.finalAssetUrl,selectedExcerptRecordIds:['e1'],poetryPleaseHandoff:{status:'failed',sourceRecordId:record.sourceRecordId,error:'timeout'}};
+  const receipt={ok:true,received:false,sourceRecordId:record.sourceRecordId,canonicalVideoId:'',expectedCanonicalVideoId:`WEAVER-VV-${createHash('sha256').update(record.sourceRecordId).digest('hex').slice(0,24).toUpperCase()}`,review:{reviewCount:0,selectedExcerptIdCount:0},ledger:{count:1,latest:{status:'failed',error:'The operation was aborted due to timeout',importLedgerId:'prior-attempt',canonicalVideoId:'',receivedReviewCount:0,receivedSelectedExcerptIdCount:0}}};
+  const proof=assertVideoRetryPreflight(receipt,record,gate);
+  assert.equal(proof.importLedgerId,'prior-attempt');assert.equal(proof.expectedHandoff,gate.poetryPleaseHandoff);
+  for(const bad of [
+    {...receipt,received:true},{...receipt,ambiguousVideoMatch:true},{...receipt,sourceRecordId:'other'},
+    {...receipt,expectedCanonicalVideoId:'wrong'},{...receipt,canonicalVideoId:'existing'},
+    {...receipt,ledger:{...receipt.ledger,count:2}},
+    {...receipt,ledger:{...receipt.ledger,latest:{...receipt.ledger.latest,status:'running'}}},
+    {...receipt,ledger:{...receipt.ledger,latest:{...receipt.ledger.latest,error:'validation rejected'}}},
+    {...receipt,ledger:{...receipt.ledger,latest:{...receipt.ledger.latest,receivedReviewCount:1}}},
+    {...receipt,review:{reviewCount:1,selectedExcerptIdCount:0}}
+  ]) assert.throws(()=>assertVideoRetryPreflight(bad,record,gate));
+  for(const bad of [{...gate,poetryPleaseHandoff:{...gate.poetryPleaseHandoff,status:'needs_reconciliation'}},{...gate,publishableAssetUrl:'https://drive.google.com/file/d/changed/view'},{...gate,selectedExcerptRecordIds:['other']}]) assert.throws(()=>assertVideoRetryPreflight(receipt,record,bad));
+});
+
+test("receiver comparison uses gate-selected links instead of later gathered pulls", () => {
+  const candidate={videoRecordId:'source',existingCanonicalVideoId:'canonical',sourceEvent:'event',excerptRecordIds:['selected','later'],gate:{selectedExcerptRecordIds:['selected']}};
+  const receipt={ok:true,received:true,sourceRecordId:'source',canonicalVideoId:'canonical',event:{sourceEvent:'event'},review:{selectedExcerptIdCount:1}};
+  const state=summarizeVideoReceiverState(candidate,receipt);
+  assert.equal(state.expectedExcerptCount,1);assert.equal(state.gatheredExcerptCount,2);
+  assert.equal(summarizeVideoReceiverState({...candidate,gate:{selectedExcerptRecordIds:[]}},receipt).expectedExcerptCount,0);
 });

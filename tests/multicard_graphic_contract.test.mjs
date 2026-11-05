@@ -208,3 +208,102 @@ test("repair return posts ordered replacements and affected card through the act
     { ...structured, assetSet: [replacement, replacement, assets[2]] }, original
   ), /unaffected_card_file_changed/);
 });
+
+test("approved card metadata delivery retains exact completion, order, roles and credits", () => {
+  const browserSource = readFileSync(new URL("../public/app.js", import.meta.url), "utf8");
+  const match = browserSource.match(/function buildApprovedCardMetadataDelivery\([^]*?^}/m);
+  const context = vm.createContext({});
+  vm.runInContext(match[0], context);
+  const record = { graphicsQcDecision: "APPROVE", pigCompletionId: "existing-completion",
+    graphicsRequestId: "existing-request", assetLinkUrl: assets[0].assetUrl,
+    assetSet: assets.slice(0, 2).map((card, i) => ({ ...card, role: i ? "poem" : "prompt", author: `Author ${i + 1}` })) };
+  const before = JSON.stringify(record);
+  const payload = context.buildApprovedCardMetadataDelivery(record);
+  assert.equal(JSON.stringify(payload.records[0]), before);
+  assert.equal(JSON.stringify(record), before);
+  assert.equal(payload.records[0].assetSet[1].title, undefined);
+  for (const changed of [{ ...record, graphicsQcDecision: "REJECT" }, { ...record, pigCompletionId: "" },
+    { ...record, assetLinkUrl: "different-primary" }, { ...record, assetSet: [...record.assetSet].reverse() }]) {
+    assert.throws(() => context.buildApprovedCardMetadataDelivery(changed));
+  }
+  const server = loadFunctions(["buildPoetryPleaseGraphicRecord"]);
+  const outbound = server.buildPoetryPleaseGraphicRecord({ ...record, contentType: "QI", sourceRecordId: "original-source" });
+  assert.equal(outbound.sourceCompletionId, record.pigCompletionId);
+  assert.equal(outbound.sourceRecordId, "original-source");
+  assert.equal(JSON.stringify(outbound.assetSet), JSON.stringify(record.assetSet));
+});
+
+test("PP editable projects use canonical excerpt identity before an original source-row ID", async () => {
+  const contentId = "PP:EXC:0123456789ABCDEF";
+  const project = { id: "saved-project", pigProjectId: "saved-project",
+    sourceIdentity: { recordId: contentId }, selectedRecord: {
+      id: contentId, textId: contentId, sourceRecordId: "BOOK-EXC-ORIGINAL-ROW-4", text: "Synthetic source text"
+    } };
+  const completion = { completionId: "synthetic-completion", graphicsRequestId: `pig:record-${contentId}`,
+    contentId, imageId: contentId, quoteText: "Synthetic source text", pigProjectId: project.id,
+    editableProjectFileId: "saved-json", editableProjectUrl: "https://example.com/saved.json" };
+  const context = loadFunctions(["normalizeEditableIdentityText", "cleanEditableIdentityValue", "editableIdentityTextHash",
+    "getEditableIdentityValues", "validateCompletionEditableProjectIdentity"], {
+    createHash, fetchDriveFileResponse: async () => ({ ok: true, json: async () => project })
+  });
+  for (const requestId of [completion.graphicsRequestId, "weaver:qi:synthetic-request"]) {
+    const result = await context.validateCompletionEditableProjectIdentity({ ...completion, graphicsRequestId: requestId });
+    assert.equal(result.editableProjectValidationStatus, "verified");
+    assert.equal(result.contentId, contentId);
+  }
+  delete project.selectedRecord.textId;
+  assert.equal((await context.validateCompletionEditableProjectIdentity(completion)).editableProjectAvailable, true);
+  delete project.selectedRecord.id;
+  assert.equal((await context.validateCompletionEditableProjectIdentity(completion)).editableProjectAvailable, true);
+  project.selectedRecord.contentId = "WRONG-CANONICAL-CONTENT";
+  await assert.rejects(context.validateCompletionEditableProjectIdentity(completion), /content identity conflicts/);
+  delete project.selectedRecord.contentId;
+  project.sourceIdentity.recordId = "WRONG-CANONICAL-CONTENT";
+  await assert.rejects(context.validateCompletionEditableProjectIdentity(completion), /content identity conflicts/);
+  project.sourceIdentity.recordId = contentId;
+  project.selectedRecord.text = "Different source text";
+  await assert.rejects(context.validateCompletionEditableProjectIdentity(completion), /text conflicts/);
+  project.selectedRecord.text = completion.quoteText;
+  project.sourceIdentity.graphicsRequestId = "different-request";
+  await assert.rejects(context.validateCompletionEditableProjectIdentity(completion), /request identity conflicts/);
+  delete project.sourceIdentity.graphicsRequestId;
+  project.id = "different-project";
+  await assert.rejects(context.validateCompletionEditableProjectIdentity(completion), /project ID conflicts/);
+});
+
+test("QC revalidation reads the exact completion without changing editorial decisions or hiding genuine conflicts", async () => {
+  const contentId = "PP:EXC:0123456789ABCDEF";
+  const project = { id: "saved-project", pigProjectId: "saved-project", sourceIdentity: { recordId: contentId },
+    selectedRecord: { id: contentId, sourceRecordId: "BOOK-EXC-ORIGINAL-ROW", text: "Synthetic source text" } };
+  const row = { pigCompletionId: "synthetic-completion", graphicsRequestId: `pig:record-${contentId}`,
+    graphicsQcDecision: "", graphicsQcNote: "", editableProjectValidationStatus: "identity_conflict",
+    editableProjectAvailable: false, editableProjectValidationError: { fileId: "saved-json", message: "stale conflict" } };
+  const completion = { id: row.pigCompletionId, graphicsRequestId: row.graphicsRequestId,
+    contentId, imageId: contentId, quoteText: "Synthetic source text", candidatePigProjectId: project.id,
+    candidateEditableProjectFileId: "saved-json", candidateEditableProjectUrl: "https://example.com/saved.json" };
+  const calls = [];
+  const context = loadFunctions(["normalizeEditableIdentityText", "cleanEditableIdentityValue", "editableIdentityTextHash",
+    "getEditableIdentityValues", "editableProjectValidationWarning", "validateCompletionEditableProjectIdentity",
+    "validateEditableProjectForRework", "refreshEditableProjectForQc"], { createHash,
+    fetchDriveFileResponse: async () => ({ ok: true, json: async () => project }),
+    syncWeaverRuntimeDb: async (action,payload) => { calls.push({action,payload}); return {record:completion}; }
+  });
+  const result = await context.refreshEditableProjectForQc(row);
+  assert.equal(result.editableProjectAvailable, true);
+  assert.equal(result.editableProjectValidationStatus, "verified");
+  assert.equal(Object.keys(result.editableProjectValidationError).length, 0);
+  assert.equal(result.graphicsQcDecision, row.graphicsQcDecision);
+  assert.equal(result.graphicsQcNote, row.graphicsQcNote);
+  assert.deepEqual(calls.map(c=>c.action), ["get_graphics_completion"]);
+  assert.equal(calls[0].payload.completionId,row.pigCompletionId);
+  const update = await context.validateEditableProjectForRework({ ...row, qcDecision: "reject", rejectReason: "correct_and_recreate", qcNote: "Synthetic correction" });
+  assert.equal(update.qcDecision,"reject");assert.equal(update.qcNote,"Synthetic correction");
+  assert.equal(update.editableProjectFileId,"saved-json");assert.equal(update.editableProjectAvailable,true);
+  project.selectedRecord.id = "WRONG-CANONICAL-CONTENT";
+  project.sourceIdentity.recordId = "WRONG-CANONICAL-CONTENT";
+  const held = await context.refreshEditableProjectForQc(row);
+  assert.equal(held.editableProjectAvailable,false);
+  assert.match(held.editableProjectValidationError.message,/content identity conflicts/);
+  assert.equal(held.graphicsQcDecision,"");
+  assert.ok(calls.every(c=>c.action==="get_graphics_completion"));
+});

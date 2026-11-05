@@ -8,7 +8,7 @@ import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildReviewerProgressExport, buildWeaverVideoImport, classifyDriveFolderPath, driveFileId, listKnownVideoAssets, parsePoetryPleaseVideoImport, parsePoetryPleaseVideoReceipt, poetryPleaseVideoIdForSourceFile, reconcileVideoReviews, requiresManualVideoIdentityReview, resolveCurrentVideoFileId, resolveVideoReviewSourceFileId } from "./video_curation_handoff.mjs";
+import { assertVideoRetryPreflight, syncVideoReviewContext, buildVideoReviewEvidence, summarizeVideoReceiverState, assertVideoClaimMatchesRecord, assertVideoImportPreflight, assertVideoImportReadback, buildReviewerProgressExport, buildWeaverVideoImport, classifyDriveFolderPath, driveFileId, listKnownVideoAssets, parsePoetryPleaseVideoImport, parsePoetryPleaseVideoReceipt, poetryPleaseVideoIdForSourceFile, reconcileVideoReviews, requiresManualVideoIdentityReview, resolveCurrentVideoFileId, resolveVideoReviewSourceFileId } from "./video_curation_handoff.mjs";
 import { verifyProgressExportCaller } from "./weaver_progress_auth.mjs";
 import { findApprovedTextExcerptMatch } from "./video_excerpt_folding.mjs";
 import { poemKeyForExcerptText, POEM_KEY_SEED_SOURCE } from "./poem_key_seed.mjs";
@@ -227,6 +227,7 @@ const ADMIN_MUTATION_PATHS = new Set([
   "/api/save-reviews",
   "/api/admin/video-curation-gates",
   "/api/admin/video-curation-gates/handoff",
+  "/api/admin/video-curation-gates/context",
   "/api/admin/video-curation-gates/receipt"
 ]);
 
@@ -2686,6 +2687,7 @@ async function getVideoCurationCandidates(prioritySetId = "") {
         isEligible: !releaseStatus && candidateScore >= VIDEO_CURATION_CANDIDATE_THRESHOLD,
         excerptRecordIds,
         reviewCount: reviews.length,
+        reviewEvidence: buildVideoReviewEvidence(files, Array.isArray(reviewsResult?.records) ? reviewsResult.records : [], sourceFileId),
         ratings: reviews.map(review => ({
           reviewId: cleanSheetWhitespace(review.reviewId),
           reviewerEmail: cleanSheetWhitespace(review.reviewerEmail),
@@ -2765,7 +2767,22 @@ async function handoffVideoCurationGate(payload = {}) {
     ? "FV" : await getVideoAssetMediaType(finalAssetUrl);
   const gate = { ...candidate.gate, publishableAssetMediaType };
   const record = buildWeaverVideoImport(candidate, gate);
-  const claim = await syncWeaverRuntimeDb("claim_video_curation_handoff", { prioritySetId, sourceFileId });
+  const receiptUrl = `${poetryPleaseApiUrl.replace(/\/$/, "")}/internal/weaverVideoReceipt?sourceRecordId=${encodeURIComponent(record.sourceRecordId)}`;
+  const readReceiverReceipt = async () => {
+    const response = await fetch(receiptUrl, {
+      headers: { "x-api-key": poetryPleaseApiKey }, signal: AbortSignal.timeout(15000)
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.error || `Poetry Please receipt lookup failed (${response.status}).`);
+    return body;
+  };
+  const preflightReceipt = await readReceiverReceipt();
+  const retryFailedProof = payload.retryFailed === true
+    ? assertVideoRetryPreflight(preflightReceipt, record, candidate.gate) : null;
+  if (!retryFailedProof) assertVideoImportPreflight(preflightReceipt, record.sourceRecordId);
+  const claim = await syncWeaverRuntimeDb("claim_video_curation_handoff", {
+    prioritySetId, sourceFileId, ...(retryFailedProof ? { retryFailedProof } : {})
+  });
   if (!claim?.claimed) {
     return { ok: false, error: claim?.reason || "video_handoff_claim_failed", gate: claim?.record || null };
   }
@@ -2777,12 +2794,27 @@ async function handoffVideoCurationGate(payload = {}) {
     if (!finished?.saved) throw new Error(finished?.reason || "video_handoff_finish_failed");
     return finished;
   };
+  try {
+    assertVideoClaimMatchesRecord(claim.record, record);
+    if (retryFailedProof) {
+      const rechecked = assertVideoRetryPreflight(await readReceiverReceipt(), record, {
+        ...claim.record, poetryPleaseHandoff: claim.record.poetryPleaseHandoff.previousHandoff
+      });
+      if (rechecked.importLedgerId !== retryFailedProof.importLedgerId) throw new Error("Receiver attempt changed before retry.");
+    }
+  } catch (error) {
+    const released = await syncWeaverRuntimeDb("release_video_curation_handoff_claim", {
+      prioritySetId, sourceFileId, attemptId
+    });
+    if (!released?.released) throw new Error("Video gate changed and its unsent claim could not be released; reconcile this gate before another send.");
+    throw error;
+  }
   const endpoint = `${poetryPleaseApiUrl.replace(/\/$/, "")}/internal/weaverVideoImport`;
   try {
     const response = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-api-key": poetryPleaseApiKey },
-      body: JSON.stringify(record)
+      body: JSON.stringify(record), signal: AbortSignal.timeout(120000)
     });
     const body = await response.json().catch(() => ({}));
     const result = parsePoetryPleaseVideoImport(response, body, record.sourceRecordId, poetryPleaseApiUrl, {
@@ -2790,12 +2822,66 @@ async function handoffVideoCurationGate(payload = {}) {
       selectedExcerptIdCount: record.selectedExcerptRecordIds.length,
       footageConnections:record.footageConnections || []
     });
+    if (result.ok) {
+      try {
+        assertVideoImportReadback(await readReceiverReceipt(), record, result);
+      } catch (error) {
+        const held = await persist({ ...result, status: "needs_reconciliation", ok: false,
+          sourceRecordId: record.sourceRecordId, error: error.message, updatedAt: new Date().toISOString() });
+        return { ok: false, status: "needs_reconciliation", error: error.message, gate: held.record };
+      }
+    }
     const saved = await persist({ ...result, sourceRecordId: record.sourceRecordId, updatedAt: new Date().toISOString() });
     return { ...result, gate: saved.record, poetryPlease: body };
   } catch (error) {
     await persist({ status: "needs_reconciliation", sourceRecordId: record.sourceRecordId, error: error.message, updatedAt: new Date().toISOString() }).catch(() => {});
     throw error;
   }
+}
+
+async function deliverVideoReviewContext(payload = {}) {
+  if (!poetryPleaseApiKey) throw new Error("POETRY_PLEASE_API_KEY is not configured.");
+  const prioritySetId = cleanSheetWhitespace(payload.prioritySetId);
+  const sourceFileId = cleanSheetWhitespace(payload.sourceFileId);
+  if (!prioritySetId || !sourceFileId) throw new Error("Choose an exact video candidate.");
+  const candidates = await getVideoCurationCandidates(prioritySetId);
+  const candidate = candidates.candidates.find(row => row.prioritySetId === prioritySetId && row.sourceFileId === sourceFileId);
+  if (!candidate) throw new Error("Video candidate not found.");
+  const call = async (path, body) => {
+    const response = await fetch(`${poetryPleaseApiUrl.replace(/\/$/, "")}/internal/${path}`, {
+      method: body ? "POST" : "GET",
+      headers: { "x-api-key": poetryPleaseApiKey, ...(body ? { "Content-Type": "application/json" } : {}) },
+      ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(15000)
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || `Poetry Please context request failed (${response.status}).`);
+    return result;
+  };
+  return syncVideoReviewContext(candidate, {
+    readReceipt: id => call(`weaverVideoReceipt?sourceRecordId=${encodeURIComponent(id)}`),
+    postContext: record => call("weaverVideoContext", record)
+  });
+}
+
+async function inspectVideoReceiverState(prioritySetId, sourceFileId) {
+  if (!poetryPleaseApiKey) throw new Error("POETRY_PLEASE_API_KEY is not configured.");
+  if (!prioritySetId || !sourceFileId) throw new Error("Choose an exact video candidate.");
+  const result = await getVideoCurationCandidates(prioritySetId);
+  const candidate = result.candidates.find(item => item.prioritySetId === prioritySetId && item.sourceFileId === sourceFileId);
+  if (!candidate) throw new Error("Video candidate not found.");
+  const read = async path => {
+    const response = await fetch(`${poetryPleaseApiUrl.replace(/\/$/, "")}/internal/${path}`, {
+      headers: { "x-api-key": poetryPleaseApiKey }, signal: AbortSignal.timeout(15000)
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.error || `Poetry Please read failed (${response.status}).`);
+    return body;
+  };
+  const receipt = await read(`weaverVideoReceipt?sourceRecordId=${encodeURIComponent(candidate.videoRecordId)}`);
+  const summary = summarizeVideoReceiverState(candidate, receipt);
+  if (!summary.received) return { ok: true, checkedAt: new Date().toISOString(), receiver: summary };
+  const versions = await read(`videoRenditions?videoId=${encodeURIComponent(summary.canonicalVideoId)}`);
+  return { ok: true, checkedAt: new Date().toISOString(), receiver: summarizeVideoReceiverState(candidate, receipt, versions) };
 }
 
 async function refreshVideoCurationReceipt(payload = {}, checkedBy = "") {
@@ -3964,6 +4050,7 @@ async function getExcerptGatheringOptionsFromSheets() {
     books: toUniqueSortedValues(books),
     catalogBooks,
     catalogLookupStatus: catalogResult?.catalogLookupStatus || "unknown",
+    catalogRevision: catalogResult?.catalogRevision || "",
     publishingBooks,
     publishingBookReadiness: buildPublishingBookReadiness(
       publishingBooks, catalogBooks, catalogResult?.catalogLookupStatus || "unknown"),
@@ -7105,6 +7192,15 @@ async function getGraphicsRecordsForBookFromSheets(bookTitle, mode) {
       .filter(record => normalizeBookKey(record.bookTitle) === requestedKey);
   }
 
+  if (["qc", "cleanup"].includes(resolvedMode)) {
+    // Recheck quarantined sidecars against their exact persisted completion.
+    // This refreshes the read model only; it does not save a QC decision.
+    for (let offset = 0; offset < records.length; offset += 4) {
+      const refreshed = await Promise.all(records.slice(offset, offset + 4).map(refreshEditableProjectForQc));
+      records.splice(offset, refreshed.length, ...refreshed);
+    }
+  }
+
   preferredBookTitle = records.reduce(
     (current, record) => choosePreferredBookTitle(current, record.bookTitle),
     preferredBookTitle
@@ -7780,19 +7876,26 @@ async function validateCompletionEditableProjectIdentity(completion = {}) {
   const sourceRecord = project.sourceRecord && typeof project.sourceRecord === "object"
     ? project.sourceRecord
     : {};
+  // PP-selected projects keep the canonical excerpt ID in textId/id/recordId.
+  // sourceRecordId may instead name the original source row (a different ID
+  // namespace), so use it only when no canonical record identity is present.
+  const projectContentId = cleanEditableIdentityValue(
+    project.sourceIdentity?.contentId || project.sourceIdentity?.imageId
+      || selectedRecord.contentId || selectedRecord.imageId
+      || sourceRecord.contentId || sourceRecord.imageId
+      || selectedRecord.textId || sourceRecord.textId
+      || project.sourceIdentity?.recordId || selectedRecord.id || sourceRecord.id
+      || selectedRecord.sourceRecordId || selectedRecord.recordId || sourceRecord.sourceRecordId
+  );
   const projectIdentity = getEditableIdentityValues({
     ...sourceRecord,
     ...selectedRecord,
-    sourceIdentity: project.sourceIdentity,
+    sourceIdentity: { ...project.sourceIdentity, contentId: projectContentId },
     graphicsRequestId: project.sourceIdentity?.graphicsRequestId
       || selectedRecord.graphicsRequestId
       || sourceRecord.graphicsRequestId,
-    contentId: selectedRecord.contentId
-      || selectedRecord.sourceRecordId
-      || selectedRecord.recordId
-      || sourceRecord.contentId
-      || sourceRecord.imageId,
-    imageId: selectedRecord.imageId || sourceRecord.imageId,
+    contentId: projectContentId,
+    imageId: selectedRecord.imageId || sourceRecord.imageId || projectContentId,
     quoteText: project.sourceIdentity?.normalizedText
       || selectedRecord.quoteText
       || selectedRecord.text
@@ -7854,6 +7957,21 @@ async function validateCompletionEditableProjectIdentity(completion = {}) {
     editableProjectValidationStatus: "verified",
     editableProjectValidationError: {}
   };
+}
+
+async function refreshEditableProjectForQc(record = {}) {
+  if (!["identity_conflict", "drive_inaccessible"].includes(record.editableProjectValidationStatus)
+    || !record.pigCompletionId || !record.graphicsRequestId) return record;
+  try {
+    const validated = await validateEditableProjectForRework(record);
+    if (!validated.editableProjectAvailable || validated.editableProjectValidationStatus !== "verified") return record;
+    return { ...validated, editableProjectValidationError: {} };
+  } catch (error) {
+    return { ...record, editableProjectAvailable: false,
+      editableProjectValidationError: editableProjectValidationWarning(error, {
+        editableProjectFileId: record.editableProjectValidationError?.fileId
+      }) };
+  }
 }
 
 async function validateEditableProjectForRework(update = {}) {
@@ -8603,6 +8721,17 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  if (url.pathname === "/api/admin/video-curation-candidates/receiver" && req.method === "GET") {
+    try {
+      await verifyAdministrativeCaller(req);
+      return sendJson(res, 200, await inspectVideoReceiverState(
+        cleanSheetWhitespace(url.searchParams.get("prioritySetId")),
+        cleanSheetWhitespace(url.searchParams.get("sourceFileId"))));
+    } catch (error) {
+      return sendJson(res, Number(error.statusCode || 502), { ok: false, error: error.message });
+    }
+  }
+
   if (url.pathname === "/api/admin/video-curation-candidates" && req.method === "GET") {
     try {
       await verifyAdministrativeCaller(req);
@@ -8630,6 +8759,16 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, result.ok ? 200 : 502, result);
     } catch (error) {
       return sendJson(res, Number(error.statusCode || 500), { ok: false, error: error.message });
+    }
+  }
+
+  if (url.pathname === "/api/admin/video-curation-gates/context" && req.method === "POST") {
+    try {
+      await verifyAdministrativeCaller(req);
+      const payload = JSON.parse(await readRequestBody(req) || "{}");
+      return sendJson(res, 200, await deliverVideoReviewContext(payload));
+    } catch (error) {
+      return sendJson(res, Number(error.statusCode || 502), { ok: false, error: error.message });
     }
   }
 

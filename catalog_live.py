@@ -26,18 +26,55 @@ def _get_json(path: str):
         return json.load(response)
 
 
+def fetch_readable_books() -> dict:
+    """Read a complete, single-revision Catalog listing using its stable cursor."""
+    books = []
+    revision = None
+    after = 0
+    while True:
+        query = urllib.parse.urlencode({"readable": "true", "limit": 500, "after": after})
+        page = _get_json("/books?" + query)
+        if not isinstance(page, dict) or not isinstance(page.get("books"), list):
+            raise ValueError("Catalog book list returned an invalid response")
+        page_revision = page.get("catalog_revision")
+        if not isinstance(page_revision, str) or not page_revision.strip():
+            raise ValueError("Catalog book list has no revision")
+        if revision is not None and page_revision != revision:
+            raise ValueError("Catalog changed during book listing; retry the lookup")
+        revision = page_revision
+        last_id = after
+        for row in page["books"]:
+            if not isinstance(row, dict):
+                raise ValueError("Catalog book list contains an invalid book")
+            book_id = row.get("book_id")
+            if type(book_id) is not int or book_id <= last_id:
+                raise ValueError("Catalog book IDs are not strictly increasing")
+            last_id = book_id
+            count = row.get("poem_key_count")
+            if type(count) is not int or count < 0:
+                raise ValueError("Catalog book has an invalid poem-key count")
+            if (row.get("readable") is True
+                    and row.get("effective_status") in READABLE_STATUSES
+                    and row.get("source_format") in {"epub", "docx", "pdf"}
+                    and count > 0):
+                books.append({
+                    **row,
+                    "canonical_book_id": book_id,
+                    "book_shortener": row.get("shortener") or "",
+                    "primary_source_format": row["source_format"],
+                })
+        if "next_after" not in page:
+            raise ValueError("Catalog book list has no pagination marker")
+        next_after = page["next_after"]
+        if next_after is None:
+            return {"books": books, "catalog_revision": revision}
+        if type(next_after) is not int or next_after <= after or next_after != last_id:
+            raise ValueError("Catalog book list returned an invalid cursor")
+        after = next_after
+
+
 def list_readable_books() -> list[dict]:
-    # Catalog search uses SQL LIKE; % lists its current book statuses in one call.
-    rows = _get_json("/search?query=%25&limit=1000")
-    if not isinstance(rows, list):
-        raise ValueError("Catalog book search returned an invalid response")
-    return [
-        row for row in rows
-        if isinstance(row, dict)
-        and row.get("effective_status") in READABLE_STATUSES
-        and row.get("primary_source_format") in {"epub", "docx", "pdf"}
-        and int(row.get("catalog_poem_count") or 0) > 0
-    ]
+    return fetch_readable_books()["books"]
 
 
 @lru_cache(maxsize=128)

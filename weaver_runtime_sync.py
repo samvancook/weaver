@@ -7,6 +7,7 @@ import re
 import os
 import sys
 import uuid
+import time
 from datetime import datetime
 from typing import Any
 
@@ -67,6 +68,7 @@ FIRESTORE_HANDOFF_ACTIONS = {
     "get_curation_reviews",
     "upsert_video_curation_gate",
     "claim_video_curation_handoff",
+    "release_video_curation_handoff_claim",
     "finish_video_curation_handoff",
     "refresh_video_curation_receipt",
     "get_video_curation_gates",
@@ -898,19 +900,58 @@ def claim_video_curation_handoff(connection, payload: dict[str, Any]) -> dict[st
     existing, update_time = connection.get_raw_document_versioned(FIRESTORE_VIDEO_CURATION_GATES_COLLECTION, gate_id)
     if not existing or existing.get("decision") != "ready_for_poetry_please":
         return {"ok": True, "claimed": False, "reason": "gate_not_ready"}
-    if normalize_text((existing.get("poetryPleaseHandoff") or {}).get("status")):
+    prior_handoff = existing.get("poetryPleaseHandoff") or {}
+    retry = payload.get("retryFailedProof")
+    if retry is not None:
+        if (not isinstance(retry, dict)
+                or prior_handoff.get("status") != "failed"
+                or prior_handoff.get("ok") is True
+                or normalize_text(prior_handoff.get("canonicalVideoId"))
+                or retry.get("expectedHandoff") != prior_handoff
+                or not normalize_text(retry.get("importLedgerId"))
+                or not normalize_text(retry.get("sourceRecordId"))
+                or retry.get("sourceRecordId") != prior_handoff.get("sourceRecordId")
+                or retry.get("sourceRecordId") != existing.get("videoRecordId")
+                or not isinstance(retry.get("receiptCheckedAtMs"), (int, float))
+                or not 0 <= time.time() * 1000 - retry["receiptCheckedAtMs"] <= 30000):
+            return {"ok": True, "claimed": False, "reason": "retry_receipt_or_attempt_changed", "record": existing}
+    elif normalize_text(prior_handoff.get("status")):
         return {"ok": True, "claimed": False, "reason": "handoff_already_started", "record": existing}
     now = utc_now_iso()
     attempt_id = uuid.uuid4().hex
     record = {
         **existing,
-        "poetryPleaseHandoff": {"status": "sending", "attemptId": attempt_id, "updatedAt": now},
+        "poetryPleaseHandoff": {"status": "sending", "attemptId": attempt_id, "updatedAt": now,
+            **({"previousHandoff": prior_handoff, "retryOfLedgerId": retry["importLedgerId"]} if retry else {})},
         "handoffStatus": "sending",
         "updatedAt": now,
         "history": (list(existing.get("history") or []) + [{"event": "poetry_please_handoff", "status": "sending", "attemptId": attempt_id, "at": now}])[-20:],
     }
     saved = connection.write_raw_document_if_unchanged(FIRESTORE_VIDEO_CURATION_GATES_COLLECTION, gate_id, record, update_time)
     return {"ok": True, "claimed": bool(saved), "reason": "" if saved else "concurrent_claim", "record": saved}
+
+
+def release_video_curation_handoff_claim(connection, payload: dict[str, Any]) -> dict[str, Any]:
+    priority_set_id = normalize_text(payload.get("prioritySetId"))
+    source_file_id = normalize_text(payload.get("sourceFileId"))
+    attempt_id = normalize_text(payload.get("attemptId"))
+    if not priority_set_id or not source_file_id or not attempt_id:
+        raise ValueError("A claimed video handoff is required")
+    gate_id = hashlib.sha256(f"{priority_set_id}|{source_file_id}".encode("utf-8")).hexdigest()[:32]
+    existing, update_time = connection.get_raw_document_versioned(FIRESTORE_VIDEO_CURATION_GATES_COLLECTION, gate_id)
+    handoff = (existing or {}).get("poetryPleaseHandoff") or {}
+    if normalize_text(handoff.get("status")) != "sending" or normalize_text(handoff.get("attemptId")) != attempt_id:
+        return {"ok": True, "released": False, "reason": "handoff_attempt_changed", "record": existing}
+    now = utc_now_iso()
+    record = {
+        **existing,
+        "poetryPleaseHandoff": handoff.get("previousHandoff") or {},
+        "handoffStatus": (handoff.get("previousHandoff") or {}).get("status") or "ready",
+        "updatedAt": now,
+        "history": (list(existing.get("history") or []) + [{"event": "poetry_please_handoff", "status": "claim_released_before_send", "attemptId": attempt_id, "at": now}])[-20:],
+    }
+    saved = connection.write_raw_document_if_unchanged(FIRESTORE_VIDEO_CURATION_GATES_COLLECTION, gate_id, record, update_time)
+    return {"ok": True, "released": bool(saved), "reason": "" if saved else "concurrent_update", "record": saved}
 
 
 def finish_video_curation_handoff(connection, payload: dict[str, Any]) -> dict[str, Any]:
@@ -2027,6 +2068,8 @@ def main() -> int:
             result = upsert_video_curation_gate(connection, payload)
         elif action == "claim_video_curation_handoff":
             result = claim_video_curation_handoff(connection, payload)
+        elif action == "release_video_curation_handoff_claim":
+            result = release_video_curation_handoff_claim(connection, payload)
         elif action == "finish_video_curation_handoff":
             result = finish_video_curation_handoff(connection, payload)
         elif action == "refresh_video_curation_receipt":
