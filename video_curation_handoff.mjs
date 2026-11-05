@@ -422,10 +422,8 @@ export function buildWeaverVideoImport(candidate, gate) {
     gateId: clean(gate.gateId),
     releaseStatus: clean(gate.releaseStatus) || clean(candidate.releaseStatus),
     publicationRestricted: false,
-    selectedExcerptRecordIds: [...new Set([
-      ...(Array.isArray(gate.selectedExcerptRecordIds) ? gate.selectedExcerptRecordIds : []),
-      ...(Array.isArray(candidate.excerptRecordIds) ? candidate.excerptRecordIds : []),
-    ].map(clean).filter(Boolean))],
+    selectedExcerptRecordIds: [...new Set((Array.isArray(gate.selectedExcerptRecordIds)
+      ? gate.selectedExcerptRecordIds : (candidate.excerptRecordIds || [])).map(clean).filter(Boolean))],
     reviews: Array.isArray(candidate.ratings) ? candidate.ratings : [],
     baseScore: gate.baseScore ?? candidate.baseScore,
     excerptBonus: gate.excerptBonus ?? candidate.excerptBonus,

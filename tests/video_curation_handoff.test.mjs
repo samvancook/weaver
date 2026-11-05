@@ -214,6 +214,12 @@ test("a replacement file retains the saved gate's excerpt associations", () => {
   assert.deepEqual(record.selectedExcerptRecordIds, ["archived-excerpt", "exc-1"]);
 });
 
+test("later excerpt pulls do not change a saved gate's selected excerpts on retry", () => {
+  const record = buildWeaverVideoImport({ ...candidate, excerptRecordIds: ["exc-1", "later-pull"] }, gate);
+  assert.deepEqual(record.selectedExcerptRecordIds, ["exc-1"]);
+  assert.deepEqual(buildWeaverVideoImport(candidate, { ...gate, selectedExcerptRecordIds: [] }).selectedExcerptRecordIds, []);
+});
+
 test("video import is a single root record with stable source identity", () => {
   const record = buildWeaverVideoImport(candidate, gate);
   assert.equal(record.contentType, "VV");
