@@ -11,7 +11,7 @@
     })();
   </script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
-  <link rel="stylesheet" href="/style.css?v=20261001a" />
+  <link rel="stylesheet" href="/style.css?v=20261105-session-recovery" />
 </head>
 <body>
   <div class="shell">
@@ -32,6 +32,10 @@
           <button class="hero-pill hero-pill--graphics" id="show-graphics-module" type="button">Graphics QC</button>
           <button class="hero-ops-button" id="show-graphics-ops" type="button" aria-label="Open under the hood graphics queue" title="Open under the hood graphics queue">⚙</button>
         </div>
+      </div>
+      <div class="admin-session" aria-label="Weaver sign-in">
+        <button class="hero-pill" id="admin-sign-in" type="button">Sign in</button>
+        <span id="admin-auth-status" role="status" aria-live="polite">Sign in to save decisions and manage videos.</span>
       </div>
     </header>
 
@@ -584,6 +588,6 @@
     </main>
   </div>
 
-  <script src="/app.js?v=20261105-context-delivery"></script>
+  <script src="/app.js?v=20261105-session-recovery"></script>
 </body>
 </html>

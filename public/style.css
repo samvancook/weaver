@@ -76,6 +76,16 @@ body {
   gap: 12px;
 }
 
+.admin-session {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 16px;
+  color: var(--muted);
+  font-size: 15px;
+}
+
 .hero-pill {
   display: inline-flex;
   align-items: center;
