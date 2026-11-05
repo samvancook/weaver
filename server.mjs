@@ -2620,15 +2620,12 @@ async function getVideoCurationCandidates(prioritySetId = "") {
       const baseScore = scoreValues.length
         ? scoreValues.reduce((total, score) => total + score, 0) / scoreValues.length
         : 0;
-      const excerptReviewers = new Set(reviews
-        .filter(review => Array.isArray(review.excerptRecordIds) && review.excerptRecordIds.length)
-        .map(review => cleanSheetWhitespace(review.reviewerEmail).toLowerCase())
-        .filter(Boolean));
       const excerptRecordIds = Array.from(new Set(reviews.flatMap(review => (
         Array.isArray(review.excerptRecordIds) ? review.excerptRecordIds : []
       )).map(cleanSheetWhitespace).filter(Boolean))).sort();
-      const excerptBonus = Math.min(1, excerptReviewers.size * 0.5);
-      const candidateScore = Number((baseScore + excerptBonus).toFixed(2));
+      // Excerpt collection is context, not a separate quality endorsement.
+      const excerptBonus = 0; // Retained for API compatibility.
+      const candidateScore = Number(baseScore.toFixed(2));
       const releaseStatus = getPriorityVideoReleaseStatus(file.name, set, sourceFileId);
       const firstReview = reviews[0] || {};
       const historicalSourceIds = [...new Set(reviews
@@ -5690,6 +5687,12 @@ async function handoffApprovedExcerptsToPoetryPlease(records = []) {
         result?.id ||
         result?.recordId
       );
+      if (!itemId) {
+        errorCount += 1;
+        results.push({ recordId: record.recordId, ok: false,
+          error: "Poetry Please returned no excerpt item identity; reconcile before retry.", response: result });
+        continue;
+      }
       createdCount += Number(result?.createdCount || 0);
       updatedCount += Number(result?.updatedCount || 0);
       results.push({
@@ -5729,26 +5732,29 @@ async function updateExcerptHandoffStatuses(records, poetryPlease) {
   }
 
   const now = new Date().toISOString();
-  const poetryPleaseResults = new Map(
-    Array.isArray(poetryPlease?.results)
-      ? poetryPlease.results.map(result => [cleanSheetWhitespace(result.recordId), result])
-      : []
-  );
+  const resultRows = Array.isArray(poetryPlease?.results) ? poetryPlease.results : [];
+  const resultsFor = record => resultRows.filter(result =>
+    cleanSheetWhitespace(result.recordId) === cleanSheetWhitespace(record.recordId));
+  const acknowledged = record => {
+    const matches = resultsFor(record);
+    return matches.length === 1 && matches[0].ok === true
+      && Boolean(cleanSheetWhitespace(matches[0].poetryPleaseItemId));
+  };
   const statusUpdates = handoffRecords.map(record => ({
     ...record,
-    handoffStatus: poetryPleaseResults.get(cleanSheetWhitespace(record.recordId))?.ok === false ? "failed" : "sent",
-    handedOffAt: poetryPleaseResults.get(cleanSheetWhitespace(record.recordId))?.ok === false
+    handoffStatus: acknowledged(record) ? "sent" : "failed",
+    handedOffAt: !acknowledged(record)
       ? String(record.handedOffAt || "")
       : now,
-    poetryPleaseItemId: poetryPleaseResults.get(cleanSheetWhitespace(record.recordId))?.ok === false
+    poetryPleaseItemId: !acknowledged(record)
       ? String(record.poetryPleaseItemId || "")
-      : cleanSheetWhitespace(poetryPleaseResults.get(cleanSheetWhitespace(record.recordId))?.poetryPleaseItemId),
-    errorMessage: poetryPleaseResults.get(cleanSheetWhitespace(record.recordId))?.ok === false
+      : cleanSheetWhitespace(resultsFor(record)[0]?.poetryPleaseItemId),
+    errorMessage: !acknowledged(record)
       ? String(
-          poetryPleaseResults.get(cleanSheetWhitespace(record.recordId))?.error ||
-          poetryPlease.error ||
-          poetryPlease.reason ||
-          "handoff_failed"
+          resultsFor(record)[0]?.error ||
+          poetryPlease?.error ||
+          poetryPlease?.reason ||
+          "Missing or ambiguous Poetry Please item acknowledgement; reconcile before retry."
         )
       : "",
     updatedAt: now
@@ -5760,7 +5766,7 @@ async function updateExcerptHandoffStatuses(records, poetryPlease) {
         return [];
       }
       const noteValue = cleanSheetWhitespace(record.poetryPleaseItemId)
-        ? `item=${cleanSheetWhitespace(record.poetryPleaseItemId)}`
+        ? `item=${cleanSheetWhitespace(record.poetryPleaseItemId)}${record.errorMessage ? `; ${record.errorMessage}` : ""}`
         : String(record.errorMessage || "");
       return [
         {
