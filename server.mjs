@@ -7177,6 +7177,15 @@ async function getGraphicsRecordsForBookFromSheets(bookTitle, mode) {
       .filter(record => normalizeBookKey(record.bookTitle) === requestedKey);
   }
 
+  if (["qc", "cleanup"].includes(resolvedMode)) {
+    // Recheck quarantined sidecars against their exact persisted completion.
+    // This refreshes the read model only; it does not save a QC decision.
+    for (let offset = 0; offset < records.length; offset += 4) {
+      const refreshed = await Promise.all(records.slice(offset, offset + 4).map(refreshEditableProjectForQc));
+      records.splice(offset, refreshed.length, ...refreshed);
+    }
+  }
+
   preferredBookTitle = records.reduce(
     (current, record) => choosePreferredBookTitle(current, record.bookTitle),
     preferredBookTitle
@@ -7852,19 +7861,26 @@ async function validateCompletionEditableProjectIdentity(completion = {}) {
   const sourceRecord = project.sourceRecord && typeof project.sourceRecord === "object"
     ? project.sourceRecord
     : {};
+  // PP-selected projects keep the canonical excerpt ID in textId/id/recordId.
+  // sourceRecordId may instead name the original source row (a different ID
+  // namespace), so use it only when no canonical record identity is present.
+  const projectContentId = cleanEditableIdentityValue(
+    project.sourceIdentity?.contentId || project.sourceIdentity?.imageId
+      || selectedRecord.contentId || selectedRecord.imageId
+      || sourceRecord.contentId || sourceRecord.imageId
+      || selectedRecord.textId || sourceRecord.textId
+      || project.sourceIdentity?.recordId || selectedRecord.id || sourceRecord.id
+      || selectedRecord.sourceRecordId || selectedRecord.recordId || sourceRecord.sourceRecordId
+  );
   const projectIdentity = getEditableIdentityValues({
     ...sourceRecord,
     ...selectedRecord,
-    sourceIdentity: project.sourceIdentity,
+    sourceIdentity: { ...project.sourceIdentity, contentId: projectContentId },
     graphicsRequestId: project.sourceIdentity?.graphicsRequestId
       || selectedRecord.graphicsRequestId
       || sourceRecord.graphicsRequestId,
-    contentId: selectedRecord.contentId
-      || selectedRecord.sourceRecordId
-      || selectedRecord.recordId
-      || sourceRecord.contentId
-      || sourceRecord.imageId,
-    imageId: selectedRecord.imageId || sourceRecord.imageId,
+    contentId: projectContentId,
+    imageId: selectedRecord.imageId || sourceRecord.imageId || projectContentId,
     quoteText: project.sourceIdentity?.normalizedText
       || selectedRecord.quoteText
       || selectedRecord.text
@@ -7926,6 +7942,21 @@ async function validateCompletionEditableProjectIdentity(completion = {}) {
     editableProjectValidationStatus: "verified",
     editableProjectValidationError: {}
   };
+}
+
+async function refreshEditableProjectForQc(record = {}) {
+  if (!["identity_conflict", "drive_inaccessible"].includes(record.editableProjectValidationStatus)
+    || !record.pigCompletionId || !record.graphicsRequestId) return record;
+  try {
+    const validated = await validateEditableProjectForRework(record);
+    if (!validated.editableProjectAvailable || validated.editableProjectValidationStatus !== "verified") return record;
+    return { ...validated, editableProjectValidationError: {} };
+  } catch (error) {
+    return { ...record, editableProjectAvailable: false,
+      editableProjectValidationError: editableProjectValidationWarning(error, {
+        editableProjectFileId: record.editableProjectValidationError?.fileId
+      }) };
+  }
 }
 
 async function validateEditableProjectForRework(update = {}) {
