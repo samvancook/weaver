@@ -7,7 +7,7 @@ import sqlite3
 import sys
 
 from catalog_validate import DB_PATH, fetch_book_status, fetch_poems_for_book, load_book_status_rows
-from catalog_live import fetch_readable_book, list_readable_books
+from catalog_live import fetch_readable_book, fetch_readable_books
 
 
 def clean_title(text: str) -> str:
@@ -38,8 +38,11 @@ def display_poem_options(poems: list[dict]) -> list[dict]:
 def get_intake_books() -> dict:
     books = []
     lookup_status = "live"
+    catalog_revision = ""
     try:
-        status_rows = list_readable_books()
+        snapshot = fetch_readable_books()
+        status_rows = snapshot["books"]
+        catalog_revision = snapshot["catalog_revision"]
     except (OSError, ValueError):
         status_rows = load_book_status_rows()
         lookup_status = "cached_fallback"
@@ -61,7 +64,8 @@ def get_intake_books() -> dict:
         )
 
     books.sort(key=lambda book: ((book["title"] or "").lower(), (book["author"] or "").lower()))
-    return {"ok": True, "books": books, "catalogLookupStatus": lookup_status}
+    return {"ok": True, "books": books, "catalogLookupStatus": lookup_status,
+            "catalogRevision": catalog_revision}
 
 
 def get_poems(book_title: str) -> dict:

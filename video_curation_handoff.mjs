@@ -1,4 +1,5 @@
 import {normalizeFootageConnections,receivedFootageConnections} from './footage_provenance.mjs';
+import { createHash } from "node:crypto";
 
 function clean(value) {
   return String(value ?? "").trim();
@@ -72,6 +73,21 @@ export function reconcileVideoReviews(files, records) {
   return [...byReviewerAndFile.values()];
 }
 
+// Retain stored source IDs separately from the dashboard's filename-based
+// aggregation. A count is not proof of canonical recording identity.
+export function buildVideoReviewEvidence(files, records, currentFileId) {
+  return records.filter(record => clean(record.rating)
+    && resolveCurrentVideoFileId(record, files) === clean(currentFileId))
+    .map(record => ({
+      reviewId: clean(record.reviewId), sourceFileId: clean(record.sourceFileId),
+      sourceFileName: clean(record.sourceFileName),
+      mapping: clean(record.sourceFileId) === clean(currentFileId) ? "direct_file_id" : "filename_reconciliation",
+      reviewerEmail: clean(record.reviewerEmail), rating: clean(record.rating),
+      excerptRecordIds: [...new Set((record.excerptRecordIds || []).map(clean).filter(Boolean))],
+      updatedAt: clean(record.updatedAt)
+    }));
+}
+
 export function buildReviewerProgressExport(reviewerEmail, setResults) {
   const email = clean(reviewerEmail).toLowerCase();
   const sets = setResults.map(({ set, files, reviews }) => {
@@ -132,6 +148,150 @@ export function assertExistingCanonicalReceipt(receipt, sourceRecordId, canonica
     || clean(receipt.canonicalVideoId) !== clean(canonicalVideoId)
     || clean(receipt.event?.sourceEvent) !== clean(sourceEvent)) {
     throw new Error("The existing Poetry Please video identity could not be verified; no update was sent.");
+  }
+}
+
+export function assertVideoImportPreflight(receipt, sourceRecordId) {
+  if (receipt?.ok !== true || clean(receipt.sourceRecordId) !== sourceRecordId
+    || receipt.received !== false || receipt.ambiguousVideoMatch
+    || clean(receipt.canonicalVideoId) || receipt.ledger?.count !== 0) {
+    throw new Error("Poetry Please already has this source or its receipt needs reconciliation; no video was sent.");
+  }
+}
+
+export function assertVideoRetryPreflight(receipt, record, gate) {
+  const prior = gate?.poetryPleaseHandoff || {};
+  const latest = receipt?.ledger?.latest;
+  const canonical = `WEAVER-VV-${createHash("sha256").update(record.sourceRecordId).digest("hex").slice(0, 24).toUpperCase()}`;
+  if (prior.status !== "failed" || prior.ok === true || clean(prior.canonicalVideoId)
+    || clean(prior.sourceRecordId) !== record.sourceRecordId
+    || clean(gate.videoRecordId) !== record.sourceRecordId
+    || receipt?.ok !== true || receipt.received !== false || receipt.ambiguousVideoMatch
+    || clean(receipt.sourceRecordId) !== record.sourceRecordId || clean(receipt.canonicalVideoId)
+    || receipt.expectedCanonicalVideoId !== canonical || receipt.ledger?.count !== 1
+    || latest?.status !== "failed" || !clean(latest.importLedgerId) || clean(latest.canonicalVideoId)
+    || !/(?:timeout|timed?\s*out|deadline)/i.test(clean(latest.error))
+    || latest.receivedReviewCount !== 0 || latest.receivedSelectedExcerptIdCount !== 0
+    || receipt.review?.reviewCount !== 0 || receipt.review?.selectedExcerptIdCount !== 0) {
+    throw new Error("This failed send is not a verified empty timeout attempt; no retry was sent.");
+  }
+  assertVideoClaimMatchesRecord(gate, record);
+  return { importLedgerId: latest.importLedgerId, sourceRecordId: record.sourceRecordId,
+    expectedHandoff: prior, receiptCheckedAtMs: Date.now() };
+}
+
+export function buildVideoContextUpdate(candidate, receipt) {
+  const sourceRecordId = clean(candidate.videoRecordId);
+  const canonicalVideoId = clean(candidate.existingCanonicalVideoId);
+  if (!canonicalVideoId || !candidate.sourceReviewFileId || !candidate.gate
+    || candidate.gate.decision !== "ready_for_poetry_please"
+    || candidate.publicationRestricted) throw new Error("An existing, ready canonical video is required.");
+  assertExistingCanonicalReceipt(receipt, sourceRecordId, canonicalVideoId, candidate.sourceEvent);
+  const evidence = candidate.reviewEvidence || [];
+  const reviews = (candidate.ratings || []).flatMap(review => {
+    const origins = evidence.filter(row => row.reviewId === review.reviewId);
+    if (origins.length !== 1 || !clean(review.reviewId)) return [];
+    const origin = origins[0];
+    // Only the exact canonical review source or the current FV, not a third
+    // source included solely through filename reconciliation.
+    if (![clean(candidate.sourceFileId), clean(candidate.sourceReviewFileId)].includes(clean(origin.sourceFileId))) return [];
+    return [{ ...review, sourceRecordId: `weaver:video:${origin.sourceFileId}`,
+      excerptRecordIds: [...new Set((origin.excerptRecordIds || []).map(clean).filter(Boolean))] }];
+  });
+  if (!reviews.length || new Set(reviews.map(row => row.reviewId)).size !== reviews.length) {
+    throw new Error("Exact stored review identities are required for context delivery.");
+  }
+  const selectedExcerptRecordIds = [...new Set((candidate.gate.selectedExcerptRecordIds || []).map(clean).filter(Boolean))];
+  return { canonicalVideoId, sourceRecordId, sourceEvent: clean(candidate.sourceEvent), reviews, selectedExcerptRecordIds };
+}
+
+export async function syncVideoReviewContext(candidate, { readReceipt, postContext }) {
+  const before = await readReceipt(candidate.videoRecordId);
+  const record = buildVideoContextUpdate(candidate, before);
+  const context = await postContext(record);
+  if (context?.ok !== true || context.canonicalVideoId !== record.canonicalVideoId
+    || context.sourceRecordId !== record.sourceRecordId
+    || context.receivedReviewCount !== record.reviews.length
+    || context.receivedSelectedExcerptIdCount !== record.selectedExcerptRecordIds.length) {
+    throw new Error("Poetry Please did not verify all submitted context; inspect its receipt before retrying.");
+  }
+  const after = await readReceipt(record.sourceRecordId);
+  assertExistingCanonicalReceipt(after, record.sourceRecordId, record.canonicalVideoId, record.sourceEvent);
+  for (const field of ["driveLink", "videoUrl", "storageMode", "reviewOnly"]) {
+    if (JSON.stringify(before.media?.[field]) !== JSON.stringify(after.media?.[field])) {
+      throw new Error("Primary media changed during context reconciliation; inspect this video.");
+    }
+  }
+  if (after.review?.reviewCount !== context.storedReviewCount
+    || after.review?.selectedExcerptIdCount !== context.storedSelectedExcerptIdCount) {
+    throw new Error("The saved Poetry Please context receipt does not match its write result.");
+  }
+  return { ok: true, context, submittedReviewIds: record.reviews.map(row => row.reviewId),
+    selectedExcerptRecordIds: record.selectedExcerptRecordIds,
+    receiver: summarizeVideoReceiverState(candidate, after) };
+}
+
+export function summarizeVideoReceiverState(candidate, receipt, versions = null) {
+  if (receipt?.ok !== true || receipt.ambiguousVideoMatch
+    || clean(receipt.sourceRecordId) !== clean(candidate.videoRecordId)) {
+    throw new Error("Poetry Please receipt does not uniquely match this reviewed source.");
+  }
+  if (receipt.received === false) {
+    if (clean(receipt.canonicalVideoId)) throw new Error("Poetry Please absence receipt contains a canonical video.");
+    return { received: false, sourceRecordId: candidate.videoRecordId, ledger: receipt.ledger || null };
+  }
+  const canonicalVideoId = clean(receipt.canonicalVideoId);
+  if (receipt.received !== true || !canonicalVideoId
+    || (candidate.existingCanonicalVideoId && canonicalVideoId !== candidate.existingCanonicalVideoId)
+    || clean(receipt.event?.sourceEvent) !== clean(candidate.sourceEvent)) {
+    throw new Error("Poetry Please canonical video or event does not match this candidate.");
+  }
+  if (versions && (versions.ok !== true || versions.schemaVersion !== "1" || !Array.isArray(versions.renditions)
+    || clean(versions.canonicalVideoId) !== canonicalVideoId
+    || clean(versions.sourceRecordId) !== clean(candidate.videoRecordId))) {
+    throw new Error("Poetry Please versions belong to a different canonical video or source.");
+  }
+  return {
+    received: true, sourceRecordId: candidate.videoRecordId, canonicalVideoId,
+    event: receipt.event, media: receipt.media, review: receipt.review,
+    currentFinalFileId: driveFileId(candidate.gate?.publishableAssetUrl || candidate.sourceVideoUrl),
+    receiverFinalFileId: driveFileId(receipt.media?.driveLink),
+    expectedReviewCount: candidate.reviewCount,
+    expectedExcerptCount: Array.isArray(candidate.gate?.selectedExcerptRecordIds)
+      ? new Set(candidate.gate.selectedExcerptRecordIds.map(clean).filter(Boolean)).size
+      : candidate.excerptRecordIds?.length || 0,
+    gatheredExcerptCount: candidate.excerptRecordIds?.length || 0,
+    renditions: Array.isArray(versions?.renditions) ? versions.renditions : [],
+  };
+}
+
+export function assertVideoImportReadback(receipt, record, result) {
+  let driveHost = "";
+  try { driveHost = new URL(receipt?.media?.driveLink).hostname; } catch {}
+  if (receipt?.ok !== true || receipt.received !== true || receipt.ambiguousVideoMatch
+    || clean(receipt.sourceRecordId) !== record.sourceRecordId
+    || clean(receipt.canonicalVideoId) !== result.canonicalVideoId
+    || clean(receipt.event?.sourceEvent) !== record.sourceEvent
+    || clean(receipt.event?.sourceEventLabel) !== record.sourceEventLabel
+    || driveHost !== "drive.google.com"
+    || driveFileId(receipt.media?.driveLink) !== driveFileId(record.finalAssetUrl)
+    || !driveFileId(record.finalAssetUrl)
+    || receipt.media?.reviewOnly !== true
+    || receipt.review?.reviewCount !== record.reviews.length
+    || receipt.review?.selectedExcerptIdCount !== record.selectedExcerptRecordIds.length) {
+    throw new Error("Poetry Please import response was not confirmed by its current receipt; reconcile this attempt before another send.");
+  }
+}
+
+export function assertVideoClaimMatchesRecord(claimedGate, record) {
+  const excerpts = [...new Set((claimedGate?.selectedExcerptRecordIds || []).map(clean).filter(Boolean))].sort();
+  if (clean(claimedGate?.decision) !== "ready_for_poetry_please"
+    || clean(claimedGate?.videoRecordId) !== record.sourceRecordId
+    || clean(claimedGate?.sourceEvent) !== record.sourceEvent
+    || clean(claimedGate?.sourceEventLabel) !== record.sourceEventLabel
+    || clean(claimedGate?.publishableAssetUrl) !== record.finalAssetUrl
+    || JSON.stringify(excerpts) !== JSON.stringify([...record.selectedExcerptRecordIds].sort())) {
+    throw new Error("The saved video gate changed during send preparation; this attempt is held for reconciliation.");
   }
 }
 
@@ -269,10 +429,8 @@ export function buildWeaverVideoImport(candidate, gate) {
     gateId: clean(gate.gateId),
     releaseStatus: clean(gate.releaseStatus) || clean(candidate.releaseStatus),
     publicationRestricted: false,
-    selectedExcerptRecordIds: [...new Set([
-      ...(Array.isArray(gate.selectedExcerptRecordIds) ? gate.selectedExcerptRecordIds : []),
-      ...(Array.isArray(candidate.excerptRecordIds) ? candidate.excerptRecordIds : []),
-    ].map(clean).filter(Boolean))],
+    selectedExcerptRecordIds: [...new Set((Array.isArray(gate.selectedExcerptRecordIds)
+      ? gate.selectedExcerptRecordIds : (candidate.excerptRecordIds || [])).map(clean).filter(Boolean))],
     reviews: Array.isArray(candidate.ratings) ? candidate.ratings : [],
     baseScore: gate.baseScore ?? candidate.baseScore,
     excerptBonus: gate.excerptBonus ?? candidate.excerptBonus,
