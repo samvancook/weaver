@@ -7302,9 +7302,7 @@ elements.gatheringVideoLoadProgress?.addEventListener("click", loadPriorityVideo
 elements.adminSignIn?.addEventListener("click", async () => {
   try {
     await getGoogleAdminAccessToken({ interactive: true, forceAccountSelection: true });
-    if (currentGraphicsView === "ops") {
-      await Promise.allSettled([loadPriorityVideoProgress(), loadVideoCurationCandidates()]);
-    }
+    // Do not reload queues here: their forms may contain unsaved decisions.
   } catch (_error) {
     // The session controls already display recovery instructions; keep form edits.
   }
