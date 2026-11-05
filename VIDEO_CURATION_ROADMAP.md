@@ -10,11 +10,16 @@ Poetry Please's current handback reports eleven of thirteen BPL 4K primaries reg
 
 PR #76 integrates the released sender, receiver inspection, context/retry, graphics QC identity and Catalog fixes into main while preserving the pre-existing Footage work. The combined tree passed 103 Node and 26 Python tests, including Footage authentication and registration. The Python 3.9 test host used the equivalent `datetime.UTC` alias required by production Python 3.11. Main was not deployed wholesale; the manual release trigger remains disabled.
 
-Next Weaver reliability work:
+Completed follow-up — 2026-11-05:
 
-- Make administrator sign-in explicit and recoverable: expose signed-in/expired state, handle popup closure or blocking, respect token expiry, and prevent background loads from opening sign-in popups. Keep tokens in memory and retain current server authorization. Verify that retrying authentication never silently repeats a mutation.
-- Audit current excerpt poem-key coverage and exact downstream persistence before any backfill; never infer keys from titles or stale catalog row IDs.
-- Review ranking's excerpt bonus, currently `min(1, 0.5 × reviewers with excerpt IDs)`. Collected excerpts alone must not be mistaken for a separate quality endorsement. The scoring policy remains undecided; no weight changed in these repairs.
+- PRs #78/#79 add visible sign-in/session recovery, token expiry checks, popup failure handling and isolated attempt callbacks. Background requests do not open sign-in; 401 responses do not replay mutations. Explicit sign-in preserves unsaved forms. The focused release had a successful real Google sign-in and authenticated scoreboard read. Nine session regression tests cover recovery and stale responses. Server authorization/scopes and in-memory token storage are unchanged.
+- Sam approved removing the excerpt bonus. PR #80 makes candidate score equal the reviewer average while keeping excerpt counts and identities visible (`excerptBonus=0` is retained for API compatibility). Existing decisions and sent receipts are not rewritten.
+- PR #80 also prevents an aggregate failure, missing result, duplicate result or absent receiver item ID from marking an excerpt sent. Exactly one successful acknowledgement for that source record is required. This repairs future status updates; it does not reconcile historical receiver state.
+
+Still open:
+
+- A current export-view audit found 216 keyed records among 1,313 approved records, plus 12 unkeyed pending rows. These are not persisted Firestore coverage counts. Strict current Catalog author/title/text matching did not resolve the pending rows; Catalog owns the source/edition check. Preserve existing keys and never infer them from titles or stale row IDs.
+- The current excerpt handoff view contains 520 failed and 87 queued records. Historical error labels include metadata and source-video linkage problems; many metadata fields are now present, so labels alone are not retry preflights. PP has a read-only source-ID/receipt/mapping reconciliation request in the shared-drive video register. Do not bulk resend, replace content or mark old failures resolved without exact receiver evidence. The completed video transfers above remain separate.
 
 The latest Footage roadmap separately reports the normal Helper PAGES connection live. Human intake-completeness/closure and Ollie OM/FV evidence review remain owner work. Neither transfer success nor a saved curation link certifies a complete intake or publication approval.
 
