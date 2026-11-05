@@ -527,3 +527,11 @@ test("failed timeout retry requires exact empty receiver identity and the same g
   ]) assert.throws(()=>assertVideoRetryPreflight(bad,record,gate));
   for(const bad of [{...gate,poetryPleaseHandoff:{...gate.poetryPleaseHandoff,status:'needs_reconciliation'}},{...gate,publishableAssetUrl:'https://drive.google.com/file/d/changed/view'},{...gate,selectedExcerptRecordIds:['other']}]) assert.throws(()=>assertVideoRetryPreflight(receipt,record,bad));
 });
+
+test("receiver comparison uses gate-selected links instead of later gathered pulls", () => {
+  const candidate={videoRecordId:'source',existingCanonicalVideoId:'canonical',sourceEvent:'event',excerptRecordIds:['selected','later'],gate:{selectedExcerptRecordIds:['selected']}};
+  const receipt={ok:true,received:true,sourceRecordId:'source',canonicalVideoId:'canonical',event:{sourceEvent:'event'},review:{selectedExcerptIdCount:1}};
+  const state=summarizeVideoReceiverState(candidate,receipt);
+  assert.equal(state.expectedExcerptCount,1);assert.equal(state.gatheredExcerptCount,2);
+  assert.equal(summarizeVideoReceiverState({...candidate,gate:{selectedExcerptRecordIds:[]}},receipt).expectedExcerptCount,0);
+});

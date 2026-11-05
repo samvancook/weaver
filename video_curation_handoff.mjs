@@ -256,7 +256,10 @@ export function summarizeVideoReceiverState(candidate, receipt, versions = null)
     currentFinalFileId: driveFileId(candidate.gate?.publishableAssetUrl || candidate.sourceVideoUrl),
     receiverFinalFileId: driveFileId(receipt.media?.driveLink),
     expectedReviewCount: candidate.reviewCount,
-    expectedExcerptCount: candidate.excerptRecordIds?.length || 0,
+    expectedExcerptCount: Array.isArray(candidate.gate?.selectedExcerptRecordIds)
+      ? new Set(candidate.gate.selectedExcerptRecordIds.map(clean).filter(Boolean)).size
+      : candidate.excerptRecordIds?.length || 0,
+    gatheredExcerptCount: candidate.excerptRecordIds?.length || 0,
     renditions: Array.isArray(versions?.renditions) ? versions.renditions : [],
   };
 }
