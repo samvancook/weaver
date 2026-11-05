@@ -2,6 +2,8 @@ let runtimeConfig = window.WEAVER_CONFIG || {};
 let currentGraphicsView = "main";
 
 const elements = {
+  adminSignIn: document.getElementById("admin-sign-in"),
+  adminAuthStatus: document.getElementById("admin-auth-status"),
   showGatheringModule: document.getElementById("show-gathering-module"),
   showReviewModule: document.getElementById("show-review-module"),
   showWeirdModule: document.getElementById("show-weird-module"),
@@ -192,9 +194,10 @@ let pendingBookSubmission = null;
 let currentGatheringVideoPlaylist = null;
 let googleSheetsTokenClient = null;
 let googleSheetsAccessToken = "";
-let googleAdminTokenClient = null;
 let googleAdminAccessToken = "";
 let googleAdminTokenRequest = null;
+let googleAdminTokenExpiresAt = 0;
+let googleAdminExpiryTimer = null;
 let reviewVisibleCount = 1;
 let reviewShowAdditionalPulls = false;
 let reviewPinnedRowOrder = [];
@@ -3163,10 +3166,24 @@ async function getGoogleSheetsAccessToken() {
   });
 }
 
-function ensureGoogleAdminTokenClient() {
-  if (googleAdminTokenClient) {
-    return googleAdminTokenClient;
+function setAdminAuthUi(message, pending = false) {
+  if (elements.adminAuthStatus) elements.adminAuthStatus.textContent = message;
+  if (elements.adminSignIn) {
+    elements.adminSignIn.disabled = pending;
+    elements.adminSignIn.textContent = pending ? "Signing in…"
+      : googleAdminAccessToken ? "Switch account" : "Sign in";
   }
+}
+
+function clearGoogleAdminSession(message = "Sign in to save decisions and manage videos.") {
+  googleAdminAccessToken = "";
+  googleAdminTokenExpiresAt = 0;
+  clearTimeout(googleAdminExpiryTimer);
+  googleAdminExpiryTimer = null;
+  setAdminAuthUi(message);
+}
+
+function ensureGoogleAdminTokenClient(callback, errorCallback) {
   const clientId = runtimeConfig.googleOAuthClientId || "";
   if (!clientId) {
     throw new Error("Weaver administrator authentication is not configured.");
@@ -3174,38 +3191,62 @@ function ensureGoogleAdminTokenClient() {
   if (!window.google?.accounts?.oauth2) {
     throw new Error("Google administrator authentication is still loading.");
   }
-  googleAdminTokenClient = window.google.accounts.oauth2.initTokenClient({
+  // A fresh client keeps callbacks from an expired attempt isolated from its retry.
+  return window.google.accounts.oauth2.initTokenClient({
     client_id: clientId,
     scope: GOOGLE_ADMIN_SCOPES,
-    callback: () => {}
+    callback,
+    error_callback: errorCallback
   });
-  return googleAdminTokenClient;
 }
 
-async function getGoogleAdminAccessToken({ forceAccountSelection = false } = {}) {
-  if (googleAdminAccessToken && !forceAccountSelection) {
+async function getGoogleAdminAccessToken({ forceAccountSelection = false,
+  interactive = window.navigator?.userActivation?.isActive === true } = {}) {
+  if (googleAdminAccessToken && Date.now() < googleAdminTokenExpiresAt && !forceAccountSelection) {
     return googleAdminAccessToken;
   }
   if (googleAdminTokenRequest) return googleAdminTokenRequest;
-  const tokenClient = ensureGoogleAdminTokenClient();
+  clearGoogleAdminSession();
+  if (!interactive) {
+    throw new Error("Sign in using the Sign in button at the top, then retry this action.");
+  }
   let timeoutId;
+  let settled = false;
+  setAdminAuthUi("Complete Google sign-in in the popup.", true);
   googleAdminTokenRequest = new Promise((resolve, reject) => {
-    timeoutId = setTimeout(() => reject(new Error("Administrator sign-in timed out. Refresh to retry.")), 25000);
-    tokenClient.callback = response => {
-      if (response?.error) {
-        reject(new Error(response.error));
-        return;
-      }
-      googleAdminAccessToken = response?.access_token || "";
-      if (!googleAdminAccessToken) {
-        reject(new Error("missing_google_admin_access_token"));
-        return;
-      }
-      resolve(googleAdminAccessToken);
+    const fail = message => {
+      if (settled) return;
+      settled = true;
+      clearGoogleAdminSession(message);
+      reject(new Error(message));
     };
-    tokenClient.requestAccessToken({
-      prompt: forceAccountSelection ? "select_account" : ""
-    });
+    timeoutId = setTimeout(() => fail("Sign-in timed out. Click Sign in to retry; no page refresh is needed."), 120000);
+    try {
+      const tokenClient = ensureGoogleAdminTokenClient(response => {
+        if (settled) return;
+        if (response?.error) return fail("Google sign-in was not completed. Click Sign in to retry.");
+        const lifetime = Number(response?.expires_in);
+        if (!response?.access_token || !Number.isFinite(lifetime) || lifetime <= 0) {
+          return fail("Google did not return a valid session. Click Sign in to retry.");
+        }
+        settled = true;
+        googleAdminAccessToken = response.access_token;
+        const usableMs = lifetime * 1000 - Math.min(30000, lifetime * 100);
+        googleAdminTokenExpiresAt = Date.now() + usableMs;
+        googleAdminExpiryTimer = setTimeout(() => clearGoogleAdminSession(
+          "Your session expired. Sign in again; your work stays on this page."
+        ), Math.min(usableMs, 2147483647));
+        setAdminAuthUi("Signed in. Decisions are saved only when you submit them.");
+        resolve(googleAdminAccessToken);
+      }, error => fail(error?.type === "popup_failed_to_open"
+        ? "Google's popup was blocked. Allow popups for Weaver, then click Sign in."
+        : error?.type === "popup_closed"
+          ? "Sign-in was closed. Click Sign in when you're ready."
+          : "Google sign-in could not open. Click Sign in to retry."));
+      tokenClient.requestAccessToken({ prompt: forceAccountSelection ? "select_account" : "" });
+    } catch (error) {
+      fail(error.message || "Google sign-in is unavailable. Click Sign in to retry.");
+    }
   });
   try {
     return await googleAdminTokenRequest;
@@ -3216,20 +3257,15 @@ async function getGoogleAdminAccessToken({ forceAccountSelection = false } = {})
 }
 
 async function adminFetch(path, options = {}) {
-  const request = async forceAccountSelection => {
-    const token = await getGoogleAdminAccessToken({ forceAccountSelection });
-    const headers = new Headers(options.headers || {});
-    headers.set("Authorization", `Bearer ${token}`);
-    return fetch(path, {
-      ...options,
-      headers
-    });
-  };
-
-  let response = await request(false);
+  const token = await getGoogleAdminAccessToken();
+  const headers = new Headers(options.headers || {});
+  headers.set("Authorization", `Bearer ${token}`);
+  const response = await fetch(path, { ...options, headers });
   if (response.status === 401) {
-    googleAdminAccessToken = "";
-    response = await request(true);
+    const message = "Your sign-in expired or was not accepted. Click Sign in, then retry this action.";
+    if (googleAdminAccessToken === token) clearGoogleAdminSession(message);
+    // Do not replay a mutation or open a popup after an asynchronous response.
+    throw new Error(message);
   }
   return response;
 }
@@ -7263,6 +7299,16 @@ elements.gatheringVideoQuote?.addEventListener("input", updateGatheringQuoteMeta
 elements.gatheringVideoQuote2?.addEventListener("input", updateGatheringQuoteMeta);
 elements.gatheringVideoQuote3?.addEventListener("input", updateGatheringQuoteMeta);
 elements.gatheringVideoLoadProgress?.addEventListener("click", loadPriorityVideoProgress);
+elements.adminSignIn?.addEventListener("click", async () => {
+  try {
+    await getGoogleAdminAccessToken({ interactive: true, forceAccountSelection: true });
+    if (currentGraphicsView === "ops") {
+      await Promise.allSettled([loadPriorityVideoProgress(), loadVideoCurationCandidates()]);
+    }
+  } catch (_error) {
+    // The session controls already display recovery instructions; keep form edits.
+  }
+});
 elements.videoCurationRefresh?.addEventListener("click", loadVideoCurationCandidates);
 elements.videoCurationEvent?.addEventListener("change", renderVideoCurationCandidates);
 elements.videoCurationHandoffFilter?.addEventListener("change", renderVideoCurationCandidates);
