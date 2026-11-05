@@ -4730,13 +4730,33 @@ function renderGraphicsRecords(records) {
   }
 
   records.forEach(record => {
-    elements.graphicsList.appendChild(
-      getSelectedGraphicsMode() === "rework"
-        ? buildGraphicsReworkCard(record)
-        : getSelectedGraphicsMode() === "handoff_retry"
-          ? buildGraphicsHandoffRetryCard(record)
-          : buildGraphicsCard(record)
-    );
+    const card = getSelectedGraphicsMode() === "rework"
+      ? buildGraphicsReworkCard(record)
+      : getSelectedGraphicsMode() === "handoff_retry"
+        ? buildGraphicsHandoffRetryCard(record) : buildGraphicsCard(record);
+    if (getSelectedGraphicsMode() === "handoff" && Array.isArray(record.assetSet) && record.assetSet.length > 1
+      && record.graphicsQcDecision === "APPROVE" && record.pigCompletionId) {
+      const deliver = document.createElement("button");
+      deliver.className = "button button--secondary";
+      deliver.textContent = "Deliver approved card metadata";
+      deliver.addEventListener("click", async () => {
+        deliver.disabled = true;
+        try {
+          const payload = buildApprovedCardMetadataDelivery(record);
+          const response = await adminFetch("/api/graphics/handoffs/retry", {
+            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload)
+          });
+          const result = await response.json();
+          if (!response.ok || !result.ok || result.poetryPlease?.ok !== true) {
+            throw new Error(result.poetryPlease?.error || result.error || "Card delivery was not accepted.");
+          }
+          setStatus(`Approved card metadata delivered for ${record.pigCompletionId}.`);
+        } catch (error) { setStatus(`Card metadata delivery failed: ${error.message}`); }
+        finally { deliver.disabled = false; }
+      });
+      card.append(deliver);
+    }
+    elements.graphicsList.appendChild(card);
   });
 }
 
@@ -5050,6 +5070,20 @@ async function submitGraphicsReworkRequests() {
   } catch (error) {
     setStatus(`Graphics rework request failed: ${error.message}`);
   }
+}
+
+function buildApprovedCardMetadataDelivery(record) {
+  if (record?.graphicsQcDecision !== "APPROVE" || !record.pigCompletionId || !record.graphicsRequestId
+    || !record.assetLinkUrl || !Array.isArray(record.assetSet) || record.assetSet.length < 2) {
+    throw new Error("An existing approved card set is required.");
+  }
+  record.assetSet.forEach((card, index) => {
+    if (Number(card.index) !== index + 1 || !card.assetFileId || !card.assetUrl || !card.assetPreviewUrl) {
+      throw new Error("Card identity or order is incomplete.");
+    }
+  });
+  if (record.assetSet[0].assetUrl !== record.assetLinkUrl) throw new Error("Primary card identity changed.");
+  return { records: [record] };
 }
 
 function buildGraphicsHandoffRetryPanel(records) {

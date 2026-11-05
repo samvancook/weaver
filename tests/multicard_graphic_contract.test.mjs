@@ -208,3 +208,27 @@ test("repair return posts ordered replacements and affected card through the act
     { ...structured, assetSet: [replacement, replacement, assets[2]] }, original
   ), /unaffected_card_file_changed/);
 });
+
+test("approved card metadata delivery retains exact completion, order, roles and credits", () => {
+  const browserSource = readFileSync(new URL("../public/app.js", import.meta.url), "utf8");
+  const match = browserSource.match(/function buildApprovedCardMetadataDelivery\([^]*?^}/m);
+  const context = vm.createContext({});
+  vm.runInContext(match[0], context);
+  const record = { graphicsQcDecision: "APPROVE", pigCompletionId: "existing-completion",
+    graphicsRequestId: "existing-request", assetLinkUrl: assets[0].assetUrl,
+    assetSet: assets.slice(0, 2).map((card, i) => ({ ...card, role: i ? "poem" : "prompt", author: `Author ${i + 1}` })) };
+  const before = JSON.stringify(record);
+  const payload = context.buildApprovedCardMetadataDelivery(record);
+  assert.equal(JSON.stringify(payload.records[0]), before);
+  assert.equal(JSON.stringify(record), before);
+  assert.equal(payload.records[0].assetSet[1].title, undefined);
+  for (const changed of [{ ...record, graphicsQcDecision: "REJECT" }, { ...record, pigCompletionId: "" },
+    { ...record, assetLinkUrl: "different-primary" }, { ...record, assetSet: [...record.assetSet].reverse() }]) {
+    assert.throws(() => context.buildApprovedCardMetadataDelivery(changed));
+  }
+  const server = loadFunctions(["buildPoetryPleaseGraphicRecord"]);
+  const outbound = server.buildPoetryPleaseGraphicRecord({ ...record, contentType: "QI", sourceRecordId: "original-source" });
+  assert.equal(outbound.sourceCompletionId, record.pigCompletionId);
+  assert.equal(outbound.sourceRecordId, "original-source");
+  assert.equal(JSON.stringify(outbound.assetSet), JSON.stringify(record.assetSet));
+});
