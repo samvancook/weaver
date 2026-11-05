@@ -1,5 +1,13 @@
 # Catalog Identity and Reconciliation Roadmap
 
+## Current status — 2026-11-05
+
+The supported Catalog listing migration is complete. `catalog_live.py` reads `GET /books?readable=true&limit=500&after=0`, follows the stable cursor to the final page, and rejects incomplete or mixed-revision results. `catalogRevision` accompanies live intake options; a failed lookup retains the explicitly labeled cached fallback with no live revision. Readiness labels are unchanged. Active poem-key counts are not represented as poem-text counts.
+
+The focused release at `609bf78683781443ae1224da7897a8e13847b082` was verified live: 109 Catalog-backed options, the current Catalog revision, Roads' 65 keyed poem choices and keyed preview, and readable review/graphics queues. No excerpt submission was made for this release check. The Catalog request has a verified completion response in its original Codex shared-drive handoff. PR #76 integrates this release and the prior video/QC repairs into main while preserving staged Footage work; integrating source does not deploy those staged features.
+
+Still open: audit current poem-key coverage against authoritative excerpt records before further backfill. Existing schema, seed matching and the dated October 16 backfill are partial implementation, not proof of current complete coverage. Preserve existing keys, identify ambiguous/missing source matches, and verify downstream payloads and exact receiver records before closing that handoff. The historical entries below retain their original dates and are superseded where they conflict with this status.
+
 ## Current Weaver book-intake reliability plan (2026-10-23)
 
 This section supersedes the older bundled-database statements below. Merged PRs #39 and #40 use the current live Catalog for book options, poem choices, keyed poem text, and validation of saved keyed excerpts. The bundled SQLite database is a fallback during a Catalog lookup failure. Production read-only checks after those releases found Roads, A Choir of Honest Killers, WG, and BBFR available; 108 of 108 advertised Catalog-backed books returned nonempty poem choices. These checks did not submit an excerpt or prove a Sheet write reached review.
@@ -7,7 +15,7 @@ This section supersedes the older bundled-database statements below. Merged PRs 
 1. Add `scripts/check-book-intake-release.mjs` to the release runbook. It checks Catalog-backed book choice, keyed poem view, review queue read, and graphics queue read without changing data. Run it against the deployed revision after each release and record its output. It is a diagnostic, not a deploy trigger.
 2. Verified 2026-10-26: a real WG excerpt with key `BPP-07525` landed in source Sheet row 11786 and appeared exactly once in the pending review API under the same stable record ID. PRs #42 and #43 added sequential retry reuse and recovery for missing front cells. The first append produced correct canonical fields but blank A:I; its underlying cause remains unknown. A later retry filled and read back A:I without another row. Concurrent same-ID submissions across Cloud Run instances are not yet an atomic exactly-once guarantee.
 3. PR #42 separated temporary Catalog unavailability from a genuinely unreadable source. The follow-up error-reference change logs a request ID for book intake failures and shows it to editors only when needed. Keep the routine editor flow unchanged.
-4. Replace the Catalog `%` search workaround in `catalog_live.py` when Catalog supplies a supported, paginated listing/status endpoint. Catalog owns that API contract. On 2026-10-26, live `/books?limit=1` returned 400 and `/api/books?limit=1` returned 404, so this dependency remains open. Weaver should record the Catalog revision and use stable `poem_key` for duplicate titles.
+4. Completed 2026-11-05: replace the Catalog `%` search workaround with the supported paginated listing and record its revision. See the current status above. The October 26 endpoint probes predated Catalog's October 28 handoff.
 
 The earlier source-import and status observations below are dated history; do not use them as the current live state without a fresh check.
 

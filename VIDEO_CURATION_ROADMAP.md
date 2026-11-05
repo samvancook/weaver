@@ -1,6 +1,22 @@
 # Weaver Video Curation Roadmap
 
-Last reviewed: 2026-11-04 (registration work; older validation snapshots retain their dates)
+Last reviewed: 2026-11-05 (current completion summary; older validation snapshots retain their dates)
+
+## Current status — 2026-11-05
+
+The five held MPMU timeout transfers have verified successful durable-copy receipts and remain review-only. The missing Copaganda and Ode context was delivered and replayed without further change or primary-media replacement. Retry payloads and receipt comparisons now honor the exact saved excerpt selection rather than adding later gathered pulls. Exact private item/source/final IDs and independent receiver readbacks belong in the current Codex shared-drive video register; do not resend those completed items based on the historical blocker sections below.
+
+Poetry Please's current handback reports eleven of thirteen BPL 4K primaries registered. The two remaining original-edit exports are defective and need Production replacement files and verified decode before receiver registration. Preserve canonical video identity and keep alternate formats/renditions separate from a new video send. This is an owner handback, not a new independent media validation by this release.
+
+PR #76 integrates the released sender, receiver inspection, context/retry, graphics QC identity and Catalog fixes into main while preserving the pre-existing Footage work. The combined tree passed 103 Node and 26 Python tests, including Footage authentication and registration. The Python 3.9 test host used the equivalent `datetime.UTC` alias required by production Python 3.11. Main was not deployed wholesale; the manual release trigger remains disabled.
+
+Next Weaver reliability work:
+
+- Make administrator sign-in explicit and recoverable: expose signed-in/expired state, handle popup closure or blocking, respect token expiry, and prevent background loads from opening sign-in popups. Keep tokens in memory and retain current server authorization. Verify that retrying authentication never silently repeats a mutation.
+- Audit current excerpt poem-key coverage and exact downstream persistence before any backfill; never infer keys from titles or stale catalog row IDs.
+- Review ranking's excerpt bonus, currently `min(1, 0.5 × reviewers with excerpt IDs)`. Collected excerpts alone must not be mistaken for a separate quality endorsement. The scoring policy remains undecided; no weight changed in these repairs.
+
+The latest Footage roadmap separately reports the normal Helper PAGES connection live. Human intake-completeness/closure and Ollie OM/FV evidence review remain owner work. Neither transfer success nor a saved curation link certifies a complete intake or publication approval.
 
 ## 2026-11-04: Audited Helper curation-link registration
 
