@@ -70,6 +70,21 @@ export function reconcileVideoReviews(files, records) {
   return [...byReviewerAndFile.values()];
 }
 
+// Retain stored source IDs separately from the dashboard's filename-based
+// aggregation. A count is not proof of canonical recording identity.
+export function buildVideoReviewEvidence(files, records, currentFileId) {
+  return records.filter(record => clean(record.rating)
+    && resolveCurrentVideoFileId(record, files) === clean(currentFileId))
+    .map(record => ({
+      reviewId: clean(record.reviewId), sourceFileId: clean(record.sourceFileId),
+      sourceFileName: clean(record.sourceFileName),
+      mapping: clean(record.sourceFileId) === clean(currentFileId) ? "direct_file_id" : "filename_reconciliation",
+      reviewerEmail: clean(record.reviewerEmail), rating: clean(record.rating),
+      excerptRecordIds: [...new Set((record.excerptRecordIds || []).map(clean).filter(Boolean))],
+      updatedAt: clean(record.updatedAt)
+    }));
+}
+
 export function buildReviewerProgressExport(reviewerEmail, setResults) {
   const email = clean(reviewerEmail).toLowerCase();
   const sets = setResults.map(({ set, files, reviews }) => {

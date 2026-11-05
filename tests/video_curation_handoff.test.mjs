@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { summarizeVideoReceiverState, assertExistingCanonicalReceipt, assertVideoClaimMatchesRecord, assertVideoImportPreflight, assertVideoImportReadback, buildReviewerProgressExport, buildWeaverVideoImport, classifyDriveFolderPath, listKnownVideoAssets, parsePoetryPleaseVideoImport, parsePoetryPleaseVideoReceipt, poetryPleaseVideoIdForSourceFile, reconcileVideoReviews, requiresManualVideoIdentityReview, resolveCurrentVideoFileId, resolveVideoReviewSourceFileId } from "../video_curation_handoff.mjs";
+import { buildVideoReviewEvidence, summarizeVideoReceiverState, assertExistingCanonicalReceipt, assertVideoClaimMatchesRecord, assertVideoImportPreflight, assertVideoImportReadback, buildReviewerProgressExport, buildWeaverVideoImport, classifyDriveFolderPath, listKnownVideoAssets, parsePoetryPleaseVideoImport, parsePoetryPleaseVideoReceipt, poetryPleaseVideoIdForSourceFile, reconcileVideoReviews, requiresManualVideoIdentityReview, resolveCurrentVideoFileId, resolveVideoReviewSourceFileId } from "../video_curation_handoff.mjs";
 
 test("video send requires an empty receiver receipt and a matching saved readback", () => {
   const sourceRecordId = "weaver:video:reviewed-source";
@@ -450,4 +450,24 @@ test("receiver inspection retains legacy media and versions without clearing a h
   }
   assert.equal(summarizeVideoReceiverState(candidate, { ok: true, received: false,
     sourceRecordId: candidate.videoRecordId, ledger: { count: 1 } }).ledger.count, 1);
+});
+
+
+test("review evidence preserves original source IDs and separates filename aggregation from identity", () => {
+  const files = [{ id: "current", name: "Poem.mov" }, { id: "other", name: "Other.mov" }];
+  const records = [
+    { reviewId: "direct", sourceFileId: "current", sourceFileName: "Poem.mov", reviewerEmail: "one@example.com", rating: "like", excerptRecordIds: ["e1", "e1"] },
+    { reviewId: "historical", sourceFileId: "old", sourceFileName: "Poem.mov", reviewerEmail: "one@example.com", rating: "moved_me", excerptRecordIds: ["e2"] },
+    { reviewId: "unrelated", sourceFileId: "other", sourceFileName: "Other.mov", rating: "like" },
+    { reviewId: "unrated", sourceFileId: "current", rating: "" }
+  ];
+  const original = JSON.stringify(records);
+  const evidence = buildVideoReviewEvidence(files, records, "current");
+  assert.deepEqual(evidence.map(row => [row.reviewId, row.sourceFileId, row.mapping]), [
+    ["direct", "current", "direct_file_id"], ["historical", "old", "filename_reconciliation"]
+  ]);
+  assert.deepEqual(evidence.map(row => row.excerptRecordIds), [["e1"], ["e2"]]);
+  assert.equal(reconcileVideoReviews(files, records).filter(row => row.sourceFileId === "current").length, 1);
+  assert.equal(JSON.stringify(records), original);
+  assert.deepEqual(buildVideoReviewEvidence([...files, { id: "ambiguous", name: "Poem.mov" }], records, "current").map(row => row.reviewId), ["direct"]);
 });
