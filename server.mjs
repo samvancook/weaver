@@ -4036,6 +4036,7 @@ async function getExcerptGatheringOptionsFromSheets() {
     books: toUniqueSortedValues(books),
     catalogBooks,
     catalogLookupStatus: catalogResult?.catalogLookupStatus || "unknown",
+    catalogRevision: catalogResult?.catalogRevision || "",
     publishingBooks,
     publishingBookReadiness: buildPublishingBookReadiness(
       publishingBooks, catalogBooks, catalogResult?.catalogLookupStatus || "unknown"),
