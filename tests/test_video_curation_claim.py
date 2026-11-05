@@ -176,6 +176,31 @@ class VideoCurationClaimTest(unittest.TestCase):
         self.assertEqual(connection.record["poetryPleaseHandoff"]["error"], "final_asset_matches_raw_source")
         self.assertFalse(claim_video_curation_handoff(connection, identity)["claimed"])
 
+    def test_verified_retry_claim_preserves_failed_attempt_and_is_single_use(self):
+        import time
+        prior = {"status": "failed", "sourceRecordId": "weaver:video:original", "error": "timeout"}
+        connection = FakeGateConnection({"decision": "ready_for_poetry_please", "videoRecordId": "weaver:video:original", "poetryPleaseHandoff": prior})
+        identity = {"prioritySetId": "event", "sourceFileId": "current"}
+        proof = {"expectedHandoff": dict(prior), "sourceRecordId": "weaver:video:original", "importLedgerId": "failed-ledger", "receiptCheckedAtMs": time.time() * 1000}
+        claim = claim_video_curation_handoff(connection, {**identity, "retryFailedProof": proof})
+        self.assertTrue(claim["claimed"])
+        self.assertEqual(claim["record"]["poetryPleaseHandoff"]["previousHandoff"], prior)
+        self.assertFalse(claim_video_curation_handoff(connection, {**identity, "retryFailedProof": proof})["claimed"])
+        released = release_video_curation_handoff_claim(connection, {**identity, "attemptId": claim["record"]["poetryPleaseHandoff"]["attemptId"]})
+        self.assertTrue(released["released"])
+        self.assertEqual(released["record"]["poetryPleaseHandoff"], prior)
+        self.assertEqual(released["record"]["handoffStatus"], "failed")
+
+    def test_retry_claim_rejects_stale_receipt_or_changed_attempt(self):
+        import time
+        prior = {"status": "failed", "sourceRecordId": "weaver:video:original", "error": "timeout"}
+        proof = {"expectedHandoff": prior, "sourceRecordId": "weaver:video:original", "importLedgerId": "failed-ledger", "receiptCheckedAtMs": time.time() * 1000}
+        for changes in ({"receiptCheckedAtMs": 0}, {"expectedHandoff": {}}, {"sourceRecordId": "wrong"}, {"importLedgerId": ""}):
+            connection = FakeGateConnection({"decision": "ready_for_poetry_please", "videoRecordId": "weaver:video:original", "poetryPleaseHandoff": prior})
+            result = claim_video_curation_handoff(connection, {"prioritySetId": "event", "sourceFileId": "current", "retryFailedProof": {**proof, **changes}})
+            self.assertFalse(result["claimed"])
+            self.assertEqual(connection.record["poetryPleaseHandoff"], prior)
+
     def test_unready_gate_cannot_be_claimed(self):
         connection = FakeGateConnection({"decision": "send_to_editing"})
         result = claim_video_curation_handoff(

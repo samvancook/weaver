@@ -1743,6 +1743,8 @@ function renderVideoCurationCandidates() {
       ${(candidate.knownAssets || []).length > 1 ? `<details><summary>Known files for this video (${candidate.knownAssets.length})</summary><ul>${candidate.knownAssets.map(asset => `<li><a href="${escapeAttribute(asset.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(asset.fileId)}</a> · ${escapeHtml((asset.roles || []).join(", "))}</li>`).join("")}</ul><p>These links show known file lineage. Resolution and format are not verified here.</p></details>` : ""}
       <button type="button" class="button button--secondary" data-action="inspect-receiver">Check Poetry Please video and versions</button>
       <div data-receiver-state aria-live="polite"></div>
+      ${candidate.existingCanonicalVideoId && gate.decision === "ready_for_poetry_please" ? '<button type="button" class="button button--secondary" data-action="sync-context">Sync saved reviews and selected excerpts</button><div data-context-state aria-live="polite"></div>' : ""}
+
       <details><summary>Review and excerpt provenance</summary><p>Filename reconciliation is an aggregation rule; it does not by itself verify recording identity.</p><pre style="white-space:pre-wrap">${escapeHtml(JSON.stringify({ prioritySetId: candidate.prioritySetId, currentFileId: candidate.sourceFileId, sourceRecordId: candidate.videoRecordId, sourceReviewFileId: candidate.sourceReviewFileId, canonicalVideoId: candidate.existingCanonicalVideoId, gateId: gate.gateId, gateSelectedExcerptRecordIds: gate.selectedExcerptRecordIds || [], currentExcerptRecordIds: candidate.excerptRecordIds, selectedReviews: candidate.ratings, storedReviewEvidence: candidate.reviewEvidence || [] }, null, 2))}</pre></details>
       <h5>Reviews</h5>
       <ul>${(candidate.ratings || []).map(rating => `<li>${escapeHtml(rating.reviewerEmail || "Reviewer")}: ${escapeHtml(rating.rating || "Unrated")}${rating.ratingSource === "legacy_import" && rating.legacyScore !== null && rating.legacyScore !== "" && Number.isFinite(Number(rating.legacyScore)) ? ` (${Number(rating.legacyScore).toFixed(1)}/10)` : ""}${rating.notes ? ` · ${escapeHtml(rating.notes)}` : ""}</li>`).join("") || "<li>No reviews</li>"}</ul>
@@ -1761,13 +1763,16 @@ function renderVideoCurationCandidates() {
       ${gate.poetryPleaseHandoff?.durableCopyStatus ? `<p>PP copy: ${escapeHtml(gate.poetryPleaseHandoff.durableCopyStatus)}${gate.poetryPleaseHandoff.durableByteCount ? ` · ${Number(gate.poetryPleaseHandoff.durableByteCount).toLocaleString()} bytes` : ""}${gate.poetryPleaseHandoff.reviewOnly ? " · Review only" : ""}${gate.poetryPleaseHandoff.durableCopyError ? ` · ${escapeHtml(gate.poetryPleaseHandoff.durableCopyError)}` : ""}</p>` : ""}
       <button type="button" class="button button--secondary" data-action="save">Save Decision</button>
       ${gate.decision === "ready_for_poetry_please" && !gate.poetryPleaseHandoff?.status && !candidate.existingCanonicalVideoId ? '<button type="button" class="button" data-action="handoff">Send to Poetry Please</button>' : ""}
+      ${gate.decision === "ready_for_poetry_please" && gate.poetryPleaseHandoff?.status === "failed" && !candidate.existingCanonicalVideoId ? '<button type="button" class="button button--secondary" data-action="retry-timeout">Retry verified failed timeout</button>' : ""}
       ${gate.poetryPleaseHandoff?.status === "sent_to_poetry_please" && gate.poetryPleaseHandoff?.canonicalVideoId ? '<button type="button" class="button button--secondary" data-action="receipt">Refresh PP receipt</button>' : ""}
       ` : ""}
       `;
       if (article.querySelector('[data-field="decision"]')) article.querySelector('[data-field="decision"]').value = gate.decision || "";
       article.querySelector('[data-action="inspect-receiver"]')?.addEventListener("click", () => inspectVideoReceiverState(candidate, article));
+      article.querySelector('[data-action="sync-context"]')?.addEventListener("click", () => deliverVideoReviewContext(candidate, article));
       article.querySelector('[data-action="save"]')?.addEventListener("click", () => saveVideoCurationDecision(candidate, article));
       article.querySelector('[data-action="handoff"]')?.addEventListener("click", () => sendVideoCurationHandoff(candidate));
+      article.querySelector('[data-action="retry-timeout"]')?.addEventListener("click", () => sendVideoCurationHandoff(candidate, true));
       article.querySelector('[data-action="receipt"]')?.addEventListener("click", () => refreshVideoCurationReceipt(candidate));
       container.append(article);
     }
@@ -1791,13 +1796,13 @@ async function inspectVideoReceiverState(candidate, article) {
       ? `PP video ${state.canonicalVideoId}: ${state.review?.reviewCount ?? "unknown"} reviews (Weaver ${state.expectedReviewCount}), ${state.review?.selectedExcerptIdCount ?? "unknown"} excerpt links (Weaver ${state.expectedExcerptCount}). ${state.media?.reviewOnly === true ? "Review only." : "Review-only flag is not set."} ${state.renditions.length} registered versions. Checked ${result.checkedAt}.`
       : `No canonical video returned for ${state.sourceRecordId}. Prior import ledgers: ${state.ledger?.count ?? "unknown"}. Checked ${result.checkedAt}.`;
     target.append(message);
-    if (state.received) {
+    if (state.received || state.ledger) {
       const details = document.createElement("details");
       const label = document.createElement("summary");
-      label.textContent = "Media identity and version receipts";
+      label.textContent = state.received ? "Media identity and version receipts" : "Prior receiver attempt receipt";
       const receipt = document.createElement("pre");
       receipt.style.whiteSpace = "pre-wrap";
-      receipt.textContent = JSON.stringify({ sourceRecordId: state.sourceRecordId, event: state.event,
+      receipt.textContent = JSON.stringify({ sourceRecordId: state.sourceRecordId, ledger: state.ledger, event: state.event,
         currentFinalFileId: state.currentFinalFileId, receiverFinalFileId: state.receiverFinalFileId,
         media: state.media, renditions: state.renditions }, null, 2);
       details.append(label, receipt);
@@ -1806,6 +1811,23 @@ async function inspectVideoReceiverState(candidate, article) {
   } catch (error) {
     target.textContent = `Poetry Please check failed: ${error.message}`;
   } finally { button.disabled = false; }
+}
+
+async function deliverVideoReviewContext(candidate, article) {
+  const button = article.querySelector('[data-action="sync-context"]');
+  const target = article.querySelector('[data-context-state]');
+  button.disabled = true;
+  target.textContent = "Checking identity and delivering saved review context...";
+  try {
+    const response = await adminFetch("/api/admin/video-curation-gates/context", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prioritySetId: candidate.prioritySetId, sourceFileId: candidate.sourceFileId })
+    });
+    const result = await response.json();
+    if (!response.ok || !result.ok) throw new Error(result.error || "Context delivery failed.");
+    target.textContent = `Verified PP context for ${result.context.canonicalVideoId}: ${result.context.storedReviewCount} reviews, ${result.context.storedSelectedExcerptIdCount} selected excerpt links. Primary media unchanged. Changed: ${result.context.changed}.`;
+  } catch (error) { target.textContent = `Context not verified: ${error.message}`; }
+  finally { button.disabled = false; }
 }
 
 async function loadVideoCurationCandidates() {
@@ -1844,11 +1866,11 @@ async function saveVideoCurationDecision(candidate, article) {
   }
 }
 
-async function sendVideoCurationHandoff(candidate) {
+async function sendVideoCurationHandoff(candidate, retryFailed = false) {
   try {
     const response = await adminFetch("/api/admin/video-curation-gates/handoff", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prioritySetId: candidate.prioritySetId, sourceFileId: candidate.sourceFileId })
+      body: JSON.stringify({ prioritySetId: candidate.prioritySetId, sourceFileId: candidate.sourceFileId, retryFailed })
     });
     const result = await response.json().catch(() => ({}));
     if (!response.ok || !result.ok) throw new Error(result.error || `Handoff failed (${response.status}).`);

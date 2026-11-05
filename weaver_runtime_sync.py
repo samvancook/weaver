@@ -7,6 +7,7 @@ import re
 import os
 import sys
 import uuid
+import time
 from datetime import datetime
 from typing import Any
 
@@ -898,13 +899,29 @@ def claim_video_curation_handoff(connection, payload: dict[str, Any]) -> dict[st
     existing, update_time = connection.get_raw_document_versioned(FIRESTORE_VIDEO_CURATION_GATES_COLLECTION, gate_id)
     if not existing or existing.get("decision") != "ready_for_poetry_please":
         return {"ok": True, "claimed": False, "reason": "gate_not_ready"}
-    if normalize_text((existing.get("poetryPleaseHandoff") or {}).get("status")):
+    prior_handoff = existing.get("poetryPleaseHandoff") or {}
+    retry = payload.get("retryFailedProof")
+    if retry is not None:
+        if (not isinstance(retry, dict)
+                or prior_handoff.get("status") != "failed"
+                or prior_handoff.get("ok") is True
+                or normalize_text(prior_handoff.get("canonicalVideoId"))
+                or retry.get("expectedHandoff") != prior_handoff
+                or not normalize_text(retry.get("importLedgerId"))
+                or not normalize_text(retry.get("sourceRecordId"))
+                or retry.get("sourceRecordId") != prior_handoff.get("sourceRecordId")
+                or retry.get("sourceRecordId") != existing.get("videoRecordId")
+                or not isinstance(retry.get("receiptCheckedAtMs"), (int, float))
+                or not 0 <= time.time() * 1000 - retry["receiptCheckedAtMs"] <= 30000):
+            return {"ok": True, "claimed": False, "reason": "retry_receipt_or_attempt_changed", "record": existing}
+    elif normalize_text(prior_handoff.get("status")):
         return {"ok": True, "claimed": False, "reason": "handoff_already_started", "record": existing}
     now = utc_now_iso()
     attempt_id = uuid.uuid4().hex
     record = {
         **existing,
-        "poetryPleaseHandoff": {"status": "sending", "attemptId": attempt_id, "updatedAt": now},
+        "poetryPleaseHandoff": {"status": "sending", "attemptId": attempt_id, "updatedAt": now,
+            **({"previousHandoff": prior_handoff, "retryOfLedgerId": retry["importLedgerId"]} if retry else {})},
         "handoffStatus": "sending",
         "updatedAt": now,
         "history": (list(existing.get("history") or []) + [{"event": "poetry_please_handoff", "status": "sending", "attemptId": attempt_id, "at": now}])[-20:],
@@ -927,8 +944,8 @@ def release_video_curation_handoff_claim(connection, payload: dict[str, Any]) ->
     now = utc_now_iso()
     record = {
         **existing,
-        "poetryPleaseHandoff": {},
-        "handoffStatus": "ready",
+        "poetryPleaseHandoff": handoff.get("previousHandoff") or {},
+        "handoffStatus": (handoff.get("previousHandoff") or {}).get("status") or "ready",
         "updatedAt": now,
         "history": (list(existing.get("history") or []) + [{"event": "poetry_please_handoff", "status": "claim_released_before_send", "attemptId": attempt_id, "at": now}])[-20:],
     }
