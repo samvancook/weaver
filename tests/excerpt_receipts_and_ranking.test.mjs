@@ -75,6 +75,7 @@ test('excerpt collection does not change ranking or candidate eligibility', asyn
     reconcileVideoReviews: (_files, rows) => rows, buildVideoCurationCandidateId: (set,id) => set+id,
     VIDEO_CURATION_SCORE_BY_RATING: { like: 7.5 }, VIDEO_CURATION_CANDIDATE_THRESHOLD: 7,
     getPriorityVideoReleaseStatus: () => '', resolveVideoReviewSourceFileId: id => id,
+    getFootageAssetConnections: async () => [], footageProvenanceForFile: () => [],
     poetryPleaseVideoIdForSourceFile: () => '', listKnownVideoAssets: () => [],
     resolvePublishingBookMeta: () => null, buildVideoReviewEvidence: () => []
   });
