@@ -130,3 +130,18 @@ test('missing configuration, unloaded Google and malformed tokens remain recover
   t.clients[0].config.callback({ access_token: 'invalid-without-expiry' });
   await assert.rejects(p, /valid session/);
 });
+
+test('the explicit sign-in button never reloads queues or submits a decision', async () => {
+  const start = app.indexOf('elements.adminSignIn?.addEventListener(');
+  const handler = app.slice(start, app.indexOf('elements.videoCurationRefresh?', start));
+  let click, signs = 0;
+  runInNewContext(handler, {
+    elements: { adminSignIn: { addEventListener(event, fn) { assert.equal(event, 'click'); click = fn; } } },
+    getGoogleAdminAccessToken: async options => {
+      assert.equal(options.interactive, true); assert.equal(options.forceAccountSelection, true); signs++;
+    }
+    // No queue loader or mutation API is supplied: either call must fail this test.
+  });
+  await click(); assert.equal(signs, 1);
+  assert.doesNotMatch(handler, /loadVideoCurationCandidates\(|loadPriorityVideoProgress\(|adminFetch\(/);
+});
