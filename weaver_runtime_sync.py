@@ -67,6 +67,7 @@ FIRESTORE_HANDOFF_ACTIONS = {
     "upsert_curation_review",
     "get_curation_reviews",
     "upsert_video_curation_gate",
+    "resolve_video_curation_identity",
     "claim_video_curation_handoff",
     "release_video_curation_handoff_claim",
     "finish_video_curation_handoff",
@@ -874,6 +875,51 @@ def upsert_video_curation_gate(connection, payload: dict[str, Any]) -> dict[str,
         "ok": True,
         "record": connection.write_raw_document(FIRESTORE_VIDEO_CURATION_GATES_COLLECTION, gate_id, record),
     }
+
+
+def resolve_video_curation_identity(connection, payload: dict[str, Any]) -> dict[str, Any]:
+    priority_set_id = normalize_text(payload.get("prioritySetId"))
+    source_file_id = normalize_text(payload.get("sourceFileId"))
+    review = payload.get("review") or {}
+    root = normalize_text(review.get("sourceReviewFileId"))
+    gate_id = hashlib.sha256(f"{priority_set_id}|{source_file_id}".encode("utf-8")).hexdigest()[:32]
+    existing, update_time = connection.get_raw_document_versioned(FIRESTORE_VIDEO_CURATION_GATES_COLLECTION, gate_id)
+    if (not existing or existing != payload.get("expectedGate")
+            or existing.get("prioritySetId") != priority_set_id or existing.get("sourceFileId") != source_file_id
+            or existing.get("decision") != "ready_for_poetry_please"
+            or existing.get("sourceReviewFileId")
+            or (existing.get("poetryPleaseHandoff") or {}).get("status")
+            or not root or root not in (review.get("reviewSourceFileIds") or [])
+            or not normalize_text(review.get("reviewedBy"))
+            or not normalize_text(review.get("evidenceUrl"))
+            or len(normalize_text(review.get("note"))) < 40):
+        return {"ok": True, "saved": False, "reason": "identity_gate_changed_or_invalid"}
+    checked_ids = set(payload.get("checkedSourceFileIds") or [])
+    receipts = payload.get("receipts") or []
+    if not {root, source_file_id}.issubset(checked_ids) or len(receipts) != len(checked_ids):
+        return {"ok": True, "saved": False, "reason": "identity_receipts_incomplete"}
+    seen = set()
+    for receipt in receipts:
+        source = normalize_text(receipt.get("sourceRecordId"))
+        checked_at = receipt.get("checkedAtMs")
+        if (source not in {f"weaver:video:{file_id}" for file_id in checked_ids}
+                or source in seen or receipt.get("ok") is not True
+                or receipt.get("received") is not False or receipt.get("ambiguousVideoMatch")
+                or receipt.get("canonicalVideoId") or (receipt.get("ledger") or {}).get("count") != 0
+                or not isinstance(checked_at, (int, float))
+                or not 0 <= time.time() * 1000 - checked_at <= 30000):
+            return {"ok": True, "saved": False, "reason": "identity_receiver_changed_or_stale"}
+        seen.add(source)
+    now = utc_now_iso()
+    audit = {"status": "verified", "sourceFileId": source_file_id, "sourceReviewFileId": root,
+             "reviewedBy": normalize_text(review["reviewedBy"]), "reviewedAt": now,
+             "evidenceUrl": review["evidenceUrl"], "note": review["note"],
+             "checkedSourceFileIds": sorted(checked_ids)}
+    record = {**existing, "sourceReviewFileId": root, "videoRecordId": f"weaver:video:{root}",
+              "identityReview": audit, "updatedAt": now,
+              "history": (list(existing.get("history") or []) + [{"event": "canonical_identity_review", **audit}])[-20:]}
+    saved = connection.write_raw_document_if_unchanged(FIRESTORE_VIDEO_CURATION_GATES_COLLECTION, gate_id, record, update_time)
+    return {"ok": True, "saved": bool(saved), "reason": "" if saved else "concurrent_identity_change", "record": saved}
 
 
 def fetch_video_curation_gates(connection, payload: dict[str, Any]) -> dict[str, Any]:
@@ -2053,6 +2099,8 @@ def main() -> int:
             result = fetch_curation_reviews(connection, payload)
         elif action == "upsert_video_curation_gate":
             result = upsert_video_curation_gate(connection, payload)
+        elif action == "resolve_video_curation_identity":
+            result = resolve_video_curation_identity(connection, payload)
         elif action == "claim_video_curation_handoff":
             result = claim_video_curation_handoff(connection, payload)
         elif action == "release_video_curation_handoff_claim":

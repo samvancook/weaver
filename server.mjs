@@ -7,7 +7,7 @@ import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { assertVideoRetryPreflight, syncVideoReviewContext, buildVideoReviewEvidence, summarizeVideoReceiverState, assertVideoClaimMatchesRecord, assertVideoImportPreflight, assertVideoImportReadback, buildReviewerProgressExport, buildWeaverVideoImport, classifyDriveFolderPath, driveFileId, listKnownVideoAssets, parsePoetryPleaseVideoImport, parsePoetryPleaseVideoReceipt, poetryPleaseVideoIdForSourceFile, reconcileVideoReviews, requiresManualVideoIdentityReview, resolveCurrentVideoFileId, resolveVideoReviewSourceFileId } from "./video_curation_handoff.mjs";
+import { prepareVideoIdentityReview, assertVideoRetryPreflight, syncVideoReviewContext, buildVideoReviewEvidence, summarizeVideoReceiverState, assertVideoClaimMatchesRecord, assertVideoImportPreflight, assertVideoImportReadback, buildReviewerProgressExport, buildWeaverVideoImport, classifyDriveFolderPath, driveFileId, listKnownVideoAssets, parsePoetryPleaseVideoImport, parsePoetryPleaseVideoReceipt, poetryPleaseVideoIdForSourceFile, reconcileVideoReviews, requiresManualVideoIdentityReview, resolveCurrentVideoFileId, resolveVideoReviewSourceFileId } from "./video_curation_handoff.mjs";
 import { verifyProgressExportCaller } from "./weaver_progress_auth.mjs";
 import { findApprovedTextExcerptMatch } from "./video_excerpt_folding.mjs";
 import { poemKeyForExcerptText, POEM_KEY_SEED_SOURCE } from "./poem_key_seed.mjs";
@@ -227,6 +227,7 @@ const ADMIN_MUTATION_PATHS = new Set([
   "/api/admin/video-curation-gates",
   "/api/admin/video-curation-gates/handoff",
   "/api/admin/video-curation-gates/context",
+  "/api/admin/video-curation-gates/identity",
   "/api/admin/video-curation-gates/receipt"
 ]);
 
@@ -2651,6 +2652,8 @@ async function getVideoCurationCandidates(prioritySetId = "") {
         sourceReviewFileId,
         existingCanonicalVideoId,
         knownAssets,
+        requiresManualIdentityReview: requiresManualVideoIdentityReview(
+          { ...sourceMedia, sourceFileId, sourceReviewFileId }, existingGate?.publishableAssetUrl || file.webViewLink || `https://drive.google.com/file/d/${sourceFileId}/view`, existingGate || {}),
         sourceFileName: cleanSheetWhitespace(file.name),
         sourceVideoUrl: cleanSheetWhitespace(file.webViewLink)
           || `https://drive.google.com/file/d/${encodeURIComponent(sourceFileId)}/view`,
@@ -2731,6 +2734,40 @@ async function saveVideoCurationGate(payload = {}, decidedBy = "") {
   });
   invalidateQueueSnapshots();
   return result;
+}
+
+async function resolveVideoCurationIdentity(payload, actor) {
+  const prioritySetId = cleanSheetWhitespace(payload.prioritySetId);
+  const sourceFileId = cleanSheetWhitespace(payload.sourceFileId);
+  const candidates = await getVideoCurationCandidates(prioritySetId);
+  const candidate = candidates.candidates.find(row => row.prioritySetId === prioritySetId && row.sourceFileId === sourceFileId);
+  const review = prepareVideoIdentityReview(candidate, payload, actor);
+  if (review.alreadyVerified) return { ok: true, changed: false, gate: candidate.gate };
+  const original = await getDriveFileMetadata(review.sourceReviewFileId);
+  if (!String(original.mimeType || "").startsWith("video/") || original.trashed
+    || cleanSheetWhitespace(original.name) !== cleanSheetWhitespace(candidate.sourceFileName)) {
+    throw new Error("The chosen reviewed file is unavailable or does not match this candidate's source metadata.");
+  }
+  const fileIds = [...new Set([sourceFileId, ...review.reviewSourceFileIds,
+    ...(candidate.knownAssets || []).map(asset => asset.fileId)].map(cleanSheetWhitespace).filter(Boolean))];
+  if (fileIds.length > 12) throw new Error("This lineage needs a separately scoped reconciliation.");
+  const receipts = await Promise.all(fileIds.map(async fileId => {
+    const sourceRecordId = `weaver:video:${fileId}`;
+    const response = await fetch(`${poetryPleaseApiUrl.replace(/\/$/, "")}/internal/weaverVideoReceipt?sourceRecordId=${encodeURIComponent(sourceRecordId)}`, {
+      headers: { "x-api-key": poetryPleaseApiKey }, signal: AbortSignal.timeout(15000)
+    });
+    const receipt = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(receipt.error || "Receiver lineage check failed.");
+    assertVideoImportPreflight(receipt, sourceRecordId);
+    return { ...receipt, checkedAtMs: Date.now() };
+  }));
+  const result = await syncWeaverRuntimeDb("resolve_video_curation_identity", {
+    prioritySetId, sourceFileId, expectedGate: candidate.gate, review, receipts,
+    checkedSourceFileIds: fileIds
+  });
+  if (!result.saved) throw new Error(result.reason || "The gate changed during identity review; reload and inspect it.");
+  invalidateQueueSnapshots();
+  return { ok: true, changed: true, gate: result.record };
 }
 
 async function handoffVideoCurationGate(payload = {}) {
@@ -8740,6 +8777,16 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, await saveVideoCurationGate(payload, admin.email));
     } catch (error) {
       return sendJson(res, Number(error.statusCode || 500), { ok: false, error: error.message });
+    }
+  }
+
+  if (url.pathname === "/api/admin/video-curation-gates/identity" && req.method === "POST") {
+    try {
+      const admin = req.weaverAdmin || await verifyAdministrativeCaller(req);
+      const payload = JSON.parse(await readRequestBody(req) || "{}");
+      return sendJson(res, 200, await resolveVideoCurationIdentity(payload, admin.email));
+    } catch (error) {
+      return sendJson(res, Number(error.statusCode || 409), { ok: false, error: error.message });
     }
   }
 
