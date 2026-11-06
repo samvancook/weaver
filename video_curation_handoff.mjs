@@ -432,9 +432,9 @@ export function buildWeaverVideoImport(candidate, gate) {
     selectedExcerptRecordIds: [...new Set((Array.isArray(gate.selectedExcerptRecordIds)
       ? gate.selectedExcerptRecordIds : (candidate.excerptRecordIds || [])).map(clean).filter(Boolean))],
     reviews: Array.isArray(candidate.ratings) ? candidate.ratings : [],
-    baseScore: gate.baseScore ?? candidate.baseScore,
-    excerptBonus: gate.excerptBonus ?? candidate.excerptBonus,
-    candidateScore: gate.candidateScore ?? candidate.candidateScore,
+    baseScore: candidate.baseScore ?? gate.baseScore,
+    excerptBonus: 0,
+    candidateScore: candidate.baseScore ?? gate.baseScore,
     reviewCount: Number(candidate.reviewCount || 0),
     excerptCount: Array.isArray(candidate.excerptRecordIds) ? candidate.excerptRecordIds.length : 0,
     decision: "ready_for_poetry_please",
@@ -448,6 +448,34 @@ export function requiresManualVideoIdentityReview(candidate, finalAssetUrl, gate
     && driveFileId(finalAssetUrl) === clean(candidate?.sourceFileId)
     && !clean(candidate?.sourceReviewFileId)
     && !clean(gate?.sourceReviewFileId);
+}
+
+export function prepareVideoIdentityReview(candidate, payload, actor) {
+  const gate = candidate?.gate;
+  if (!gate || gate.decision !== "ready_for_poetry_please" || candidate.publicationRestricted
+    || candidate.existingCanonicalVideoId || clean(gate.poetryPleaseHandoff?.status)) {
+    throw new Error("Only an approved, unsent video with no receiver identity can be reviewed here.");
+  }
+  const sourceReviewFileId = clean(payload.sourceReviewFileId);
+  if (clean(gate.sourceReviewFileId) === sourceReviewFileId && gate.identityReview?.status === "verified") {
+    return { alreadyVerified: true };
+  }
+  if (!requiresManualVideoIdentityReview(candidate, gate.publishableAssetUrl, gate)) {
+    throw new Error("This gate does not need an unresolved finished-video identity review.");
+  }
+  const reviewSourceFileIds = [...new Set((candidate.reviewEvidence || []).map(r => clean(r.sourceFileId)).filter(Boolean))];
+  if (!sourceReviewFileId || !reviewSourceFileIds.includes(sourceReviewFileId)) {
+    throw new Error("Choose a source file with actual stored reviews for this candidate.");
+  }
+  let evidence;
+  try { evidence = new URL(clean(payload.evidenceUrl)); } catch { throw new Error("A Drive or Google Docs evidence link is required."); }
+  if (evidence.protocol !== "https:" || !["drive.google.com", "docs.google.com"].includes(evidence.hostname)
+    || !/^\/(?:file|document)\/d\/[A-Za-z0-9_-]+(?:\/|$)/.test(evidence.pathname)
+    || clean(payload.note).length < 40 || !clean(actor)) {
+    throw new Error("Record a Drive/Docs evidence link and a note explaining the verified recording relationship.");
+  }
+  return { sourceReviewFileId, reviewSourceFileIds, reviewedBy: clean(actor),
+    evidenceUrl: evidence.href, note: clean(payload.note) };
 }
 
 export function parsePoetryPleaseVideoImport(response, body, sourceRecordId, apiUrl, expected = {}) {

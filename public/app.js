@@ -1783,6 +1783,14 @@ function renderVideoCurationCandidates() {
       ${(candidate.footageConnections || []).length ? `<p>Footage inventory: ${candidate.footageConnections.map(c => `${escapeHtml(c.inventoryEventName)} · source row ${Number(c.sourceRow)}${c.originalMediaFileId ? ` · <a href="https://drive.google.com/file/d/${encodeURIComponent(c.originalMediaFileId)}/view" target="_blank" rel="noopener noreferrer">OM source</a>` : ""}${c.finishedVideoFileId ? ` · <a href="https://drive.google.com/file/d/${encodeURIComponent(c.finishedVideoFileId)}/view" target="_blank" rel="noopener noreferrer">FV deliverable</a>` : ""}`).join("; ")}</p>` : ""}
       ${candidate.existingCanonicalVideoId ? `<p>Existing Poetry Please video: ${escapeHtml(candidate.existingCanonicalVideoId)}. Additional resolutions and formats need a verified rendition registration. This send form does not replace the primary video.</p>` : ""}
       ${(candidate.knownAssets || []).length > 1 ? `<details><summary>Known files for this video (${candidate.knownAssets.length})</summary><ul>${candidate.knownAssets.map(asset => `<li><a href="${escapeAttribute(asset.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(asset.fileId)}</a> · ${escapeHtml((asset.roles || []).join(", "))}</li>`).join("")}</ul><p>These links show known file lineage. Resolution and format are not verified here.</p></details>` : ""}
+      ${candidate.requiresManualIdentityReview && gate.decision === "ready_for_poetry_please" && !gate.poetryPleaseHandoff?.status ? `<details><summary>Review the original recording identity</summary>
+        <p>Confirm which stored review source belongs to this finished version. Record the evidence before sending.</p>
+        <label class="field"><span>Verified reviewed source</span><select data-field="reviewSource"><option value="">Choose a reviewed source</option>${[...new Set((candidate.reviewEvidence || []).map(row => row.sourceFileId).filter(Boolean))].map(id => `<option value="${escapeAttribute(id)}">${escapeHtml(id)}</option>`).join("")}</select></label>
+        <label class="field"><span>Drive or Docs evidence link</span><input data-field="identityEvidenceUrl" type="url"></label>
+        <label class="field"><span>How the recording relationship was verified</span><textarea data-field="identityNote"></textarea></label>
+        <button type="button" class="button button--secondary" data-action="resolve-identity">Save verified recording identity</button>
+        <p data-identity-state role="status"></p>
+      </details>` : ""}
       <button type="button" class="button button--secondary" data-action="inspect-receiver">Check Poetry Please video and versions</button>
       <div data-receiver-state aria-live="polite"></div>
       ${candidate.existingCanonicalVideoId && gate.decision === "ready_for_poetry_please" ? '<button type="button" class="button button--secondary" data-action="sync-context">Sync saved reviews and selected excerpts</button><div data-context-state aria-live="polite"></div>' : ""}
@@ -1804,12 +1812,13 @@ function renderVideoCurationCandidates() {
       <p>${escapeHtml(gate.poetryPleaseHandoff?.status || gate.handoffStatus || "")}</p>
       ${gate.poetryPleaseHandoff?.durableCopyStatus ? `<p>PP copy: ${escapeHtml(gate.poetryPleaseHandoff.durableCopyStatus)}${gate.poetryPleaseHandoff.durableByteCount ? ` · ${Number(gate.poetryPleaseHandoff.durableByteCount).toLocaleString()} bytes` : ""}${gate.poetryPleaseHandoff.reviewOnly ? " · Review only" : ""}${gate.poetryPleaseHandoff.durableCopyError ? ` · ${escapeHtml(gate.poetryPleaseHandoff.durableCopyError)}` : ""}</p>` : ""}
       <button type="button" class="button button--secondary" data-action="save">Save Decision</button>
-      ${gate.decision === "ready_for_poetry_please" && !gate.poetryPleaseHandoff?.status && !candidate.existingCanonicalVideoId ? '<button type="button" class="button" data-action="handoff">Send to Poetry Please</button>' : ""}
+      ${gate.decision === "ready_for_poetry_please" && !gate.poetryPleaseHandoff?.status && !candidate.existingCanonicalVideoId && !candidate.requiresManualIdentityReview ? '<button type="button" class="button" data-action="handoff">Send to Poetry Please</button>' : ""}
       ${gate.decision === "ready_for_poetry_please" && gate.poetryPleaseHandoff?.status === "failed" && !candidate.existingCanonicalVideoId ? '<button type="button" class="button button--secondary" data-action="retry-timeout">Retry verified failed timeout</button>' : ""}
       ${gate.poetryPleaseHandoff?.status === "sent_to_poetry_please" && gate.poetryPleaseHandoff?.canonicalVideoId ? '<button type="button" class="button button--secondary" data-action="receipt">Refresh PP receipt</button>' : ""}
       ` : ""}
       `;
       if (article.querySelector('[data-field="decision"]')) article.querySelector('[data-field="decision"]').value = gate.decision || "";
+      article.querySelector('[data-action="resolve-identity"]')?.addEventListener("click", () => resolveReviewedVideoIdentity(candidate, article));
       article.querySelector('[data-action="inspect-receiver"]')?.addEventListener("click", () => inspectVideoReceiverState(candidate, article));
       article.querySelector('[data-action="sync-context"]')?.addEventListener("click", () => deliverVideoReviewContext(candidate, article));
       article.querySelector('[data-action="save"]')?.addEventListener("click", () => saveVideoCurationDecision(candidate, article));
@@ -1819,6 +1828,26 @@ function renderVideoCurationCandidates() {
       container.append(article);
     }
   }
+}
+
+async function resolveReviewedVideoIdentity(candidate, article) {
+  const button = article.querySelector('[data-action="resolve-identity"]');
+  const state = article.querySelector('[data-identity-state]');
+  button.disabled = true;
+  state.textContent = "Checking the saved gate and all known receiver identities...";
+  try {
+    const field = name => article.querySelector(`[data-field="${name}"]`)?.value || "";
+    const response = await adminFetch("/api/admin/video-curation-gates/identity", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prioritySetId: candidate.prioritySetId, sourceFileId: candidate.sourceFileId,
+        sourceReviewFileId: field("reviewSource"), evidenceUrl: field("identityEvidenceUrl"), note: field("identityNote") })
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || !result.ok) throw new Error(result.error || "Identity review was not saved.");
+    setStatus(`Verified recording identity saved: ${result.gate.videoRecordId}. No video was sent.`);
+    await loadVideoCurationCandidates();
+  } catch (error) { state.textContent = `Identity review held: ${error.message}`; }
+  finally { button.disabled = false; }
 }
 
 async function inspectVideoReceiverState(candidate, article) {
