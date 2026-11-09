@@ -2,6 +2,13 @@ let runtimeConfig = window.WEAVER_CONFIG || {};
 let currentGraphicsView = "main";
 
 const elements = {
+  showVideoModule: document.getElementById("show-video-module"),
+  videoModule: document.getElementById("video-module"),
+  videoOpenReview: document.getElementById("video-open-review"),
+  videoOpenExcerpts: document.getElementById("video-open-excerpts"),
+  videoExcerptRefresh: document.getElementById("video-excerpt-refresh"),
+  videoExcerptDelivery: document.getElementById("video-excerpt-delivery"),
+  videoExcerptDeliveryStatus: document.getElementById("video-excerpt-delivery-status"),
   adminSignIn: document.getElementById("admin-sign-in"),
   adminAuthStatus: document.getElementById("admin-auth-status"),
   showGatheringModule: document.getElementById("show-gathering-module"),
@@ -1286,6 +1293,7 @@ function applyContributorAccessMode() {
   const hasRequestedPlaylist = !!getRequestedVideoPlaylistUrl();
   const hideIrrelevantUi = isContributorMode || isContributorShell;
 
+  setElementForcedHidden(elements.showVideoModule, hideIrrelevantUi);
   setElementForcedHidden(elements.showReviewModule, hideIrrelevantUi);
   setElementForcedHidden(elements.showWeirdModule, hideIrrelevantUi);
   setElementForcedHidden(elements.showCorrectionsModule, hideIrrelevantUi);
@@ -1726,6 +1734,92 @@ async function loadPriorityVideoProgress() {
 }
 
 let videoCurationCandidates = [];
+let videoExcerptHandoffs = [];
+let videoWorkspaceFilterApplied = false;
+
+function videoPipelineNextStep(candidate) {
+  const gate = candidate.gate || {};
+  const handoff = gate.poetryPleaseHandoff || {};
+  if (handoff.status === "sent_to_poetry_please") {
+    return handoff.durableCopyStatus === "verified"
+      ? "Delivered · media copy verified. Excerpt approval and scheduling remain separate."
+      : `Accepted by Poetry Please · media copy ${handoff.durableCopyStatus || "not yet verified"}. Refresh the receipt.`;
+  }
+  if (handoff.status) return `Transfer needs attention (${handoff.status}). Check the receiver receipt before another attempt.`;
+  if (candidate.existingCanonicalVideoId) return "Existing Poetry Please video · check its receipt. Register other formats under this same video.";
+  if (candidate.publicationRestricted) return "Publication clearance needs review. Internal review can continue.";
+  if (gate.decision === "hold" || gate.decision === "reject") return "Editorial hold · no delivery action.";
+  if (gate.decision !== "ready_for_poetry_please") return "Next: choose an editorial decision. Ratings and excerpt counts do not select the video for you.";
+  if (candidate.sourceMediaType === "OM") return "Next: attach the finished edit while preserving the reviewed recording identity.";
+  if (candidate.requiresManualIdentityReview) return "Next: verify the original recording identity using the evidence form below.";
+  if (!gate.publishableAssetUrl && candidate.sourceMediaType !== "FV") return "Next: attach a verified finished video.";
+  return "Ready for send preflight · Weaver will check the exact source, final asset and receiver before importing.";
+}
+
+function renderVideoExcerptDelivery() {
+  const container = elements.videoExcerptDelivery;
+  if (!container) return;
+  container.replaceChildren();
+  const event = elements.videoCurationEvent?.value || "";
+  const records = videoExcerptHandoffs.filter(row => ["failed", "queued"].includes(row.handoffStatus)
+    && (!event || (row.sourceEvent || row.payload?.sourceEvent) === event));
+  if (elements.videoExcerptDeliveryStatus) elements.videoExcerptDeliveryStatus.textContent =
+    `${records.length} approved video excerpts awaiting delivery or reconciliation. Old failure messages need a current receipt check.`;
+  for (const record of records) {
+    const card = document.createElement("details"); card.className = "excerpt-card";
+    card.innerHTML = `<summary>${escapeHtml(record.author)} · ${escapeHtml(record.poemTitle)} · ${escapeHtml(record.handoffStatus)}</summary>
+      <p>${escapeHtml(record.sourceEvent || record.payload?.sourceEvent || "")}</p>
+      <blockquote>${escapeHtml(record.excerpt)}</blockquote>
+      <p>${escapeHtml(record.errorMessage || "Queued for delivery")}</p>
+      <button class="button button--secondary" type="button" data-check-excerpt>Check existing PP receipt</button>
+      <button class="button button--secondary" type="button" data-reconcile-excerpt hidden>Reconcile verified receipt</button>
+      <p data-excerpt-receipt role="status"></p>`;
+    const check = card.querySelector('[data-check-excerpt]');
+    const save = card.querySelector('[data-reconcile-excerpt]');
+    const state = card.querySelector('[data-excerpt-receipt]');
+    const inspect = async apply => {
+      check.disabled = true; save.disabled = true; save.hidden = true;
+      state.textContent = apply ? "Rechecking receiver and saving the durable status..." : "Checking exact source acknowledgement and current receiver text...";
+      try {
+        const response = await adminFetch(apply ? "/api/excerpts/handoffs/reconcile"
+          : `/api/excerpts/handoffs/receipt?recordId=${encodeURIComponent(record.recordId)}`, apply ? {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ recordId: record.recordId })
+        } : {});
+        const result = await response.json();
+        if (!response.ok || !result.ok) throw new Error(result.error || "Receiver check unavailable.");
+        state.textContent = apply ? `Reconciled to ${result.receipt.canonicalExcerptId}. No content was resent.`
+          : `Verified current excerpt ${result.receipt.canonicalExcerptId}. No content changed.`;
+        save.hidden = !result.canReconcile; save.disabled = false;
+        if (apply) {
+          Object.assign(record, result.record);
+          card.querySelector('summary').textContent = `${record.author} · ${record.poemTitle} · sent`;
+        }
+      } catch (error) { state.textContent = `Needs review: ${error.message}`; }
+      finally { check.disabled = false; }
+    };
+    check.addEventListener('click', () => inspect(false));
+    save.addEventListener('click', () => inspect(true));
+    container.append(card);
+  }
+}
+
+async function loadVideoExcerptDelivery() {
+  if (elements.videoExcerptDeliveryStatus) elements.videoExcerptDeliveryStatus.textContent = "Loading video excerpt delivery...";
+  try {
+    const result = await requestReviewApi("/api/excerpts/handoffs", { status: "failed,queued" });
+    videoExcerptHandoffs = (result.records || []).filter(row => row.sourceVideoFileId || row.payload?.sourceVideoFileId || row.sourceVideoUrl || row.payload?.sourceVideoUrl);
+    renderVideoExcerptDelivery();
+  } catch (error) {
+    if (elements.videoExcerptDeliveryStatus) elements.videoExcerptDeliveryStatus.textContent = `Delivery status unavailable: ${error.message}`;
+  }
+}
+
+function openVideoWorkspace() {
+  setActiveModule("videos");
+  if (elements.videoProgressManagement) elements.videoProgressManagement.open = true;
+  loadVideoCurationCandidates();
+  loadVideoExcerptDelivery();
+}
 
 function renderVideoCurationCandidates() {
   const container = elements.videoCurationCandidates;
@@ -1779,6 +1873,7 @@ function renderVideoCurationCandidates() {
       article.innerHTML = `
       <summary><strong>${rankByCandidate.get(candidate)}. ${escapeHtml(candidate.sourceFileName || "Untitled video")}</strong> · Score ${Number(candidate.candidateScore || 0).toFixed(2)} · ${Number(candidate.reviewCount || 0)} reviews · ${candidate.excerptRecordIds.length} excerpts</summary>
       <p>${escapeHtml(candidate.prioritySetLabel || "")} · ${escapeHtml(candidate.sourceMediaType || "unknown")} · Reviewer average ${Number(candidate.baseScore || 0).toFixed(2)}${candidate.isEligible ? "" : " · Below candidate threshold"}</p>
+      <p role="status"><strong>${escapeHtml(videoPipelineNextStep(candidate))}</strong></p>
       <p><a href="https://drive.google.com/file/d/${encodeURIComponent(candidate.sourceFileId)}/view" target="_blank" rel="noopener noreferrer">Open source video</a></p>
       ${(candidate.footageConnections || []).length ? `<p>Footage inventory: ${candidate.footageConnections.map(c => `${escapeHtml(c.inventoryEventName)} · source row ${Number(c.sourceRow)}${c.originalMediaFileId ? ` · <a href="https://drive.google.com/file/d/${encodeURIComponent(c.originalMediaFileId)}/view" target="_blank" rel="noopener noreferrer">OM source</a>` : ""}${c.finishedVideoFileId ? ` · <a href="https://drive.google.com/file/d/${encodeURIComponent(c.finishedVideoFileId)}/view" target="_blank" rel="noopener noreferrer">FV deliverable</a>` : ""}`).join("; ")}</p>` : ""}
       ${candidate.existingCanonicalVideoId ? `<p>Existing Poetry Please video: ${escapeHtml(candidate.existingCanonicalVideoId)}. Additional resolutions and formats need a verified rendition registration. This send form does not replace the primary video.</p>` : ""}
@@ -1822,8 +1917,8 @@ function renderVideoCurationCandidates() {
       article.querySelector('[data-action="inspect-receiver"]')?.addEventListener("click", () => inspectVideoReceiverState(candidate, article));
       article.querySelector('[data-action="sync-context"]')?.addEventListener("click", () => deliverVideoReviewContext(candidate, article));
       article.querySelector('[data-action="save"]')?.addEventListener("click", () => saveVideoCurationDecision(candidate, article));
-      article.querySelector('[data-action="handoff"]')?.addEventListener("click", () => sendVideoCurationHandoff(candidate));
-      article.querySelector('[data-action="retry-timeout"]')?.addEventListener("click", () => sendVideoCurationHandoff(candidate, true));
+      article.querySelector('[data-action="handoff"]')?.addEventListener("click", event => sendVideoCurationHandoff(candidate, false, event.currentTarget));
+      article.querySelector('[data-action="retry-timeout"]')?.addEventListener("click", event => sendVideoCurationHandoff(candidate, true, event.currentTarget));
       article.querySelector('[data-action="receipt"]')?.addEventListener("click", () => refreshVideoCurationReceipt(candidate));
       container.append(article);
     }
@@ -1909,6 +2004,16 @@ async function loadVideoCurationCandidates() {
     if (!response.ok || !result.ok) throw new Error(result.error || `Request failed (${response.status}).`);
     videoCurationCandidates = result.candidates || [];
     renderVideoCurationCandidates();
+    if (!videoWorkspaceFilterApplied) {
+      const setId = new URLSearchParams(window.location.search).get("prioritySetId");
+      const candidate = videoCurationCandidates.find(row => row.prioritySetId === setId);
+      if (candidate && elements.videoCurationEvent) {
+        elements.videoCurationEvent.value = candidate.sourceEvent || candidate.eventName || candidate.prioritySetLabel;
+        renderVideoCurationCandidates();
+      }
+      videoWorkspaceFilterApplied = true;
+    }
+    renderVideoExcerptDelivery();
   } catch (error) {
     if (elements.videoCurationStatus) elements.videoCurationStatus.textContent = error.message;
   }
@@ -1937,7 +2042,9 @@ async function saveVideoCurationDecision(candidate, article) {
   }
 }
 
-async function sendVideoCurationHandoff(candidate, retryFailed = false) {
+async function sendVideoCurationHandoff(candidate, retryFailed = false, button = null) {
+  if (button?.disabled) return;
+  if (button) button.disabled = true;
   try {
     const response = await adminFetch("/api/admin/video-curation-gates/handoff", {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -1949,6 +2056,8 @@ async function sendVideoCurationHandoff(candidate, retryFailed = false) {
     await loadVideoCurationCandidates();
   } catch (error) {
     setStatus(`Video handoff failed: ${error.message}`);
+  } finally {
+    if (button?.isConnected) button.disabled = false;
   }
 }
 
@@ -2118,7 +2227,9 @@ function setActiveModule(moduleName) {
   if ((currentContributorAccess || isContributorShellRequested()) && moduleName !== "gathering") {
     moduleName = "gathering";
   }
-  currentModule = ["gathering", "review", "weird", "corrections", "graphics"].includes(moduleName) ? moduleName : "review";
+  currentModule = ["gathering", "review", "weird", "corrections", "graphics", "videos"].includes(moduleName) ? moduleName : "review";
+  elements.videoModule?.classList.toggle("module-panel--active", currentModule === "videos");
+  elements.showVideoModule?.classList.toggle("hero-pill--active", currentModule === "videos");
   elements.gatheringModule?.classList.toggle("module-panel--active", currentModule === "gathering");
   elements.reviewModule?.classList.toggle("module-panel--active", currentModule === "review");
   elements.reviewQueuePanel?.classList.toggle("module-panel--active", currentModule === "review");
@@ -3919,7 +4030,7 @@ function updateGraphicsModuleTitle() {
     ? "Under the Hood"
     : "Graphics QC";
   setElementForcedHidden(elements.graphicsOpsPanel, !isOpsHandoff);
-  setElementForcedHidden(elements.videoProgressManagement, !isOpsView);
+  setElementForcedHidden(elements.videoProgressManagement, false);
   setElementForcedHidden(elements.graphicsModeField, !isOpsView);
   setElementForcedHidden(elements.graphicsFilterField, isOpsView);
   setElementForcedHidden(elements.graphicsReleaseCatalogField, isOpsView);
@@ -7250,6 +7361,22 @@ elements.gatheringBookBold?.addEventListener("click", () => wrapTextareaSelectio
 elements.gatheringBookItalicize?.addEventListener("click", () => wrapTextareaSelectionWithItalics(elements.gatheringBookQuote));
 elements.gatheringBatchBold?.addEventListener("click", () => wrapTextareaSelectionWithBold(elements.gatheringBatchSource));
 elements.gatheringBatchItalicize?.addEventListener("click", () => wrapTextareaSelectionWithItalics(elements.gatheringBatchSource));
+elements.showVideoModule?.addEventListener("click", openVideoWorkspace);
+elements.videoExcerptRefresh?.addEventListener("click", loadVideoExcerptDelivery);
+elements.videoOpenReview?.addEventListener("click", async () => {
+  const event = elements.videoCurationEvent?.value || "";
+  const setId = videoCurationCandidates.find(row => (row.sourceEvent || row.eventName || row.prioritySetLabel) === event)?.prioritySetId || "";
+  setActiveModule("gathering"); setGatheringMode("video");
+  try {
+    if (!intakeOptionsLoaded) await loadGatheringOptions();
+    if (setId && elements.gatheringVideoPrioritySet) elements.gatheringVideoPrioritySet.value = setId;
+  } catch (error) { setStatus(`Video review options unavailable: ${error.message}`); }
+});
+elements.videoOpenExcerpts?.addEventListener("click", () => {
+  setActiveModule("review");
+  if (elements.reviewFilter) elements.reviewFilter.value = "videos";
+  loadBooks();
+});
 elements.showReviewModule?.addEventListener("click", () => setActiveModule("review"));
 elements.showWeirdModule?.addEventListener("click", () => {
   setActiveModule("weird");
@@ -7283,8 +7410,6 @@ elements.showGraphicsOps?.addEventListener("click", () => {
   loadExcerptHandoffs();
   loadGraphicsBooks({ preserveSelection: false });
   if (elements.videoProgressManagement) elements.videoProgressManagement.open = true;
-  loadPriorityVideoProgress();
-  loadVideoCurationCandidates();
 });
 elements.loadGraphicsBooks?.addEventListener("click", loadGraphicsBooks);
 elements.loadGraphicsRecords?.addEventListener("click", loadGraphicsRecords);
@@ -7379,7 +7504,7 @@ elements.adminSignIn?.addEventListener("click", async () => {
   }
 });
 elements.videoCurationRefresh?.addEventListener("click", loadVideoCurationCandidates);
-elements.videoCurationEvent?.addEventListener("change", renderVideoCurationCandidates);
+elements.videoCurationEvent?.addEventListener("change", () => { renderVideoCurationCandidates(); renderVideoExcerptDelivery(); });
 elements.videoCurationHandoffFilter?.addEventListener("change", renderVideoCurationCandidates);
 elements.gatheringVideoLoadPlaylist?.addEventListener("click", () => loadGatheringVideoPlaylist());
 elements.gatheringVideoPrioritySet?.addEventListener("change", () => {
@@ -7507,14 +7632,16 @@ async function initializeApp() {
     await openRequestedVideoTask();
     return;
   }
+  const videoWorkspaceRequested = !contributorShell && new URLSearchParams(window.location.search).get("view") === "videos";
   setStatus(`Ready${runtimeConfig.appVersion ? ` (${runtimeConfig.appVersion})` : ""}. Loading books...`);
   if (contributorShell) {
     loadGatheringOptions().catch(error => {
       setStatus(`Excerpt gathering option load failed: ${error.message}`);
     });
-  } else {
+  } else if (!videoWorkspaceRequested) {
     loadBooks();
   }
+  if (videoWorkspaceRequested) openVideoWorkspace();
   if (getRequestedVideoPlaylistUrl()) {
     setActiveModule("gathering");
     setGatheringMode("video");
