@@ -636,8 +636,14 @@ def fetch_excerpt_handoffs(connection, payload: dict[str, Any]) -> dict[str, Any
     record_ids = payload.get("recordIds") or []
     if hasattr(connection, "list_raw_documents"):
         baseline = legacy_excerpt_handoffs(record_ids)
-        durable = ([connection.get_raw_document(FIRESTORE_EXCERPT_HANDOFFS_COLLECTION, excerpt_handoff_document_id(record_id))
-                    for record_id in record_ids] if record_ids else connection.list_raw_documents(FIRESTORE_EXCERPT_HANDOFFS_COLLECTION))
+        if record_ids and len(record_ids) <= 20:
+            durable = [connection.get_raw_document(FIRESTORE_EXCERPT_HANDOFFS_COLLECTION, excerpt_handoff_document_id(record_id))
+                       for record_id in record_ids]
+        else:
+            durable = connection.list_raw_documents(FIRESTORE_EXCERPT_HANDOFFS_COLLECTION)
+            if record_ids:
+                requested = set(record_ids)
+                durable = [row for row in durable if row.get("recordId") in requested]
         merged = {row["recordId"]: row for row in baseline}
         merged.update({row["recordId"]: row for row in durable if row})
         return {"ok": True, "records": list(merged.values()), "backend": "firestore", "legacyBaseline": True}

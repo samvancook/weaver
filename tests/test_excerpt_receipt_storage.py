@@ -70,6 +70,14 @@ class ExcerptReceiptStorageTest(unittest.TestCase):
         self.assertFalse(reconcile_excerpt_handoff(store,{**self.payload,'approvedBaseline':True})['saved'])
         self.assertEqual(store.writes,0)
 
+    def test_large_queue_reads_collection_once_and_keeps_requested_scope(self):
+        with tempfile.TemporaryDirectory() as folder, patch('weaver_runtime_sync.DEFAULT_DB_PATH',Path(folder)/'absent.db'):
+            store=Store({'first':self.record,'other':{**self.record,'recordId':'not-requested'}})
+            with patch.object(store,'get_raw_document',side_effect=AssertionError('one read per row')), \
+                 patch.object(store,'list_raw_documents',wraps=store.list_raw_documents) as listing:
+                result=fetch_excerpt_handoffs(store,{'recordIds':['handoff']+[f'absent-{i}' for i in range(1300)]})
+            self.assertEqual(result['records'],[self.record]);listing.assert_called_once()
+
     def test_new_status_survives_another_instance_and_overrides_legacy(self):
         store=Store()
         self.assertTrue({'upsert_excerpt_handoffs','get_excerpt_handoffs','reconcile_excerpt_handoff'} <= FIRESTORE_HANDOFF_ACTIONS)
