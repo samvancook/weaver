@@ -5910,7 +5910,8 @@ async function inspectExcerptHandoffReceipt(recordId, checkedBy = "", apply = fa
     syncWeaverRuntimeDb("get_excerpt_handoffs", { recordIds: [recordId] })
   ]);
   const record = approved.records?.find(row => row.recordId === recordId);
-  const expected = runtime.records?.find(row => row.recordId === recordId);
+  const stored = runtime.records?.find(row => row.recordId === recordId);
+  const expected = stored || record;
   if (!record || !expected || record.contentType !== "EXC"
     || record.sourceRecordId !== expected.sourceRecordId
     || excerptFingerprint(record.excerpt) !== excerptFingerprint(expected.excerpt)) {
@@ -5939,7 +5940,11 @@ async function inspectExcerptHandoffReceipt(recordId, checkedBy = "", apply = fa
   const receipt = verifyExcerptReadback(record, acknowledgement, body);
   if (!apply) return { ok: true, receipt, canReconcile: ["failed", "queued"].includes(expected.handoffStatus) };
   if (!checkedBy) throw new Error("Verified administrator required.");
-  const result = await syncWeaverRuntimeDb("reconcile_excerpt_handoff", { expectedRecord: expected, receipt, checkedBy });
+  if (!stored) {
+    const fresh = (await getExcerptHandoffRecords({ recordIds: [recordId] })).records?.find(row => row.recordId === recordId);
+    if (JSON.stringify(fresh) !== JSON.stringify(record)) throw new Error("The approved source changed; refresh before reconciling.");
+  }
+  const result = await syncWeaverRuntimeDb("reconcile_excerpt_handoff", { expectedRecord: expected, approvedBaseline: !stored, receipt, checkedBy });
   if (!result.saved) throw new Error(result.reason || "The handoff changed; refresh before reconciling.");
   invalidateQueueSnapshots();
   const verified = await syncWeaverRuntimeDb("get_excerpt_handoffs", { recordIds: [recordId] });
