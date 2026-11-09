@@ -1,9 +1,14 @@
 import copy
 import time
+import sqlite3
+import tempfile
+from pathlib import Path
 import unittest
 from unittest.mock import patch
 from weaver_runtime_sync import (fetch_excerpt_handoffs, sync_excerpt_handoffs, reconcile_excerpt_handoff,
     excerpt_receipt_fingerprint, excerpt_handoff_document_id, FIRESTORE_HANDOFF_ACTIONS)
+from weaver_runtime_sync import legacy_excerpt_handoffs
+from weaver_runtime_db import connect_runtime_db, ensure_runtime_schema, upsert_excerpt_handoff
 
 
 class Store:
@@ -32,6 +37,38 @@ class ExcerptReceiptStorageTest(unittest.TestCase):
             'excerptFingerprint':excerpt_receipt_fingerprint(self.record['excerpt']),
             'checkedAtMs':time.time()*1000,'importLedgerIds':['exact-ledger']}
         self.payload={'expectedRecord':self.record,'receipt':self.receipt,'checkedBy':'operator'}
+
+    def test_fresh_container_without_legacy_database_uses_durable_records_without_creating_sqlite(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'absent.db'
+            store=Store({excerpt_handoff_document_id('handoff'):self.record})
+            with patch('weaver_runtime_sync.DEFAULT_DB_PATH',path):
+                self.assertEqual(fetch_excerpt_handoffs(store,{})['records'],[self.record])
+                self.assertFalse(path.exists())
+                self.assertFalse(reconcile_excerpt_handoff(Store(),self.payload)['saved'])
+                result=reconcile_excerpt_handoff(Store(),{**self.payload,'approvedBaseline':True})
+                self.assertTrue(result['saved'])
+                self.assertEqual(result['record']['reconciliation']['previousError'],'old 502')
+                self.assertFalse(path.exists())
+
+    def test_existing_legacy_database_is_read_only_and_corruption_is_not_hidden(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'legacy.db'
+            with patch('weaver_runtime_sync.DEFAULT_DB_PATH',path):
+                sqlite3.connect(path).close()
+                self.assertEqual(legacy_excerpt_handoffs([]),[])
+                connection=connect_runtime_db(path)
+                ensure_runtime_schema(connection)
+                upsert_excerpt_handoff(connection,self.record)
+                connection.commit();connection.close()
+                self.assertEqual(legacy_excerpt_handoffs(['handoff'])[0]['sourceRecordId'],'source')
+                path.write_bytes(b'corrupt database')
+                with self.assertRaises(sqlite3.DatabaseError): legacy_excerpt_handoffs([])
+
+    def test_approved_baseline_cannot_override_an_existing_durable_row(self):
+        store=Store({excerpt_handoff_document_id('handoff'):{**self.record,'excerpt':'Changed'}})
+        self.assertFalse(reconcile_excerpt_handoff(store,{**self.payload,'approvedBaseline':True})['saved'])
+        self.assertEqual(store.writes,0)
 
     def test_new_status_survives_another_instance_and_overrides_legacy(self):
         store=Store()

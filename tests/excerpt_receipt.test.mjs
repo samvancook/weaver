@@ -52,3 +52,20 @@ test('reconciliation rereads receipt, persists and reads back without an import'
  assert.match(server,/"\/api\/excerpts\/handoffs\/reconcile"/);
  assert.match(server.slice(server.indexOf('if (url.pathname === "/api/excerpts/handoffs/receipt"'),server.indexOf('if (url.pathname === "/api/excerpts/handoffs/retry"')),/verifyAdministrativeCaller/);
 });
+test('absent runtime ledger requires unchanged approved source before receipt-only creation',async()=>{
+ for(const changed of [false,true]) {
+  const calls=[];let reads=0,saved=false;
+  const source={...record,handoffStatus:'failed',errorMessage:'old 502'};
+  const context={cleanSheetWhitespace:x=>String(x||'').trim(),excerptFingerprint,findExcerptAcknowledgement,verifyExcerptReadback,
+   poetryPleaseApiKey:'test',poetryPleaseApiUrl:'https://receiver.invalid/api',AbortSignal,
+   getExcerptHandoffRecords:async()=>({records:[++reads>1&&changed?{...source,excerpt:'Changed'}:source]}),
+   buildPoetryPleaseExcerptRecord:r=>r,invalidateQueueSnapshots(){},
+   syncWeaverRuntimeDb:async(action,payload)=>{calls.push({action,payload});if(action==='reconcile_excerpt_handoff'){saved=true;return {saved:true};}
+    return {records:saved?[{...source,handoffStatus:'sent',poetryPleaseItemId:'EXC-ONE'}]:[]};},
+   fetch:async url=>({ok:true,json:async()=>url.includes('weaverImportHealth')?health:body})};
+  const inspect=runInNewContext(`(${server.match(/async function inspectExcerptHandoffReceipt\([^]*?\n}\n/)[0]})`,context);
+  if(changed) {await assert.rejects(inspect('handoff','operator',true),/approved source changed/);assert.equal(saved,false);}
+  else {assert.equal((await inspect('handoff','operator',true)).saved,true);
+   assert.equal(calls.find(c=>c.action==='reconcile_excerpt_handoff').payload.approvedBaseline,true);assert.equal(reads,2);}
+ }
+});

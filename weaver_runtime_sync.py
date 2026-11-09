@@ -623,8 +623,12 @@ def excerpt_receipt_fingerprint(value):
 def legacy_excerpt_handoffs(record_ids):
     # Historical image data is a read-only compatibility baseline, never the
     # destination of a hosted status update. Firestore always overrides it.
+    if not DEFAULT_DB_PATH.exists():
+        return []
     with sqlite3.connect(f"file:{DEFAULT_DB_PATH}?mode=ro", uri=True) as legacy:
         legacy.row_factory = sqlite3.Row
+        if not legacy.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='excerpt_handoff_ledger'").fetchone():
+            return []
         return get_excerpt_handoffs(legacy, record_ids)
 
 
@@ -655,6 +659,10 @@ def reconcile_excerpt_handoff(connection, payload):
     current, version = connection.get_raw_document_versioned(FIRESTORE_EXCERPT_HANDOFFS_COLLECTION, document_id)
     if current is None:
         current = next((row for row in legacy_excerpt_handoffs([record_id]) if row["recordId"] == record_id), None)
+    if current is None and payload.get("approvedBaseline") is True:
+        # Only the server's freshly re-read approved source can seed an absent
+        # ledger. Receipt verification and create-if-absent still apply below.
+        current = expected
     if current != expected:
         return {"ok": True, "saved": False, "reason": "excerpt_handoff_changed"}
     checked_at = receipt.get("checkedAtMs")
