@@ -8,10 +8,13 @@ import os
 import sys
 import uuid
 import time
+import sqlite3
+import unicodedata
 from datetime import datetime
 from typing import Any
 
 from weaver_runtime_db import (
+    DEFAULT_DB_PATH,
     FIRESTORE_EXCERPT_RECORDS_COLLECTION,
     FIRESTORE_GRAPHICS_COMPLETIONS_COLLECTION,
     FIRESTORE_GRAPHICS_QC_QUEUE_COLLECTION,
@@ -41,6 +44,7 @@ from weaver_runtime_db import (
 
 
 FIRESTORE_HANDOFF_ACTIONS = {
+    "upsert_excerpt_handoffs", "get_excerpt_handoffs", "reconcile_excerpt_handoff",
     "save_footage_event", "get_footage_events",
     "upsert_completions",
     "insert_qc_reviews",
@@ -80,6 +84,7 @@ EXPECTED_FIRESTORE_DATABASE_ID = "weaverledger"
 FIRESTORE_REPAIR_REQUESTS_COLLECTION = "poetryPleaseRepairRequests"
 FIRESTORE_CURATION_REVIEWS_COLLECTION = "curationReviews"
 FIRESTORE_VIDEO_CURATION_GATES_COLLECTION = "videoCurationGates"
+FIRESTORE_EXCERPT_HANDOFFS_COLLECTION = "excerptHandoffs"
 PIG_REPAIR_CONTENT_TYPES = {"QI", "FPI"}
 
 
@@ -577,16 +582,102 @@ def sync_excerpt_handoffs(connection, payload: dict[str, Any]) -> dict[str, Any]
     handoffs = payload.get("handoffs") or []
     if payload.get("handoff"):
         handoffs = [payload["handoff"]]
-    records = [upsert_excerpt_handoff(connection, handoff) for handoff in handoffs]
+    if hasattr(connection, "get_raw_document_versioned"):
+        records = []
+        for handoff in handoffs:
+            record_id = normalize_text(handoff.get("recordId"))
+            if not record_id:
+                raise ValueError("recordId is required")
+            document_id = excerpt_handoff_document_id(record_id)
+            existing, version = connection.get_raw_document_versioned(FIRESTORE_EXCERPT_HANDOFFS_COLLECTION, document_id)
+            existing = existing or {}
+            if existing.get("sourceRecordId") and existing.get("sourceRecordId") != handoff.get("sourceRecordId"):
+                raise ValueError("Excerpt handoff source identity changed")
+            if existing.get("reconciliation"):
+                if (handoff.get("handoffStatus") != "sent"
+                        or handoff.get("poetryPleaseItemId") != existing.get("poetryPleaseItemId")
+                        or excerpt_receipt_fingerprint(handoff.get("excerpt")) != excerpt_receipt_fingerprint(existing.get("excerpt"))):
+                    raise ValueError("Verified excerpt receipt changed; reconcile before another write")
+            record = {**existing, **handoff, "recordId": record_id,
+                      "createdAt": existing.get("createdAt") or handoff.get("createdAt") or utc_now_iso(),
+                      "ledgerUpdatedAt": utc_now_iso()}
+            saved = (connection.write_raw_document_if_unchanged(FIRESTORE_EXCERPT_HANDOFFS_COLLECTION, document_id, record, version)
+                     if version else connection.create_raw_document_if_absent(FIRESTORE_EXCERPT_HANDOFFS_COLLECTION, document_id, record))
+            if not saved:
+                raise ValueError("Excerpt handoff changed concurrently; refresh before retry")
+            records.append(saved)
+    else:
+        records = [upsert_excerpt_handoff(connection, handoff) for handoff in handoffs]
     return {"ok": True, "records": records, "count": len(records)}
+
+
+def excerpt_handoff_document_id(record_id):
+    return hashlib.sha256(record_id.encode("utf-8")).hexdigest()[:32]
+
+
+def excerpt_receipt_fingerprint(value):
+    text = " ".join(unicodedata.normalize("NFKC", str(value or "")).split()).lower()
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def legacy_excerpt_handoffs(record_ids):
+    # Historical image data is a read-only compatibility baseline, never the
+    # destination of a hosted status update. Firestore always overrides it.
+    with sqlite3.connect(f"file:{DEFAULT_DB_PATH}?mode=ro", uri=True) as legacy:
+        legacy.row_factory = sqlite3.Row
+        return get_excerpt_handoffs(legacy, record_ids)
 
 
 def fetch_excerpt_handoffs(connection, payload: dict[str, Any]) -> dict[str, Any]:
     record_ids = payload.get("recordIds") or []
+    if hasattr(connection, "list_raw_documents"):
+        baseline = legacy_excerpt_handoffs(record_ids)
+        durable = ([connection.get_raw_document(FIRESTORE_EXCERPT_HANDOFFS_COLLECTION, excerpt_handoff_document_id(record_id))
+                    for record_id in record_ids] if record_ids else connection.list_raw_documents(FIRESTORE_EXCERPT_HANDOFFS_COLLECTION))
+        merged = {row["recordId"]: row for row in baseline}
+        merged.update({row["recordId"]: row for row in durable if row})
+        return {"ok": True, "records": list(merged.values()), "backend": "firestore", "legacyBaseline": True}
     return {
         "ok": True,
         "records": get_excerpt_handoffs(connection, record_ids),
     }
+
+
+def reconcile_excerpt_handoff(connection, payload):
+    if not hasattr(connection, "get_raw_document_versioned"):
+        raise ValueError("Excerpt receipt reconciliation requires Firestore")
+    expected = payload.get("expectedRecord") or {}
+    receipt = payload.get("receipt") or {}
+    record_id = normalize_text(expected.get("recordId"))
+    if not record_id or not normalize_text(payload.get("checkedBy")):
+        raise ValueError("Exact handoff and verified actor required")
+    document_id = excerpt_handoff_document_id(record_id)
+    current, version = connection.get_raw_document_versioned(FIRESTORE_EXCERPT_HANDOFFS_COLLECTION, document_id)
+    if current is None:
+        current = next((row for row in legacy_excerpt_handoffs([record_id]) if row["recordId"] == record_id), None)
+    if current != expected:
+        return {"ok": True, "saved": False, "reason": "excerpt_handoff_changed"}
+    checked_at = receipt.get("checkedAtMs")
+    if (receipt.get("verified") is not True or not isinstance(checked_at, (float, int))
+            or not 0 <= time.time() * 1000 - checked_at <= 30000
+            or receipt.get("sourceRecordId") != current.get("sourceRecordId")
+            or receipt.get("excerptFingerprint") != excerpt_receipt_fingerprint(current.get("excerpt"))
+            or not normalize_text(receipt.get("canonicalExcerptId"))
+            or not receipt.get("importLedgerIds")
+            or current.get("handoffStatus") not in {"failed", "queued", "sent"}
+            or current.get("poetryPleaseItemId") not in {None, "", receipt.get("canonicalExcerptId")}):
+        return {"ok": True, "saved": False, "reason": "excerpt_receipt_unverified"}
+    if current.get("handoffStatus") == "sent" and current.get("reconciliation"):
+        return {"ok": True, "saved": True, "alreadyVerified": True, "record": current}
+    now = utc_now_iso()
+    audit = {"checkedBy": payload["checkedBy"], "checkedAt": now, "receipt": receipt,
+             "previousStatus": current.get("handoffStatus"), "previousError": current.get("errorMessage"),
+             "previousHandedOffAt": current.get("handedOffAt"), "mode": "receipt_only_no_resend"}
+    record = {**current, "handoffStatus": "sent", "poetryPleaseItemId": receipt["canonicalExcerptId"],
+              "errorMessage": "", "reconciliation": audit, "ledgerUpdatedAt": now}
+    saved = (connection.write_raw_document_if_unchanged(FIRESTORE_EXCERPT_HANDOFFS_COLLECTION, document_id, record, version)
+                     if version else connection.create_raw_document_if_absent(FIRESTORE_EXCERPT_HANDOFFS_COLLECTION, document_id, record))
+    return {"ok": True, "saved": bool(saved), "record": saved, "reason": "" if saved else "excerpt_handoff_changed"}
 
 
 def normalize_excerpt_record(record: dict[str, Any]) -> dict[str, Any]:
@@ -2039,6 +2130,8 @@ def main() -> int:
             result = sync_excerpt_handoffs(connection, payload)
         elif action == "get_excerpt_handoffs":
             result = fetch_excerpt_handoffs(connection, payload)
+        elif action == "reconcile_excerpt_handoff":
+            result = reconcile_excerpt_handoff(connection, payload)
         elif action == "get_graphics_state":
             result = fetch_graphics_state(connection, payload)
         elif action == "get_pending_graphics_qc":

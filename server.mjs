@@ -4,6 +4,7 @@ import { verifyFootageHelperCaller } from "./footage_helper_auth.mjs";
 import http from "node:http";
 import { spawn } from "node:child_process";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
+import { excerptFingerprint, findExcerptAcknowledgement, verifyExcerptReadback } from "./excerpt_receipt.mjs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -213,6 +214,7 @@ const QUEUE_CACHE_TTL_MS = 5000;
 const queueSnapshotCache = new Map();
 const SOURCE_SHEET_CACHE_KEY = "source-sheet-values";
 const ADMIN_MUTATION_PATHS = new Set([
+  "/api/excerpts/handoffs/reconcile",
   "/api/excerpts/handoffs/retry",
   "/api/excerpts/handoffs/backfill-approved",
   "/api/graphics/folder-import/apply",
@@ -5820,13 +5822,19 @@ async function updateExcerptHandoffStatuses(records, poetryPlease) {
         }
       ];
     });
-  if (sheetWrites.length) {
-    await batchUpdateSheetValuesServer(sheetWrites);
-    invalidateQueueSnapshots();
-  }
   const statusResult = await syncWeaverRuntimeDb("upsert_excerpt_handoffs", { handoffs: statusUpdates });
+  if (!statusResult.ok || statusResult.records?.length !== statusUpdates.length) {
+    throw new Error("Durable excerpt handoff status was not saved; reconcile before retry.");
+  }
+  let compatibilityWarning = "";
+  if (sheetWrites.length) {
+    try { await batchUpdateSheetValuesServer(sheetWrites); }
+    catch (error) { compatibilityWarning = `Durable status saved; sheet compatibility update failed: ${error.message}`; }
+  }
+  invalidateQueueSnapshots();
   return {
     ok: true,
+    compatibilityWarning,
     savedCount: Array.isArray(statusResult?.records) ? statusResult.records.length : handoffRecords.length,
     records: Array.isArray(statusResult?.records) ? statusResult.records : handoffRecords
   };
@@ -5892,6 +5900,54 @@ async function retryExcerptHandoffs({ recordIds = [], statuses = ["queued", "fai
     records: statusResult.records,
     poetryPlease
   };
+}
+
+async function inspectExcerptHandoffReceipt(recordId, checkedBy = "", apply = false) {
+  if (!poetryPleaseApiKey) throw new Error("Poetry Please connection is not configured.");
+  if (!recordId || recordId.length > 400) throw new Error("Choose one exact excerpt handoff.");
+  const [approved, runtime] = await Promise.all([
+    getExcerptHandoffRecords({ recordIds: [recordId] }),
+    syncWeaverRuntimeDb("get_excerpt_handoffs", { recordIds: [recordId] })
+  ]);
+  const record = approved.records?.find(row => row.recordId === recordId);
+  const expected = runtime.records?.find(row => row.recordId === recordId);
+  if (!record || !expected || record.contentType !== "EXC"
+    || record.sourceRecordId !== expected.sourceRecordId
+    || excerptFingerprint(record.excerpt) !== excerptFingerprint(expected.excerpt)) {
+    throw new Error("The approved source and saved handoff require review.");
+  }
+  const source = buildPoetryPleaseExcerptRecord(record);
+  if (!source || source.invalid) throw new Error(source?.error || "The approved source is incomplete.");
+  let canonicalVideoId = "";
+  if (source.sourceVideoFileId) {
+    const gates = await syncWeaverRuntimeDb("get_video_curation_gates", {});
+    canonicalVideoId = poetryPleaseVideoIdForSourceFile(source.sourceVideoFileId, gates.records || []);
+    if (!canonicalVideoId) throw new Error("Source video has no verified Weaver handoff. Resolve that video first.");
+  }
+  const read = async (path, authenticated = false) => {
+    const response = await fetch(`${poetryPleaseApiUrl.replace(/\/$/, "")}/${path}`, {
+      headers: authenticated ? { "x-api-key": poetryPleaseApiKey } : {},
+      signal: AbortSignal.timeout(30000), cache: "no-store"
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.error || `Receiver read failed (${response.status}).`);
+    return body;
+  };
+  const health = await read("internal/weaverImportHealth?limit=250", true);
+  const acknowledgement = findExcerptAcknowledgement(record, health, canonicalVideoId);
+  const body = await read(`contentById?id=${encodeURIComponent(acknowledgement.canonicalExcerptId)}`);
+  const receipt = verifyExcerptReadback(record, acknowledgement, body);
+  if (!apply) return { ok: true, receipt, canReconcile: ["failed", "queued"].includes(expected.handoffStatus) };
+  if (!checkedBy) throw new Error("Verified administrator required.");
+  const result = await syncWeaverRuntimeDb("reconcile_excerpt_handoff", { expectedRecord: expected, receipt, checkedBy });
+  if (!result.saved) throw new Error(result.reason || "The handoff changed; refresh before reconciling.");
+  invalidateQueueSnapshots();
+  const verified = await syncWeaverRuntimeDb("get_excerpt_handoffs", { recordIds: [recordId] });
+  const saved = verified.records?.find(row => row.recordId === recordId);
+  if (saved?.handoffStatus !== "sent" || saved.poetryPleaseItemId !== receipt.canonicalExcerptId) {
+    throw new Error("The durable status readback did not match; do not resend.");
+  }
+  return { ok: true, saved: true, receipt, record: saved };
 }
 
 async function backfillApprovedExcerptHandoffs({ since = "", sourceRecordIds = [] } = {}) {
@@ -8907,6 +8963,25 @@ const server = http.createServer(async (req, res) => {
         ok: false,
         error: error.message
       });
+    }
+  }
+
+  if (url.pathname === "/api/excerpts/handoffs/receipt" && req.method === "GET") {
+    try {
+      const actor = await verifyAdministrativeCaller(req);
+      return sendJson(res, 200, await inspectExcerptHandoffReceipt(cleanSheetWhitespace(url.searchParams.get("recordId")), actor.email));
+    } catch (error) {
+      return sendJson(res, error.statusCode || error.status || 409, { ok: false, error: error.message });
+    }
+  }
+
+  if (url.pathname === "/api/excerpts/handoffs/reconcile" && req.method === "POST") {
+    try {
+      const actor = req.weaverAdmin || await verifyAdministrativeCaller(req);
+      const parsed = JSON.parse(await readRequestBody(req) || "{}");
+      return sendJson(res, 200, await inspectExcerptHandoffReceipt(cleanSheetWhitespace(parsed.recordId), actor.email, true));
+    } catch (error) {
+      return sendJson(res, error.statusCode || error.status || 409, { ok: false, error: error.message });
     }
   }
 

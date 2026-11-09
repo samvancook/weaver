@@ -11,7 +11,7 @@
     })();
   </script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
-  <link rel="stylesheet" href="/style.css?v=20261105-session-recovery" />
+  <link rel="stylesheet" href="/style.css?v=20261109-video-workspace" />
 </head>
 <body>
   <div class="shell">
@@ -25,6 +25,7 @@
       </p>
       <div class="hero-links">
         <button class="hero-pill" id="show-gathering-module" type="button">Excerpt gathering</button>
+        <button class="hero-pill" id="show-video-module" type="button">Videos</button>
         <button class="hero-pill hero-pill--active" id="show-review-module" type="button">Review queue</button>
         <button class="hero-pill" id="show-weird-module" type="button">Extra review</button>
         <button class="hero-pill" id="show-corrections-module" type="button">Needs correction</button>
@@ -410,64 +411,14 @@
         </div>
       </section>
 
-      <section class="panel panel--wide module-panel" id="graphics-module">
-        <div class="panel__header">
-          <h2 id="graphics-module-title">Graphics QC</h2>
-          <span class="badge badge--muted" id="graphics-book-count-badge">0 Books</span>
+      <section class="panel panel--wide module-panel" id="video-module">
+        <div class="panel__header"><h2>Videos</h2></div>
+        <p class="hint">Review videos and excerpts, choose the strongest work, and track delivery to Poetry Please. Video approval and excerpt approval are separate.</p>
+        <div class="toolbar">
+          <button class="button" id="video-open-review" type="button">Review videos</button>
+          <button class="button button--secondary" id="video-open-excerpts" type="button">Review video excerpts</button>
         </div>
-        <div class="book-picker">
-          <label class="field" id="graphics-mode-field">
-            <span>Mode</span>
-            <select id="graphics-mode">
-              <option value="queue" hidden>Needs graphics</option>
-              <option value="qc" selected>Graphics QC</option>
-              <option value="mismatch">Mismatch pairing</option>
-              <option value="handoff">Poetry Please handoff</option>
-              <option value="coverage_needs" hidden>Coverage needs</option>
-              <option value="coverage" hidden>Coverage</option>
-            </select>
-          </label>
-          <label class="field" id="graphics-filter-field">
-            <span>Queue Mode</span>
-            <select id="graphics-filter">
-              <option value="current_titles">Release Catalog</option>
-              <option value="all">All books</option>
-            </select>
-          </label>
-          <label class="field" id="graphics-release-catalog-field">
-            <span>Release Catalog</span>
-            <select id="graphics-release-catalog">
-              <option value="__all__">All release catalogs</option>
-            </select>
-          </label>
-          <label class="field field--grow">
-            <span>Book Title</span>
-            <select id="graphics-book-select">
-              <option value="">Load graphics books first</option>
-            </select>
-          </label>
-          <button id="load-graphics-books" class="button button--secondary">Load Graphics Books</button>
-          <button id="load-graphics-records" class="button">Load Queue Rows</button>
-        </div>
-        <p class="hint" id="graphics-main-hint">
-          This replaces the old quote-image creation browser. `Release Catalog` narrows the graphics work to books with publishing-order release metadata. `Graphics QC` is for graphics that already exist and should be reviewed. `Mismatch pairing` is for QC-rejected graphics that need to be matched to the correct excerpt. `Poetry Please handoff` is for approved graphics and their downstream status.
-        </p>
-        <div id="graphics-ops-panel">
-          <div class="panel__header module-panel__subheader">
-            <h3>EXC Handoff</h3>
-            <span class="badge badge--muted" id="excerpt-handoff-count-badge">0 Records</span>
-          </div>
-          <div class="toolbar">
-            <button id="refresh-excerpt-handoffs" class="button button--secondary" type="button">Refresh EXC Handoffs</button>
-            <button id="retry-failed-excerpt-handoffs" class="button button--secondary" type="button">Retry Failed EXC</button>
-            <input id="retry-excerpt-source-id" type="text" aria-label="EXC source record ID" placeholder="Source record ID" autocomplete="off">
-            <button id="retry-one-excerpt-handoff" class="button button--secondary" type="button">Retry One EXC</button>
-          </div>
-          <div id="excerpt-handoff-summary" class="excerpt-list">
-            <p class="empty-state">Load the EXC handoff summary to monitor queued, failed, and sent excerpt exports.</p>
-          </div>
-        </div>
-        <details class="video-progress-management" id="video-progress-management" open hidden>
+        <details class="video-progress-management" id="video-progress-management" open>
           <summary>Video curation progress and scoreboard</summary>
           <section class="video-progress-dashboard" aria-labelledby="video-progress-title">
             <div class="video-progress-dashboard__header">
@@ -544,6 +495,72 @@
             <div id="video-curation-candidates" aria-live="polite"></div>
           </section>
         </details>
+
+        <section aria-labelledby="video-excerpt-delivery-title">
+          <div class="panel__header"><h3 id="video-excerpt-delivery-title">Excerpt delivery</h3>
+            <button id="video-excerpt-refresh" class="button button--secondary" type="button">Refresh excerpt delivery</button></div>
+          <p class="hint" id="video-excerpt-delivery-status" role="status">Load approved video excerpts to check delivery.</p>
+          <div id="video-excerpt-delivery" class="excerpt-list"></div>
+        </section>
+      </section>
+
+      <section class="panel panel--wide module-panel" id="graphics-module">
+        <div class="panel__header">
+          <h2 id="graphics-module-title">Graphics QC</h2>
+          <span class="badge badge--muted" id="graphics-book-count-badge">0 Books</span>
+        </div>
+        <div class="book-picker">
+          <label class="field" id="graphics-mode-field">
+            <span>Mode</span>
+            <select id="graphics-mode">
+              <option value="queue" hidden>Needs graphics</option>
+              <option value="qc" selected>Graphics QC</option>
+              <option value="mismatch">Mismatch pairing</option>
+              <option value="handoff">Poetry Please handoff</option>
+              <option value="coverage_needs" hidden>Coverage needs</option>
+              <option value="coverage" hidden>Coverage</option>
+            </select>
+          </label>
+          <label class="field" id="graphics-filter-field">
+            <span>Queue Mode</span>
+            <select id="graphics-filter">
+              <option value="current_titles">Release Catalog</option>
+              <option value="all">All books</option>
+            </select>
+          </label>
+          <label class="field" id="graphics-release-catalog-field">
+            <span>Release Catalog</span>
+            <select id="graphics-release-catalog">
+              <option value="__all__">All release catalogs</option>
+            </select>
+          </label>
+          <label class="field field--grow">
+            <span>Book Title</span>
+            <select id="graphics-book-select">
+              <option value="">Load graphics books first</option>
+            </select>
+          </label>
+          <button id="load-graphics-books" class="button button--secondary">Load Graphics Books</button>
+          <button id="load-graphics-records" class="button">Load Queue Rows</button>
+        </div>
+        <p class="hint" id="graphics-main-hint">
+          This replaces the old quote-image creation browser. `Release Catalog` narrows the graphics work to books with publishing-order release metadata. `Graphics QC` is for graphics that already exist and should be reviewed. `Mismatch pairing` is for QC-rejected graphics that need to be matched to the correct excerpt. `Poetry Please handoff` is for approved graphics and their downstream status.
+        </p>
+        <div id="graphics-ops-panel">
+          <div class="panel__header module-panel__subheader">
+            <h3>EXC Handoff</h3>
+            <span class="badge badge--muted" id="excerpt-handoff-count-badge">0 Records</span>
+          </div>
+          <div class="toolbar">
+            <button id="refresh-excerpt-handoffs" class="button button--secondary" type="button">Refresh EXC Handoffs</button>
+            <button id="retry-failed-excerpt-handoffs" class="button button--secondary" type="button">Retry Failed EXC</button>
+            <input id="retry-excerpt-source-id" type="text" aria-label="EXC source record ID" placeholder="Source record ID" autocomplete="off">
+            <button id="retry-one-excerpt-handoff" class="button button--secondary" type="button">Retry One EXC</button>
+          </div>
+          <div id="excerpt-handoff-summary" class="excerpt-list">
+            <p class="empty-state">Load the EXC handoff summary to monitor queued, failed, and sent excerpt exports.</p>
+          </div>
+        </div>
         <details class="folder-import-panel" id="graphics-folder-import-panel">
           <summary class="folder-import-panel__summary">Import Made Graphics From Drive</summary>
           <div class="folder-import-panel__header">
@@ -588,6 +605,6 @@
     </main>
   </div>
 
-  <script src="/app.js?v=20261106-recording-identity"></script>
+  <script src="/app.js?v=20261109-video-workspace"></script>
 </body>
 </html>

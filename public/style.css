@@ -175,6 +175,10 @@ body {
   display: block;
 }
 
+#video-module [hidden] {
+  display: none !important;
+}
+
 .module-panel__subheader {
   margin-top: 22px;
 }
