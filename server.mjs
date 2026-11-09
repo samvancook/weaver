@@ -5849,7 +5849,7 @@ async function getExcerptHandoffRecords({ recordIds = [], statuses = [] } = {}) 
   const approvedById = new Map(
     approvedHandoffs.map(record => [cleanSheetWhitespace(record.recordId), record])
   );
-  const result = await syncWeaverRuntimeDb("get_excerpt_handoffs", { recordIds: approvedHandoffs.map(record => record.recordId) });
+  const result = await syncWeaverRuntimeDb("get_excerpt_handoffs", { recordIds: recordIds.length ? recordIds : approvedHandoffs.map(record => record.recordId) });
   const runtimeRecords = Array.isArray(result?.records) ? result.records : [];
   const runtimeById = new Map(
     runtimeRecords.map(record => [cleanSheetWhitespace(record.recordId), record])
