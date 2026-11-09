@@ -1,6 +1,20 @@
 # Weaver Video Curation Roadmap
 
-Last reviewed: 2026-11-05 (current completion summary; older validation snapshots retain their dates)
+Last reviewed: 2026-11-09 (prepared implementation; live execution limits below)
+
+## Current work — 2026-11-09
+
+Prepared, not yet deployed: a separate Videos entry point (`/?view=videos`), event-scoped rankings and excerpt delivery, explicit next-step messages, review shortcuts and receipt-only reconciliation. Direct event links accept `prioritySetId` without changing the event identity. Existing review, excerpt selection, permissions and final-asset gates remain in force. A sent video with an unverified copy is distinguished from verified durable media; excerpt approval stays separate.
+
+The excerpt status path still used the image-local SQLite ledger even when video gates used Firestore. New hosted writes now require Firestore `excerptHandoffs`; historical SQLite rows remain a read-only baseline, overridden by durable records. This does not reconcile historical delivery. Conditional receipt reconciliation preserves content, approval, source identity and original send time, retaining the previous failure and verified actor in its audit. Sheet compatibility follows durable persistence and cannot erase it on failure.
+
+The receiver check requires an exact successful source acknowledgement in PP's protected import-health ledger and a fresh exact-item read with matching author, title and normalized text. Video excerpts also require the canonical video from Weaver's existing gate. A missing entry in the bounded ledger is unknown, not proof of absence. PP's exact-source lookup is needed for the unconfirmed cohort; do not resend from a stale mapping or text-only match.
+
+Read-only November 9 evidence: production still serves `weaver-00532-zmh`. There are 607 unresolved excerpts, including 103 video-linked rows (87 failed, 16 queued). PP's November 6 mapping identifies Black Religion as an exact source/text receiver match; the November 9 exact-item read confirms its current author/title/text. Current protected-ledger verification and Weaver status reconciliation have not yet executed. No send, retry, approval or status write occurred during preparation.
+
+PAGES remains in its existing four-file review lane with three linked excerpts per file. The current playlist marks written-approval evidence unlinked; the checked handoff and Drive search did not locate the original approval. Sam previously confirmed written author/filmmaker approval; do not substitute a book-release-form requirement. Preserve identities, reviews and separate original/finished versions. Human selection and linking the existing approval evidence stay separate from intake closure.
+
+Execution limit: browser control is unavailable, and no local Cloud SDK is installed. Use the documented disabled Cloud Build trigger with the exact tested full commit, then verify source/image, traffic and health. Local code and merge/build success do not close a live handoff. After release, authenticate Weaver, reconcile Black Religion once and read back the durable record; process a small event cohort only with current receiver evidence.
 
 ## Current status — 2026-11-05
 

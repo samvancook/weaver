@@ -15,7 +15,7 @@ async function statuses(response) {
       excerptPoetryPleaseUpdatedAt: 2, excerptPoetryPleaseNote: 3 } },
     sourceSheetName: 'Source', toA1Column: n => String.fromCharCode(64+n),
     batchUpdateSheetValuesServer: async rows => writes.push(...rows), invalidateQueueSnapshots() {},
-    syncWeaverRuntimeDb: async (_action, payload) => ({ records: payload.handoffs })
+    syncWeaverRuntimeDb: async (_action, payload) => ({ ok: true, records: payload.handoffs })
   });
   const records = [
     { recordId: 'a', payload: { sourceRow: 2 }, poetryPleaseItemId: 'retained-item', handedOffAt: 'retained-time' },
@@ -50,6 +50,22 @@ test('a partial batch marks only the exact acknowledged item sent', async () => 
   assert.equal(result.records[1].errorMessage, 'metadata missing');
 });
 
+test('durable persistence precedes the compatibility sheet and a storage failure stops it', async () => {
+  const calls=[];
+  const context={cleanSheetWhitespace:clean,SHEET_SOURCE_CONFIG:{startRow:2,columnMap:{excerptPoetryPleaseStatus:1,
+    excerptPoetryPleaseUpdatedAt:2,excerptPoetryPleaseNote:3}},sourceSheetName:'Source',toA1Column:n=>String(n),
+    invalidateQueueSnapshots(){},batchUpdateSheetValuesServer:async()=>{calls.push('sheet');throw new Error('offline');},
+    syncWeaverRuntimeDb:async(_action,payload)=>{calls.push('durable');return {ok:true,records:payload.handoffs};}};
+  const save=runInNewContext(`(${fn('updateExcerptHandoffStatuses')})`,context);
+  const r=await save([{recordId:'a',payload:{sourceRow:2}}],{results:[{recordId:'a',ok:true,poetryPleaseItemId:'EXC'}]});
+  assert.deepEqual(calls,['durable','sheet']);assert.equal(r.records[0].handoffStatus,'sent');
+  assert.match(r.compatibilityWarning,/sheet compatibility update failed/);
+  calls.length=0;context.syncWeaverRuntimeDb=async()=>{calls.push('durable');throw new Error('storage unavailable');};
+  const failed=runInNewContext(`(${fn('updateExcerptHandoffStatuses')})`,context);
+  await assert.rejects(failed([{recordId:'a',payload:{sourceRow:2}}],{}),/storage unavailable/);
+  assert.deepEqual(calls,['durable']);
+});
+
 test('an HTTP success without receiver identity is an uncertain excerpt delivery', async () => {
   const send = runInNewContext(`(${fn('handoffApprovedExcerptsToPoetryPlease')})`, {
     buildPoetryPleaseExcerptRecord: r => r, poetryPleaseApiKey: 'test-key',
@@ -74,7 +90,7 @@ test('excerpt collection does not change ranking or candidate eligibility', asyn
     listVideoSetFiles: async () => files, isPriorityVideoFileIncluded: () => true,
     reconcileVideoReviews: (_files, rows) => rows, buildVideoCurationCandidateId: (set,id) => set+id,
     VIDEO_CURATION_SCORE_BY_RATING: { like: 7.5 }, VIDEO_CURATION_CANDIDATE_THRESHOLD: 7,
-    getPriorityVideoReleaseStatus: () => '', resolveVideoReviewSourceFileId: id => id,
+    getPriorityVideoReleaseStatus: () => '', requiresManualVideoIdentityReview: () => false, resolveVideoReviewSourceFileId: id => id,
     getFootageAssetConnections: async () => [], footageProvenanceForFile: () => [],
     poetryPleaseVideoIdForSourceFile: () => '', listKnownVideoAssets: () => [],
     resolvePublishingBookMeta: () => null, buildVideoReviewEvidence: () => []
