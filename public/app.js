@@ -127,6 +127,7 @@ const elements = {
   gatheringVideoPlaylistUrl: document.getElementById("gathering-video-playlist-url"),
   gatheringVideoLoadPlaylist: document.getElementById("gathering-video-load-playlist"),
   gatheringVideoSaveRating: document.getElementById("gathering-video-save-rating"),
+  gatheringVideoSaveStatus: document.getElementById("gathering-video-save-status"),
   gatheringVideoPrevItem: document.getElementById("gathering-video-prev-item"),
   gatheringVideoNextItem: document.getElementById("gathering-video-next-item"),
   gatheringVideoOpenItem: document.getElementById("gathering-video-open-item"),
@@ -199,6 +200,8 @@ let currentGatheringCatalogBook = null;
 let currentGatheringBatchRows = [];
 let pendingBookSubmission = null;
 let currentGatheringVideoPlaylist = null;
+let videoReviewSaving = false;
+let videoPlaylistGeneration = 0;
 let googleSheetsTokenClient = null;
 let googleSheetsAccessToken = "";
 let googleAdminAccessToken = "";
@@ -1455,10 +1458,10 @@ function updateGatheringVideoPlaylistUi() {
     elements.gatheringVideoOpenItem.disabled = !cleanSheetWhitespace(currentItem?.videoUrl);
   }
   if (elements.gatheringVideoSaveRating) {
-    elements.gatheringVideoSaveRating.disabled = !hasPlaylist || !playlist?.prioritySetId;
+    elements.gatheringVideoSaveRating.disabled = videoReviewSaving || !hasPlaylist || !(currentItem?.prioritySetId || playlist?.prioritySetId);
   }
   if (elements.submitGathering && getSelectedGatheringMode() === "video") {
-    elements.submitGathering.disabled = isComplete;
+    elements.submitGathering.disabled = videoReviewSaving || isComplete;
   }
   if (elements.gatheringVideoExcerptGuidance) {
     const count = Math.max(0, Number(currentItem?.weaverExcerptCount) || 0);
@@ -1470,7 +1473,7 @@ function updateGatheringVideoPlaylistUi() {
   }
   if (hasPlaylist || isComplete) {
     const reviewedCount = Math.max(0, Number(playlist.reviewedCount) || 0);
-    const label = isComplete
+    const label = playlist?.requestedVideoReviewed ? 'Your review of this video is already saved.' : playlist?.requestedVideoUnavailable ? 'The requested video is not available in this task. No other video was opened.' : isComplete
       ? `${playlist.eventName || "Playlist"}: all ${playlist.totalCount} videos reviewed.`
       : `${playlist.eventName || "Playlist"}: ${playlist.index + 1} of ${playlist.items.length} remaining · ${reviewedCount} reviewed${currentItem?.author ? ` · ${currentItem.author}` : ""}${currentItem?.poemTitle ? ` · ${currentItem.poemTitle}` : ""}`;
     setGatheringVideoPlaylistStatus(label);
@@ -2037,7 +2040,46 @@ async function refreshVideoCurationReceipt(candidate) {
   }
 }
 
+function setVideoReviewSaveStatus(message) {
+  if(elements.gatheringVideoSaveStatus)elements.gatheringVideoSaveStatus.textContent=message;
+  setStatus(message);
+}
+function setVideoReviewSaving(value) {
+  videoReviewSaving=value;updateGatheringVideoPlaylistUi();
+}
+async function openVideoReviewFromWorkspace() {
+  const event=elements.videoCurationEvent?.value||'';
+  const setId=videoCurationCandidates.find(row=>(row.sourceEvent||row.eventName||row.prioritySetLabel)===event)?.prioritySetId
+    || elements.gatheringVideoPrioritySet?.value||'';
+  setActiveModule('gathering');setGatheringMode('video');
+  if(!setId){setVideoReviewSaveStatus('Choose a video set and click Load videos before rating.');return;}
+  if(elements.gatheringVideoPlaylistUrl)elements.gatheringVideoPlaylistUrl.value='';
+  setVideoReviewSaveStatus('Loading the Weaver event for review...');
+  try{
+    await refreshPriorityVideoSetVisibility();
+    if(!Array.from(elements.gatheringVideoPrioritySet.options).some(option=>option.value===setId))throw new Error('This event is not available for review.');
+    elements.gatheringVideoPrioritySet.value=setId;
+    await loadGatheringVideoPlaylist({auto:true});
+    setVideoReviewSaveStatus(currentGatheringVideoPlaylist?.prioritySetId===setId?'Weaver event loaded. Ratings can be saved without excerpts.':'Video set could not load. Your entry has been kept.');
+  }catch(error){setVideoReviewSaveStatus('Video review could not open: '+error.message);}
+}
+
+async function openRequestedVideoReviewTask() {
+  const setId=contributorShellParams.get('videoSet')||'';
+  if(!/^[a-z0-9][a-z0-9-]{0,99}$/.test(setId))return;
+  setActiveModule('gathering');setGatheringMode('video');
+  try{
+    await refreshPriorityVideoSetVisibility();
+    if(!Array.from(elements.gatheringVideoPrioritySet.options).some(option=>option.value===setId))throw new Error('This video set is not available.');
+    elements.gatheringVideoPrioritySet.value=setId;
+    elements.gatheringVideoPlaylistUrl.value='';
+    await loadGatheringVideoPlaylist({auto:true});
+  }catch(error){setVideoReviewSaveStatus('Video task could not open: '+error.message);}
+}
+
 async function loadGatheringVideoPlaylist({ auto = false } = {}) {
+  const generation=++videoPlaylistGeneration;
+  currentGatheringVideoPlaylist=null;updateGatheringVideoPlaylistUi();
   try {
     const formUrl = elements.gatheringVideoPlaylistUrl?.value.trim() || "";
     const prioritySetId = elements.gatheringVideoPrioritySet?.value.trim() || "";
@@ -2053,6 +2095,7 @@ async function loadGatheringVideoPlaylist({ auto = false } = {}) {
       prioritySetId,
       reviewerEmail
     });
+    if(generation!==videoPlaylistGeneration)return;
     if (reviewerEmail !== (elements.gatheringEmail?.value.trim() || "")) {
       throw new Error("Reviewer email changed; load the playlist again.");
     }
@@ -2071,15 +2114,24 @@ async function loadGatheringVideoPlaylist({ auto = false } = {}) {
       eventName: cleanSheetWhitespace(result.eventName),
       formTitle: cleanSheetWhitespace(result.formTitle),
       items,
+      reviewerEmail,
       totalCount: allItems.length,
       reviewedCount: allItems.length - items.length,
       index: 0,
       completed: Boolean(prioritySetId && reviewerEmail && !items.length)
     };
+    const requestedFile=contributorShellParams.get('video');
+    const requestedIndex=items.findIndex(item=>item.sourceFileId===requestedFile);
+    if(requestedIndex>=0)currentGatheringVideoPlaylist.index=requestedIndex;
+    else if(requestedFile){
+      currentGatheringVideoPlaylist.requestedVideoReviewed=allItems.some(item=>item.sourceFileId===requestedFile&&item.review?.rating);
+      currentGatheringVideoPlaylist.requestedVideoUnavailable=!currentGatheringVideoPlaylist.requestedVideoReviewed;
+      currentGatheringVideoPlaylist.items=[];currentGatheringVideoPlaylist.completed=true;
+    }
     if (currentGatheringVideoPlaylist.completed) {
       clearGatheringVideoPlaylistItemFields();
     } else {
-      applyGatheringVideoPlaylistItem(items[0]);
+      applyGatheringVideoPlaylistItem(items[currentGatheringVideoPlaylist.index]);
     }
     if (getSelectedGatheringMode() !== "video") {
       setGatheringMode("video");
@@ -2087,10 +2139,11 @@ async function loadGatheringVideoPlaylist({ auto = false } = {}) {
       refreshPriorityVideoSetVisibility().catch(() => {});
     }
     updateGatheringVideoPlaylistUi();
-    setStatus(currentGatheringVideoPlaylist.completed
+    setStatus(currentGatheringVideoPlaylist.requestedVideoReviewed?'Your review of this video is already saved.':currentGatheringVideoPlaylist.requestedVideoUnavailable?'The requested video is not available in this task. No other video was opened.':currentGatheringVideoPlaylist.completed
       ? `All videos in "${currentGatheringVideoPlaylist.eventName || currentGatheringVideoPlaylist.formTitle}" are reviewed for this email.`
       : `Loaded ${items.length} remaining playlist items from "${currentGatheringVideoPlaylist.eventName || currentGatheringVideoPlaylist.formTitle || "the curation form"}".`);
   } catch (error) {
+    if(generation!==videoPlaylistGeneration)return;
     currentGatheringVideoPlaylist = null;
     updateGatheringVideoPlaylistUi();
     setStatus(`Video playlist load failed: ${error.message}`);
@@ -2106,16 +2159,17 @@ function buildGatheringVideoReviewPayload({ excerptRecordId = "" } = {}) {
     elements.gatheringEmail?.focus();
     throw new Error("Check the reviewer email for a typo before saving.");
   }
-  if (!item?.sourceFileId || !currentGatheringVideoPlaylist?.prioritySetId) {
-    throw new Error("Durable ratings are available for the four priority video sets.");
+  if (!item?.sourceFileId || !(item.prioritySetId || currentGatheringVideoPlaylist?.prioritySetId)) {
+    throw new Error("Load this video from a Weaver video set before saving its rating. Your entry has been kept.");
   }
+  if(currentGatheringVideoPlaylist.reviewerEmail&&currentGatheringVideoPlaylist.reviewerEmail.toLowerCase()!==email.toLowerCase())throw new Error('Reload videos for this reviewer email before saving. Your entry has been kept.');
   if (!rating) throw new Error("Choose a curation rating before continuing.");
   return {
     mode: "video",
     email: email.toLowerCase(),
     rating,
     notes: elements.gatheringVideoScoreNotes?.value.trim() || "",
-    prioritySetId: currentGatheringVideoPlaylist.prioritySetId,
+    prioritySetId: item.prioritySetId || currentGatheringVideoPlaylist.prioritySetId,
     sourceFolderId: item.sourceFolderId,
     sourceFileId: item.sourceFileId,
     sourceFileName: item.sourceFileName,
@@ -2131,22 +2185,32 @@ function buildGatheringVideoReviewPayload({ excerptRecordId = "" } = {}) {
 }
 
 async function persistGatheringVideoReview(options = {}) {
-  const payload = buildGatheringVideoReviewPayload(options);
-  const result = await postReviewApi("/api/intake/video-review", payload);
-  const item = getCurrentGatheringVideoPlaylistItem();
-  if (item) item.review = result.record || { rating: payload.rating, notes: payload.notes };
+  const payload=buildGatheringVideoReviewPayload(options),item=getCurrentGatheringVideoPlaylistItem(),started=Date.now();
+  let result;
+  try{result=await postReviewApi('/api/intake/video-review',payload);}
+  catch(error){
+    if(!error.saveOutcomeUnknown)throw error;
+    // Never replay a timed-out write. Read back this exact reviewer and asset.
+    try{
+      const data=await requestReviewApi('/api/intake/video-playlist',{prioritySetId:payload.prioritySetId,reviewerEmail:payload.email},{timeoutMs:8000});
+      const saved=data.items?.find(row=>row.sourceFileId===payload.sourceFileId)?.review;
+      if(!saved||saved.rating!==payload.rating||String(saved.notes||'')!==String(payload.notes||'')||Date.parse(saved.updatedAt)<started-5000||!Number.isFinite(Date.parse(saved.updatedAt)))throw error;
+      result={ok:true,record:saved,confirmedByReadback:true};
+    }catch(_readError){throw error;}
+  }
+  if(item)item.review=result.record||{rating:payload.rating,notes:payload.notes};
   return result;
 }
-
 async function saveGatheringVideoRatingAndNext() {
-  try {
-    setStatus("Saving video rating...");
-    const result = await persistGatheringVideoReview();
-    resetGatheringAfterSubmit("video");
-    setStatus("Saved video rating.", result);
-  } catch (error) {
-    setStatus(`Video rating save failed: ${error.message}`);
-  }
+  if(videoReviewSaving)return;
+  const playlist=currentGatheringVideoPlaylist;
+  setVideoReviewSaving(true);setVideoReviewSaveStatus('Saving video rating...');
+  try{
+    const result=await persistGatheringVideoReview();
+    if(currentGatheringVideoPlaylist===playlist)resetGatheringAfterSubmit('video');
+    setVideoReviewSaveStatus(result.confirmedByReadback?'Rating saved and confirmed.':'Video rating saved.');
+  }catch(error){setVideoReviewSaveStatus(error.saveOutcomeUnknown?error.message:'Video rating was not saved: '+error.message);}
+  finally{setVideoReviewSaving(false);}
 }
 
 function navigateGatheringVideoPlaylist(direction) {
@@ -2203,7 +2267,7 @@ function setActiveModule(moduleName) {
   elements.showGraphicsOps?.classList.toggle("hero-ops-button--active", currentModule === "graphics" && currentGraphicsView === "ops");
 }
 
-async function requestReviewApi(path, params = {}) {
+async function requestReviewApi(path, params = {}, { timeoutMs = 0 } = {}) {
   const url = new URL(path, window.location.origin);
   Object.entries(params).forEach(([key, value]) => {
     if (value !== undefined && value !== null && value !== "") {
@@ -2213,9 +2277,8 @@ async function requestReviewApi(path, params = {}) {
 
   const response = await fetch(url, {
     cache: "no-store",
-    headers: {
-      Accept: "application/json"
-    }
+    headers: { Accept: "application/json" },
+    ...(timeoutMs ? {signal:AbortSignal.timeout(timeoutMs)} : {})
   });
 
   let data;
@@ -2233,27 +2296,21 @@ async function requestReviewApi(path, params = {}) {
 }
 
 async function postReviewApi(path, payload) {
-  const response = await fetch(path, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json"
-    },
-    body: JSON.stringify(payload || {})
-  });
-
-  let data;
-  try {
-    data = await response.json();
-  } catch (_error) {
-    throw new Error(`${path} returned unreadable JSON.`);
-  }
-
-  if (!response.ok || !data.ok) {
-    throw new Error(data.error || `${path} failed.`);
-  }
-
-  return data;
+  const controller=new AbortController(),videoRequest=path==='/api/intake/video-review'||payload?.mode==='video';
+  const timer=videoRequest?setTimeout(()=>controller.abort(),30000):null;
+  try{
+    const response=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json',Accept:'application/json'},body:JSON.stringify(payload||{}),...(videoRequest?{signal:controller.signal}:{})});
+    let data;
+    try{data=await response.json();}catch(error){if(controller.signal.aborted)throw error;throw new Error(path+' returned unreadable JSON.');}
+    if(!response.ok||!data.ok)throw new Error(data.error||path+' failed.');
+    return data;
+  }catch(error){
+    if(videoRequest&&(controller.signal.aborted||error.name==='AbortError'||error.name==='TypeError')){
+      const uncertain=new Error('Save confirmation timed out. Your entry is still here. Check your saved review before trying again; no automatic retry was sent.');
+      uncertain.saveOutcomeUnknown=true;throw uncertain;
+    }
+    throw error;
+  }finally{clearTimeout(timer);}
 }
 
 function populateDatalist(element, values) {
@@ -3091,7 +3148,7 @@ function buildGatheringPayload() {
       curationRating,
       curationNotes,
       sourceVideoUrl,
-      prioritySetId: currentGatheringVideoPlaylist?.prioritySetId || "",
+      prioritySetId: currentVideoItem?.prioritySetId || currentGatheringVideoPlaylist?.prioritySetId || "",
       sourceFolderId: getCurrentGatheringVideoPlaylistItem()?.sourceFolderId || "",
       sourceFileId: getCurrentGatheringVideoPlaylistItem()?.sourceFileId || "",
       sourceFileName: currentVideoItem?.sourceFileName || "",
@@ -3118,6 +3175,10 @@ function buildGatheringPayload() {
 }
 
 async function submitGathering() {
+  const videoMode=getSelectedGatheringMode()==='video';
+  let ratingSaved=false,savedExcerptCount=0;
+  if(videoMode&&videoReviewSaving)return;
+  if(videoMode)setVideoReviewSaving(true);
   try {
     const payload = buildGatheringPayload();
     if (payload.mode === "book") {
@@ -3134,18 +3195,18 @@ async function submitGathering() {
       }
     }
     if (payload.mode === "video" && payload.prioritySetId) {
-      setStatus("Saving video rating...");
-      await persistGatheringVideoReview();
+      setVideoReviewSaveStatus("Saving video rating...");
+      await persistGatheringVideoReview();ratingSaved=true;
     }
     if (payload.mode === "video") {
       const quotes = Array.isArray(payload.quotes) ? payload.quotes : [];
       if (!quotes.length) {
         if (!payload.prioritySetId) {
-          throw new Error("Add at least one excerpt before submitting this legacy video intake.");
+          throw new Error("This is a legacy form playlist, not a loaded Weaver video set. Choose the video set and click Load videos to save a rating without excerpts. Your entry has been kept.");
         }
         resetGatheringAfterSubmit("video");
         setGatheringEmailWarning("");
-        setStatus("Saved video rating with no excerpts.");
+        setVideoReviewSaveStatus("Video rating saved. No excerpts were added.");
         return;
       }
 
@@ -3153,7 +3214,7 @@ async function submitGathering() {
       const results = [];
       setStatus(`Submitting ${quotes.length} video excerpt${quotes.length === 1 ? "" : "s"}...`);
       for (const quote of quotes) {
-        results.push(await postReviewApi("/api/intake/submit", { ...videoPayload, quote }));
+        results.push(await postReviewApi("/api/intake/submit", { ...videoPayload, quote }));savedExcerptCount++;
       }
       if (payload.prioritySetId) {
         const item = getCurrentGatheringVideoPlaylistItem();
@@ -3169,7 +3230,7 @@ async function submitGathering() {
       }
       resetGatheringAfterSubmit("video");
       setGatheringEmailWarning("");
-      setStatus(`Saved video rating and ${results.length} excerpt${results.length === 1 ? "" : "s"}.`, { results });
+      setVideoReviewSaveStatus(payload.prioritySetId?`Saved video rating and ${results.length} excerpt${results.length===1?'':'s'}.`:`Saved ${results.length} legacy video excerpt${results.length===1?'':'s'}. No Weaver rating was recorded.`);
       return;
     }
 
@@ -3182,8 +3243,9 @@ async function submitGathering() {
       loadBooks();
     }
   } catch (error) {
-    setStatus(`Excerpt gathering submit failed: ${error.message}`);
-  }
+    if(videoMode)setVideoReviewSaveStatus(ratingSaved?'Rating saved. '+(savedExcerptCount?savedExcerptCount+' excerpt(s) confirmed. ':'')+'Check the remaining excerpt save before retrying: '+error.message:error.saveOutcomeUnknown?error.message:'Video submission was not saved: '+error.message);
+    else setStatus(`Excerpt gathering submit failed: ${error.message}`);
+  } finally { if(videoMode)setVideoReviewSaving(false); }
 }
 
 function openGatheringCatalogPoem() {
@@ -7321,15 +7383,7 @@ elements.gatheringBatchBold?.addEventListener("click", () => wrapTextareaSelecti
 elements.gatheringBatchItalicize?.addEventListener("click", () => wrapTextareaSelectionWithItalics(elements.gatheringBatchSource));
 elements.showVideoModule?.addEventListener("click", openVideoWorkspace);
 elements.videoExcerptRefresh?.addEventListener("click", loadVideoExcerptDelivery);
-elements.videoOpenReview?.addEventListener("click", async () => {
-  const event = elements.videoCurationEvent?.value || "";
-  const setId = videoCurationCandidates.find(row => (row.sourceEvent || row.eventName || row.prioritySetLabel) === event)?.prioritySetId || "";
-  setActiveModule("gathering"); setGatheringMode("video");
-  try {
-    if (!intakeOptionsLoaded) await loadGatheringOptions();
-    if (setId && elements.gatheringVideoPrioritySet) elements.gatheringVideoPrioritySet.value = setId;
-  } catch (error) { setStatus(`Video review options unavailable: ${error.message}`); }
-});
+elements.videoOpenReview?.addEventListener('click',openVideoReviewFromWorkspace);
 elements.videoOpenExcerpts?.addEventListener("click", () => {
   setActiveModule("review");
   if (elements.reviewFilter) elements.reviewFilter.value = "videos";
@@ -7418,6 +7472,7 @@ elements.gatheringEmail?.addEventListener("change", () => {
   refreshPriorityVideoSetVisibility().catch(error => {
     setStatus(`Priority video set status could not be loaded: ${error.message}`);
   });
+  if(elements.gatheringVideoPrioritySet?.value)loadGatheringVideoPlaylist({auto:true});
 });
 elements.gatheringMode?.addEventListener("change", () => {
   updateGatheringModeUi();
@@ -7469,6 +7524,7 @@ elements.gatheringVideoPrioritySet?.addEventListener("change", () => {
   if (elements.gatheringVideoPrioritySet?.value && elements.gatheringVideoPlaylistUrl) {
     elements.gatheringVideoPlaylistUrl.value = "";
   }
+  loadGatheringVideoPlaylist({auto:true});
 });
 elements.gatheringVideoSaveRating?.addEventListener("click", saveGatheringVideoRatingAndNext);
 elements.gatheringVideoPrevItem?.addEventListener("click", () => navigateGatheringVideoPlaylist(-1));
@@ -7595,7 +7651,9 @@ async function initializeApp() {
     loadBooks();
   }
   if (videoWorkspaceRequested) openVideoWorkspace();
-  if (getRequestedVideoPlaylistUrl()) {
+  if(contributorShellParams.get('videoSet')){
+    await openRequestedVideoReviewTask();
+  } else if (getRequestedVideoPlaylistUrl()) {
     setGatheringMode("video");
     loadGatheringVideoPlaylist({ auto: true });
   }

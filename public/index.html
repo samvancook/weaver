@@ -134,11 +134,12 @@
               <input id="gathering-video-playlist-url" type="url" placeholder="Paste a Google Form or playlist URL to prefill the event queue" />
             </label>
             <div class="gathering-inline-tools field--full">
-              <button id="gathering-video-load-playlist" class="button button--secondary" type="button">Load Playlist</button>
+              <button id="gathering-video-load-playlist" class="button button--secondary" type="button">Load videos</button>
               <button id="gathering-video-prev-item" class="button button--secondary" type="button" disabled>Previous Item</button>
               <button id="gathering-video-next-item" class="button button--secondary" type="button" disabled>Next Item</button>
               <button id="gathering-video-open-item" class="button button--secondary" type="button" disabled>Open Video</button>
               <button id="gathering-video-save-rating" class="button" type="button" disabled>Save Rating &amp; Next</button>
+              <p id="gathering-video-save-status" class="hint" role="status" aria-live="polite"></p>
               <p class="hint gathering-source-hint" id="gathering-video-playlist-status">Load a curation form to prefill the event name, author, and poem title, then advance through the playlist as you submit.</p>
             </div>
             <p class="hint field--full" id="gathering-video-excerpt-guidance" aria-live="polite" hidden></p>
@@ -605,6 +606,6 @@
     </main>
   </div>
 
-  <script src="/app.js?v=20261109-video-workspace"></script>
+  <script src="/app.js?v=20261109-video-submit-fix2"></script>
 </body>
 </html>
