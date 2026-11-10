@@ -8,7 +8,7 @@ import { excerptFingerprint, findExcerptAcknowledgement, verifyExcerptReadback }
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { prepareVideoIdentityReview, assertVideoRetryPreflight, syncVideoReviewContext, buildVideoReviewEvidence, summarizeVideoReceiverState, assertVideoClaimMatchesRecord, assertVideoImportPreflight, assertVideoImportReadback, buildReviewerProgressExport, buildWeaverVideoImport, classifyDriveFolderPath, driveFileId, listKnownVideoAssets, parsePoetryPleaseVideoImport, parsePoetryPleaseVideoReceipt, poetryPleaseVideoIdForSourceFile, reconcileVideoReviews, requiresManualVideoIdentityReview, resolveCurrentVideoFileId, resolveVideoReviewSourceFileId } from "./video_curation_handoff.mjs";
+import { videoReviewProgress, videoLibraryStatus, prepareVideoIdentityReview, assertVideoRetryPreflight, syncVideoReviewContext, buildVideoReviewEvidence, summarizeVideoReceiverState, assertVideoClaimMatchesRecord, assertVideoImportPreflight, assertVideoImportReadback, buildReviewerProgressExport, buildWeaverVideoImport, classifyDriveFolderPath, driveFileId, listKnownVideoAssets, parsePoetryPleaseVideoImport, parsePoetryPleaseVideoReceipt, poetryPleaseVideoIdForSourceFile, reconcileVideoReviews, requiresManualVideoIdentityReview, resolveCurrentVideoFileId, resolveVideoReviewSourceFileId } from "./video_curation_handoff.mjs";
 import { verifyProgressExportCaller } from "./weaver_progress_auth.mjs";
 import { findApprovedTextExcerptMatch } from "./video_excerpt_folding.mjs";
 import { poemKeyForExcerptText, POEM_KEY_SEED_SOURCE } from "./poem_key_seed.mjs";
@@ -2361,119 +2361,88 @@ async function getFootageAssetConnections(prioritySetId) {
     .flatMap(r => (r.accepted || []).map(t => ({...t,inventoryEventName:r.eventName,inventoryEventId:r.eventId})));
 }
 
+function footageProvenanceForFile(connections, fileId) {
+  return connections.filter(c => c.sourceFileId === fileId).map(c => ({
+    inventoryEventId:c.inventoryEventId,inventoryEventName:c.inventoryEventName,
+    sourceSpreadsheetId:c.sourceSpreadsheetId,sourceRow:c.sourceRow,
+    familyId:c.familyId,originalMediaFileId:c.workflow?.originalMediaFileId || null,
+    finishedVideoFileId:c.workflow?.finishedVideoFileId || null,curationFileId:fileId,
+  }));
+}
+
+async function loadVideoReviewLibrary(reviewerEmail = "", prioritySetId = "") {
+  const selected = cleanSheetWhitespace(prioritySetId);
+  if (selected && !PRIORITY_VIDEO_SETS.has(selected)) throw new Error("Unknown priority video set.");
+  const sets = selected ? [PRIORITY_VIDEO_SETS.get(selected)] : Array.from(PRIORITY_VIDEO_SETS.values());
+  const email = cleanSheetWhitespace(reviewerEmail).toLowerCase();
+  const [reviewResult, gateResult] = await Promise.all([
+    syncWeaverRuntimeDb("get_curation_reviews", {}),
+    syncWeaverRuntimeDb("get_video_curation_gates", {})
+  ]);
+  if (!reviewResult.ok || !gateResult.ok) throw new Error("Current video reviews or handoff statuses could not be read.");
+  const gates = new Map((gateResult.records || []).map(g => [g.candidateId, g]));
+  const results = await Promise.all(sets.map(async set => {
+    const [sourceMedia, folderFiles, connections] = await Promise.all([
+      getVideoSetMediaType(set), listVideoSetFiles(set), getFootageAssetConnections(set.id)
+    ]);
+    const files = folderFiles.filter(file => isPriorityVideoFileIncluded(file, set));
+    const reviews = reconcileVideoReviews(files, (reviewResult.records || []).filter(r => r.prioritySetId === set.id));
+    return files.map(file => {
+      const fileReviews = reviews.filter(r => r.sourceFileId === file.id);
+      const own = email ? fileReviews.find(r => cleanSheetWhitespace(r.reviewerEmail).toLowerCase() === email) : null;
+      const progress = videoReviewProgress(fileReviews);
+      const videoReleaseStatus = getPriorityVideoReleaseStatus(file.name, set, file.id);
+      const currentGate = gates.get(buildVideoCurationCandidateId(set.id, file.id));
+      const historicalIds=[...new Set(fileReviews.flatMap(r=>r.originalSourceFileIds||[]).filter(id=>id!==file.id))];
+      const reviewRoot=resolveVideoReviewSourceFileId(file.id,historicalIds,gateResult.records,{...(currentGate||{}),prioritySetId:set.id});
+      const canonicalId=reviewRoot?poetryPleaseVideoIdForSourceFile(reviewRoot,gateResult.records):'';
+      const acceptedPrior=canonicalId?(gateResult.records||[]).find(g=>g.prioritySetId===set.id
+        && (g.sourceReviewFileId||g.sourceFileId)===reviewRoot
+        && g.poetryPleaseHandoff?.status==='sent_to_poetry_please'
+        && g.poetryPleaseHandoff?.sourceRecordId==='weaver:video:'+reviewRoot
+        && g.poetryPleaseHandoff?.canonicalVideoId===canonicalId):null;
+      const gate=currentGate?.poetryPleaseHandoff?.status==='sent_to_poetry_please'?currentGate:acceptedPrior||currentGate;
+      const identityConfirmed=!requiresManualVideoIdentityReview({sourceMediaType:sourceMedia.sourceMediaType,sourceFileId:file.id,sourceReviewFileId:reviewRoot},file.webViewLink||`https://drive.google.com/file/d/${file.id}/view`,gate||{});
+      const status = videoLibraryStatus(progress, sourceMedia.sourceMediaType, videoReleaseStatus, gate,identityConfirmed);
+      return {
+        ...(set.inventoryTitles?.[file.id] ? {author:set.inventoryTitles[file.id].performer,poemTitle:set.inventoryTitles[file.id].title} : parsePriorityVideoFileName(file.name)),
+        bookTitle:cleanSheetWhitespace(set.bookTitle),releaseCatalog:cleanSheetWhitespace(set.releaseCatalog),
+        videoUrl:cleanSheetWhitespace(file.webViewLink)||`https://drive.google.com/file/d/${encodeURIComponent(file.id)}/view`,
+        eventName:set.eventName||set.label,prioritySetId:set.id,sourceFolderId:set.folderId,...sourceMedia,
+        sourceFileId:file.id,sourceFileName:file.name,
+        relatedVideoAssets:connections.filter(c=>c.sourceFileId===file.id).flatMap(c=>c.assets||[]),
+        footageConnections:footageProvenanceForFile(connections,file.id),
+        inventoryEventNames:[...new Set(connections.filter(c=>c.sourceFileId===file.id).map(c=>c.inventoryEventName))],
+        canonicalTextLinkStatus:"not_linked",weaverExcerptCount:progress.excerptCount,
+        videoReleaseStatus,publicationRestricted:Boolean(videoReleaseStatus),reviewProgress:progress,
+        libraryStatus:status,needsPriorityReview:!progress.reviewComplete && status !== 'sent',
+        review:own ? {rating:own.rating,notes:own.notes||'',status:own.status,updatedAt:own.updatedAt,excerptRecordIds:own.excerptRecordIds||[]} : null
+      };
+    });
+  }));
+  const items = results.flat();
+  return {ok:true,prioritySetId:selected,items,count:items.length,
+    sets:sets.map((set,i)=>({id:set.id,label:set.label,totalCount:results[i].length,
+      remainingCount:results[i].filter(item=>item.needsPriorityReview&&!item.review?.rating).length,
+      reviewedCount:results[i].filter(item=>item.review?.rating).length}))};
+}
+
 async function loadPriorityVideoSet(prioritySetId, reviewerEmail = "") {
   const set = PRIORITY_VIDEO_SETS.get(cleanSheetWhitespace(prioritySetId));
   if (!set) throw new Error("Unknown priority video set.");
-  const sourceMedia = await getVideoSetMediaType(set);
-  const files = (await listVideoSetFiles(set)).filter(file => isPriorityVideoFileIncluded(file, set));
-  const connections = await getFootageAssetConnections(set.id);
-  const allReviewResult = await syncWeaverRuntimeDb("get_curation_reviews", { prioritySetId: set.id });
-  const allReviews = reconcileVideoReviews(
-    files,
-    Array.isArray(allReviewResult?.records) ? allReviewResult.records : []
-  );
-  const excerptIdsByFileId = new Map();
-  for (const review of allReviews) {
-    const fileId = cleanSheetWhitespace(review.sourceFileId);
-    if (!fileId) continue;
-    const excerptIds = excerptIdsByFileId.get(fileId) || new Set();
-    for (const value of Array.isArray(review.excerptRecordIds) ? review.excerptRecordIds : []) {
-      const excerptRecordId = cleanSheetWhitespace(value);
-      if (excerptRecordId) excerptIds.add(excerptRecordId);
-    }
-    excerptIdsByFileId.set(fileId, excerptIds);
-  }
-  let reviewsByFileId = new Map();
-  const normalizedReviewerEmail = cleanSheetWhitespace(reviewerEmail).toLowerCase();
-  if (normalizedReviewerEmail) {
-    reviewsByFileId = new Map(
-      allReviews.filter(record => cleanSheetWhitespace(record.reviewerEmail).toLowerCase() === normalizedReviewerEmail)
-        .map(record => [record.sourceFileId, {
-          rating: cleanSheetWhitespace(record.rating),
-          notes: String(record.notes || ""),
-          status: cleanSheetWhitespace(record.status),
-          updatedAt: cleanSheetWhitespace(record.updatedAt),
-          excerptRecordIds: Array.isArray(record.excerptRecordIds) ? record.excerptRecordIds : []
-        }])
-        .filter(([fileId]) => fileId)
-    );
-  }
-  const items = files.map(file => {
-    const videoReleaseStatus = getPriorityVideoReleaseStatus(file.name, set, file.id);
-    return {
-      ...(set.inventoryTitles?.[file.id] ? {author: set.inventoryTitles[file.id].performer, poemTitle: set.inventoryTitles[file.id].title} : parsePriorityVideoFileName(file.name)),
-      bookTitle: cleanSheetWhitespace(set.bookTitle),
-      releaseCatalog: cleanSheetWhitespace(set.releaseCatalog),
-      videoUrl: cleanSheetWhitespace(file.webViewLink) || `https://drive.google.com/file/d/${encodeURIComponent(file.id)}/view`,
-      eventName: set.eventName || set.label,
-      prioritySetId: set.id,
-      sourceFolderId: set.folderId,
-      ...sourceMedia,
-      sourceFileId: cleanSheetWhitespace(file.id),
-      sourceFileName: cleanSheetWhitespace(file.name),
-      relatedVideoAssets: connections.filter(c => c.sourceFileId === file.id).flatMap(c => c.assets || []),
-      inventoryEventNames: [...new Set(connections.filter(c => c.sourceFileId === file.id).map(c => c.inventoryEventName))],
-      canonicalTextLinkStatus: "not_linked",
-      weaverExcerptCount: (excerptIdsByFileId.get(cleanSheetWhitespace(file.id)) || new Set()).size,
-      videoReleaseStatus,
-      publicationRestricted: Boolean(videoReleaseStatus),
-      review: reviewsByFileId.get(cleanSheetWhitespace(file.id)) || null
-    };
-  });
-  return {
-    ok: true,
-    prioritySetId: set.id,
-    formTitle: set.label,
-    eventName: set.eventName || set.label,
-    sourceFolderId: set.folderId,
-    count: items.length,
-    reviewedCount: items.filter(item => item.review?.rating).length,
-    items
-  };
+  const result = await loadVideoReviewLibrary(reviewerEmail, set.id);
+  return {...result,formTitle:set.label,eventName:set.eventName||set.label,sourceFolderId:set.folderId,
+    reviewedCount:result.items.filter(item=>item.review?.rating).length};
 }
 
 async function getPriorityVideoSetAvailability(reviewerEmail = "") {
-  const email = cleanSheetWhitespace(reviewerEmail).toLowerCase();
-  const sets = Array.from(PRIORITY_VIDEO_SETS.values());
-  if (!email) {
-    return { ok: true, sets: sets.map(set => ({ id: set.id, label: set.label, completed: false, lane: "priority_video" })) };
-  }
-  const [reviewResult, fileResults] = await Promise.all([
-    syncWeaverRuntimeDb("get_curation_reviews", {}),
-    Promise.all(sets.map(set => listVideoSetFiles(set)))
-  ]);
-  const reviews = Array.isArray(reviewResult?.records) ? reviewResult.records : [];
-  return {
-    ok: true,
-    sets: sets.map((set, index) => {
-      const files = fileResults[index].filter(file => isPriorityVideoFileIncluded(file, set));
-      const setReviews = reconcileVideoReviews(files, reviews.filter(record => (
-        cleanSheetWhitespace(record.prioritySetId) === set.id && cleanSheetWhitespace(record.rating)
-      )));
-      const reviewedFileIds = new Set(setReviews.filter(record => (
-        cleanSheetWhitespace(record.reviewerEmail).toLowerCase() === email
-      )).map(record => cleanSheetWhitespace(record.sourceFileId)));
-      const readyVideos = files.filter(file => {
-        const fileReviews = setReviews.filter(record => cleanSheetWhitespace(record.sourceFileId) === file.id);
-        const reviewerCount = new Set(fileReviews.map(record => (
-          cleanSheetWhitespace(record.reviewerEmail).toLowerCase()
-        )).filter(Boolean)).size;
-        const excerptCount = new Set(fileReviews.flatMap(record => (
-          Array.isArray(record.excerptRecordIds) ? record.excerptRecordIds : []
-        )).map(cleanSheetWhitespace).filter(Boolean)).size;
-        return reviewerCount >= 5 && excerptCount >= 3;
-      }).length;
-      return {
-        id: set.id,
-        label: set.label,
-        totalCount: files.length,
-        reviewedCount: reviewedFileIds.size,
-        readyVideos,
-        lane: files.length > 0 && readyVideos === files.length ? "video" : "priority_video",
-        completed: Boolean(email) && files.length > 0 && reviewedFileIds.size === files.length
-      };
-    })
-  };
+  const result = await loadVideoReviewLibrary(reviewerEmail);
+  return {ok:true,sets:result.sets.map(set=>{
+    const items=result.items.filter(item=>item.prioritySetId===set.id);
+    const readyVideos=items.filter(item=>item.reviewProgress.reviewComplete).length;
+    return {...set,readyVideos,lane:readyVideos===items.length&&items.length?'video':'priority_video',
+      completed:Boolean(cleanSheetWhitespace(reviewerEmail))&&items.length>0&&items.every(item=>item.review?.rating)};
+  })};
 }
 
 async function loadPriorityVideoProgress() {
@@ -8768,6 +8737,11 @@ const server = http.createServer(async (req, res) => {
     } catch (error) {
       return sendJson(res, 500, { ok: false, error: error.message });
     }
+  }
+
+  if (url.pathname === "/api/intake/video-library" && req.method === "GET") {
+    try { return sendJson(res,200,await loadVideoReviewLibrary(url.searchParams.get("reviewerEmail")||"",url.searchParams.get("prioritySetId")||"")); }
+    catch(error){ return sendJson(res,500,{ok:false,error:error.message}); }
   }
 
   if (url.pathname === "/api/intake/video-playlist" && req.method === "GET") {

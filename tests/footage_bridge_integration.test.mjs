@@ -4,6 +4,7 @@ import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import {INVENTORY_ID,prepareEventIntake,footageEventAsSet,currentEventReceipt,validateEventManifest,fileId as footageFileId} from '../footage_event_intake.mjs';
 import {resolveEventTarget} from '../footage_event_links.mjs';
+import {videoReviewProgress,videoLibraryStatus,resolveVideoReviewSourceFileId,poetryPleaseVideoIdForSourceFile,requiresManualVideoIdentityReview} from '../video_curation_handoff.mjs';
 const server=readFileSync(new URL('../server.mjs',import.meta.url),'utf8');
 const getFunction=name=>server.match(new RegExp(`async function ${name}\\([\\s\\S]*?\\n}\\n`))[0];
 const id='video_individual_123456';
@@ -11,19 +12,19 @@ const manifest={sourceSpreadsheetId:INVENTORY_ID,eventName:'Pilot',omFolderId:'e
  titles:[{sourceRow:6000,performer:'Inventory poet',title:'Inventory title',rights:'Have video release',contentLink:`https://drive.google.com/file/d/${id}/view`}]};
 test('receiver saves before acknowledgement, reloads queue after restart, and curation uses inventory titles',async()=>{
  const ledger=new Map(),sets=new Map();let reply;
- const context={prepareEventIntake,footageEventAsSet,currentEventReceipt,validateEventManifest,footageFileId,resolveEventTarget,refreshFootageEventSets:async()=>{},verifyFootageReceiptQueue:async()=>true,listVideoSetFiles:async()=>[],getFootageAssetConnections:async()=>[],PRIORITY_VIDEO_SETS:sets,
+ const context={footageProvenanceForFile:runInNewContext(server.match(/function footageProvenanceForFile\([\s\S]*?^}/m)[0]+';footageProvenanceForFile'),prepareEventIntake,footageEventAsSet,currentEventReceipt,validateEventManifest,footageFileId,resolveEventTarget,refreshFootageEventSets:async()=>{},verifyFootageReceiptQueue:async()=>true,listVideoSetFiles:async()=>[],getFootageAssetConnections:async()=>[],PRIORITY_VIDEO_SETS:sets,
   process:{env:{WEAVER_FOOTAGE_BRIDGE_ENABLED:'true'}},decodeURIComponent,
   verifyFootageHelperCaller:async()=>({email:'owner@example.com'}),
   getDriveFileMetadata:async fileId=>({id:fileId,mimeType:'video/mp4',name:'Clip 1.mp4'}),
   readRequestBody:async()=>JSON.stringify(manifest),
   sendJson:(_res,status,body)=>{reply={status,body};},
   cleanSheetWhitespace:x=>String(x||'').trim(),isPriorityVideoFileIncluded:()=>true,
-  getPriorityVideoReleaseStatus:()=> 'inventory_curation_only',reconcileVideoReviews:()=>[],
+  getPriorityVideoReleaseStatus:()=> 'inventory_curation_only',reconcileVideoReviews:()=>[],videoReviewProgress,videoLibraryStatus,resolveVideoReviewSourceFileId,poetryPleaseVideoIdForSourceFile,requiresManualVideoIdentityReview,buildVideoCurationCandidateId:(set,id)=>set+':'+id,
   parsePriorityVideoFileName:()=>{throw Error('Must not infer imported titles from filename');},
   syncWeaverRuntimeDb:async(action,payload)=>{
    if(action==='save_footage_event'){ledger.set(payload.record.eventId,payload.record);return {ok:true,record:payload.record};}
    if(action==='get_footage_events')return {ok:true,records:payload.eventId?[ledger.get(payload.eventId)].filter(Boolean):[...ledger.values()]};
-   if(action==='get_curation_reviews')return {ok:true,records:[]};
+   if(action==='get_curation_reviews'||action==='get_video_curation_gates')return {ok:true,records:[]};
    throw Error('Unexpected action '+action);
   }
  };
@@ -34,7 +35,7 @@ test('receiver saves before acknowledgement, reloads queue after restart, and cu
  const eventId=reply.body.receipt.eventId;
  // Simulate process memory loss. Use the production rehydration and playlist functions.
  sets.clear();
- const load=runInNewContext(`${getFunction('listVideoSetFiles')}\n${getFunction('getVideoSetMediaType')}\n${getFunction('refreshFootageEventSets')}\n${getFunction('loadPriorityVideoSet')}\n(async id=>{await refreshFootageEventSets();return loadPriorityVideoSet(id);})`,context);
+ const load=runInNewContext(`${getFunction('listVideoSetFiles')}\n${getFunction('getVideoSetMediaType')}\n${getFunction('refreshFootageEventSets')}\n${getFunction('loadVideoReviewLibrary')}\n${getFunction('loadPriorityVideoSet')}\n(async id=>{await refreshFootageEventSets();return loadPriorityVideoSet(id);})`,context);
  const playlist=await load(eventId);
  assert.equal(playlist.count,1);assert.equal(playlist.items[0].author,'Inventory poet');assert.equal(playlist.items[0].poemTitle,'Inventory title');
  assert.equal(playlist.items[0].publicationRestricted,true);assert.equal(playlist.items[0].sourceMediaType,'unknown');
@@ -83,7 +84,7 @@ test('existing-event preview is read-only and sending preserves the live set and
  const currentFiles=link.pairs.map(([,id])=>({id,name:id,mimeType:'video/mp4'}));
  const oldReview={prioritySetId:originalSet.id,sourceFileId:currentFiles[0].id,reviewerEmail:'reviewer@example.com',rating:'like',excerptRecordIds:['existing-excerpt']};
  const savedReview=JSON.stringify(oldReview);
- const context={prepareEventIntake,footageEventAsSet,currentEventReceipt,validateEventManifest,footageFileId,resolveEventTarget,
+ const context={footageProvenanceForFile:runInNewContext(server.match(/function footageProvenanceForFile\([\s\S]*?^}/m)[0]+';footageProvenanceForFile'),prepareEventIntake,footageEventAsSet,currentEventReceipt,validateEventManifest,footageFileId,resolveEventTarget,
   PRIORITY_VIDEO_SETS:sets,process:{env:{WEAVER_FOOTAGE_BRIDGE_ENABLED:'true'}},decodeURIComponent,
   refreshFootageEventSets:async()=>{},listVideoSetFiles:async()=>currentFiles,
   verifyFootageReceiptQueue:async r=>r.accepted.every(t=>currentFiles.some(f=>f.id===t.sourceFileId)),
