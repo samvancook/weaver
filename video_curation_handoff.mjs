@@ -477,10 +477,19 @@ export function requiresManualVideoIdentityReview(candidate, finalAssetUrl, gate
     && !clean(gate?.sourceReviewFileId);
 }
 
+export function isLegacyRawSourceIdentityBlock(gate) {
+  const prior = gate?.poetryPleaseHandoff || {};
+  return gate.handoffStatus === "blocked" && prior.status === "blocked" && prior.error === "final_asset_matches_raw_source"
+    && clean(prior.sourceRecordId) === `weaver:video:${clean(gate.sourceFileId)}`
+    && !clean(prior.attemptId) && !clean(prior.canonicalVideoId) && !clean(prior.canonicalVideoUrl)
+    && !clean(prior.finalAssetUrl) && prior.ok === false;
+}
+
 export function prepareVideoIdentityReview(candidate, payload, actor) {
   const gate = candidate?.gate;
   if (!gate || gate.decision !== "ready_for_poetry_please" || candidate.publicationRestricted
-    || candidate.existingCanonicalVideoId || clean(gate.poetryPleaseHandoff?.status)) {
+    || candidate.existingCanonicalVideoId
+    || (clean(gate.poetryPleaseHandoff?.status) && !isLegacyRawSourceIdentityBlock(gate))) {
     throw new Error("Only an approved, unsent video with no receiver identity can be reviewed here.");
   }
   const sourceReviewFileId = clean(payload.sourceReviewFileId);

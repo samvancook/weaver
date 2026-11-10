@@ -1762,6 +1762,19 @@ let videoCurationCandidates = [];
 let videoExcerptHandoffs = [];
 let videoWorkspaceFilterApplied = false;
 
+function canReviewVideoRecordingIdentity(candidate) {
+  const gate = candidate.gate || {};
+  const prior = gate.poetryPleaseHandoff || {};
+  const legacyBlock = gate.handoffStatus === "blocked" && prior.status === "blocked"
+    && prior.sourceRecordId === `weaver:video:${candidate.sourceFileId}`
+    && prior.error === "final_asset_matches_raw_source"
+    && prior.ok === false && !prior.attemptId && !prior.canonicalVideoId
+    && !prior.canonicalVideoUrl && !prior.finalAssetUrl;
+  return candidate.requiresManualIdentityReview && !candidate.publicationRestricted
+    && !candidate.existingCanonicalVideoId && gate.decision === "ready_for_poetry_please"
+    && (!prior.status || legacyBlock);
+}
+
 function videoPipelineNextStep(candidate) {
   const gate = candidate.gate || {};
   const handoff = gate.poetryPleaseHandoff || {};
@@ -1902,7 +1915,7 @@ function renderVideoCurationCandidates() {
       <p><a href="https://drive.google.com/file/d/${encodeURIComponent(candidate.sourceFileId)}/view" target="_blank" rel="noopener noreferrer">Open source video</a></p>
       ${candidate.existingCanonicalVideoId ? `<p>Existing Poetry Please video: ${escapeHtml(candidate.existingCanonicalVideoId)}. Additional resolutions and formats need a verified rendition registration. This send form does not replace the primary video.</p>` : ""}
       ${(candidate.knownAssets || []).length > 1 ? `<details><summary>Known files for this video (${candidate.knownAssets.length})</summary><ul>${candidate.knownAssets.map(asset => `<li><a href="${escapeAttribute(asset.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(asset.fileId)}</a> · ${escapeHtml((asset.roles || []).join(", "))}</li>`).join("")}</ul><p>These links show known file lineage. Resolution and format are not verified here.</p></details>` : ""}
-      ${candidate.requiresManualIdentityReview && gate.decision === "ready_for_poetry_please" && !gate.poetryPleaseHandoff?.status ? `<details><summary>Review the original recording identity</summary>
+      ${canReviewVideoRecordingIdentity(candidate) ? `<details><summary>Review the original recording identity</summary>
         <p>Confirm which stored review source belongs to this finished version. Record the evidence before sending.</p>
         <label class="field"><span>Verified reviewed source</span><select data-field="reviewSource"><option value="">Choose a reviewed source</option>${[...new Set((candidate.reviewEvidence || []).map(row => row.sourceFileId).filter(Boolean))].map(id => `<option value="${escapeAttribute(id)}">${escapeHtml(id)}</option>`).join("")}</select></label>
         <label class="field"><span>Drive or Docs evidence link</span><input data-field="identityEvidenceUrl" type="url"></label>
