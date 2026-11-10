@@ -990,11 +990,19 @@ def resolve_video_curation_identity(connection, payload: dict[str, Any]) -> dict
     root = normalize_text(review.get("sourceReviewFileId"))
     gate_id = hashlib.sha256(f"{priority_set_id}|{source_file_id}".encode("utf-8")).hexdigest()[:32]
     existing, update_time = connection.get_raw_document_versioned(FIRESTORE_VIDEO_CURATION_GATES_COLLECTION, gate_id)
+    prior_handoff = (existing or {}).get("poetryPleaseHandoff") or {}
+    legacy_raw_block = ((existing or {}).get("handoffStatus") == "blocked"
+                        and prior_handoff.get("status") == "blocked"
+                        and prior_handoff.get("sourceRecordId") == f"weaver:video:{source_file_id}"
+                        and prior_handoff.get("error") == "final_asset_matches_raw_source"
+                        and prior_handoff.get("ok") is False
+                        and not any(normalize_text(prior_handoff.get(key)) for key in
+                                    ["attemptId", "canonicalVideoId", "canonicalVideoUrl", "finalAssetUrl"]))
     if (not existing or existing != payload.get("expectedGate")
             or existing.get("prioritySetId") != priority_set_id or existing.get("sourceFileId") != source_file_id
             or existing.get("decision") != "ready_for_poetry_please"
             or existing.get("sourceReviewFileId")
-            or (existing.get("poetryPleaseHandoff") or {}).get("status")
+            or (prior_handoff.get("status") and not legacy_raw_block)
             or not root or root not in (review.get("reviewSourceFileIds") or [])
             or not normalize_text(review.get("reviewedBy"))
             or not normalize_text(review.get("evidenceUrl"))
@@ -1021,9 +1029,14 @@ def resolve_video_curation_identity(connection, payload: dict[str, Any]) -> dict
              "reviewedBy": normalize_text(review["reviewedBy"]), "reviewedAt": now,
              "evidenceUrl": review["evidenceUrl"], "note": review["note"],
              "checkedSourceFileIds": sorted(checked_ids)}
+    if legacy_raw_block:
+        audit["previousHandoff"] = prior_handoff
+        audit["recoveryMode"] = "legacy_raw_source_rejection_no_receiver_attempt"
     record = {**existing, "sourceReviewFileId": root, "videoRecordId": f"weaver:video:{root}",
               "identityReview": audit, "updatedAt": now,
               "history": (list(existing.get("history") or []) + [{"event": "canonical_identity_review", **audit}])[-20:]}
+    if legacy_raw_block:
+        record.update({"handoffStatus": "ready", "poetryPleaseHandoff": {}})
     saved = connection.write_raw_document_if_unchanged(FIRESTORE_VIDEO_CURATION_GATES_COLLECTION, gate_id, record, update_time)
     return {"ok": True, "saved": bool(saved), "reason": "" if saved else "concurrent_identity_change", "record": saved}
 

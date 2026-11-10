@@ -37,6 +37,20 @@ test('an already verified selection is idempotent and handoff scores cannot rest
   assert.equal(record.candidateScore,8.05);assert.equal(record.excerptBonus,0);
   assert.equal(gate.candidateScore,9.05);assert.equal(gate.decidedAt,'original-time');
 });
+test('only the exact old raw-source rejection exposes identity review; receiver attempts stay held',()=>{
+  const prior={status:'blocked',error:'final_asset_matches_raw_source',ok:false,sourceRecordId:'weaver:video:final'};
+  const c={...candidate,requiresManualIdentityReview:true,gate:{...candidate.gate,handoffStatus:'blocked',poetryPleaseHandoff:prior}};
+  assert.equal(prepareVideoIdentityReview(c,payload,'operator').sourceReviewFileId,'original');
+  const app=readFileSync(new URL('../public/app.js',import.meta.url),'utf8');
+  const visible=runInNewContext(`(${app.match(/function canReviewVideoRecordingIdentity\([^]*?\n}\n/)[0]})`);
+  assert.equal(visible(c),true);
+  for(const change of [{attemptId:'started'},{canonicalVideoId:'existing'},{error:'other'},
+    {sourceRecordId:'weaver:video:other'},{ok:true},{status:'sending'}]){
+    const changed={...c,gate:{...c.gate,poetryPleaseHandoff:{...prior,...change}}};
+    assert.throws(()=>prepareVideoIdentityReview(changed,payload,'operator'));
+    assert.equal(visible(changed),false);
+  }
+});
 const server=readFileSync(new URL('../server.mjs',import.meta.url),'utf8');
 function harness({occupied='',driveMismatch=false}={}){
   const calls=[];

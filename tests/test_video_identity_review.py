@@ -70,5 +70,33 @@ class VideoIdentityReviewTest(unittest.TestCase):
         self.assertEqual(result['reason'],'concurrent_identity_change')
         self.assertEqual(db.gate,self.gate)
 
+    def test_legacy_raw_source_rejection_requires_fresh_empty_receipts_and_preserves_prior_attempt(self):
+        prior={'status':'blocked','error':'final_asset_matches_raw_source','ok':False,
+               'sourceRecordId':'weaver:video:final','canonicalVideoId':'','canonicalVideoUrl':'','finalAssetUrl':''}
+        gate={**self.gate,'handoffStatus':'blocked','poetryPleaseHandoff':prior,
+              'history':[{'event':'poetry_please_handoff','status':'blocked'}]}
+        p={**self.payload,'expectedGate':copy.deepcopy(gate)}
+        db=GateStore(gate);r=resolve_video_curation_identity(db,p)
+        self.assertTrue(r['saved']);self.assertEqual(db.gate['handoffStatus'],'ready')
+        self.assertEqual(db.gate['poetryPleaseHandoff'],{})
+        self.assertEqual(db.gate['identityReview']['previousHandoff'],prior)
+        self.assertEqual(db.gate['history'][0],gate['history'][0])
+        for field in ['decision','decidedAt','decidedBy','publishableAssetUrl','selectedExcerptRecordIds','candidateScore']:
+            self.assertEqual(db.gate[field],gate[field])
+        for change in [{'attemptId':'started'},{'canonicalVideoId':'existing'},{'error':'other_block'},
+                       {'sourceRecordId':'weaver:video:other'},{'ok':True}]:
+            bad={**gate,'poetryPleaseHandoff':{**prior,**change}}
+            db=GateStore(bad)
+            self.assertFalse(resolve_video_curation_identity(db,{**p,'expectedGate':copy.deepcopy(bad)})['saved'])
+            self.assertEqual(db.writes,0)
+        for change in ['occupied','stale','ledger','conflict']:
+            proof=copy.deepcopy(p)
+            if change=='occupied':proof['receipts'][0]['received']=True
+            elif change=='stale':proof['receipts'][0]['checkedAtMs']=0
+            elif change=='ledger':proof['receipts'][0]['ledger']['count']=1
+            db=GateStore(gate,conflict=change=='conflict')
+            self.assertFalse(resolve_video_curation_identity(db,proof)['saved'])
+            self.assertEqual(db.gate,gate)
+
 
 if __name__=='__main__': unittest.main()

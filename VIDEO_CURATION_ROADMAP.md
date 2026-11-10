@@ -1,6 +1,20 @@
 # Weaver Video Curation Roadmap
 
-Last reviewed: 2026-11-09 (live release and one receipt-only reconciliation verified)
+Last reviewed: 2026-11-10 (video review consolidation)
+
+## Consolidated video review — 2026-11-10
+
+Main Weaver and the existing footage-bridge/video-queues bookmarks now serve one consolidated release, verified at revision weaver-unified-review-f1ccc5bff2. The main site's newer Videos workspace and receiver/identity features are retained, with My review queue, My reviewed videos and Video library added to its repaired save flow. Event labels explicitly distinguish awaiting your review, reviewed by you and videos total; missing email prompts for identity rather than implying a personal count.
+
+Sam's exact Tilt/Shift review is now saved once, rating moved_me, updated 2026-11-10T15:25:09Z. The canary reads five distinct reviewers and three excerpts for that file, all sixteen MPMU videos review-complete, and zero MPMU videos awaiting Sam in the priority queue. Videos remain accessible in the library; review completion does not publish them or close events.
+
+75 focused tests pass. Complete pre-deployment snapshots retain 981 reviews, 43 gates and three intake receipts. Deployment evidence, exact source checksums, canary/live checks and before/after comparisons are retained privately under /private/tmp/weaver-unified-review-2026-11-10/. Post-deployment comparison found all 981 reviews, 43 gates and three intake records exactly unchanged. No rating, gate, media or inventory edit is part of consolidation. [Consolidated release evidence](UNIFIED_VIDEO_REVIEW_2026-11-10.md). Human guide: [Reviewing videos](VIDEO_REVIEW_QUEUE_GUIDE.md).
+
+## Per-video queues and retained library — initial November 9 release
+
+The initial queue release ran on the footage-bridge tag while main retained its newer workspace. The earlier four-reviewer Tilt/Shift snapshot and pending main merge are superseded by the verified November 10 consolidation above. The November 9 release note remains historical evidence; use the current consolidation receipt for counts, deployed scope and known limits.
+
+## Missing curation destinations — 2026-11-09
 
 ## Current work — 2026-11-09
 
