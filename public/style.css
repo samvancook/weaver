@@ -1180,3 +1180,9 @@ kbd {
     grid-column: 1 / -1;
   }
 }
+
+.video-library-list { display: grid; gap: .4rem; max-height: 18rem; overflow-y: auto; }
+.video-library-list .button { text-align: left; white-space: normal; }
+.video-library-list [aria-current="true"] { outline: 2px solid currentColor; outline-offset: -2px; }
+
+#gathering-video-status-field[hidden], #gathering-video-library-results[hidden] { display: none; }

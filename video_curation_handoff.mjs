@@ -88,6 +88,37 @@ export function buildVideoReviewEvidence(files, records, currentFileId) {
     }));
 }
 
+// Read models only: finishing a queue never writes a gate or sends media.
+export function videoReviewProgress(reviews = []) {
+  const rated = reviews.filter(review => clean(review.rating));
+  const reviewers = new Set(rated.map(review => clean(review.reviewerEmail).toLowerCase()).filter(Boolean));
+  const excerpts = new Set(rated.flatMap(review => review.excerptRecordIds || []).map(clean).filter(Boolean));
+  const scores = rated.map(review => {
+    if (review.ratingSource === 'legacy_import' && clean(review.legacyScore)) {
+      const score = Number(review.legacyScore);
+      return Number.isFinite(score) ? score : null;
+    }
+    return {dislike: 2.5, meh: 5, like: 7.5, moved_me: 10}[clean(review.rating).toLowerCase()] ?? null;
+  }).filter(Number.isFinite);
+  const excerptReviewers = new Set(rated.filter(review => (review.excerptRecordIds || []).length)
+    .map(review => clean(review.reviewerEmail).toLowerCase()).filter(Boolean));
+  const score = scores.length ? scores.reduce((a,b) => a+b,0)/scores.length + Math.min(1,excerptReviewers.size*0.5) : 0;
+  return {reviewerCount:reviewers.size, excerptCount:excerpts.size,
+    reviewComplete:reviewers.size >= 5 && excerpts.size >= 3, candidateScore:Number(score.toFixed(2))};
+}
+
+export function videoLibraryStatus(progress, mediaType, releaseStatus, gate, identityConfirmed = true) {
+  if (gate?.poetryPleaseHandoff?.status === 'sent_to_poetry_please') return 'sent';
+  if (!progress.reviewComplete) return 'needs_review';
+  if (gate?.decision === 'hold' || gate?.decision === 'reject') return 'review_complete';
+  if (gate?.decision === 'send_to_editing') return 'needs_editing';
+  if (progress.candidateScore < 9 && gate?.decision !== 'ready_for_poetry_please') return 'review_complete';
+  if (mediaType === 'OM') return 'needs_editing';
+  if (mediaType !== 'FV' || releaseStatus || !identityConfirmed || (gate?.decision && gate.decision !== 'ready_for_poetry_please')
+    || gate?.poetryPleaseHandoff?.status) return 'needs_check';
+  return 'ready_for_handoff';
+}
+
 export function buildReviewerProgressExport(reviewerEmail, setResults) {
   const email = clean(reviewerEmail).toLowerCase();
   const sets = setResults.map(({ set, files, reviews }) => {
@@ -450,10 +481,19 @@ export function requiresManualVideoIdentityReview(candidate, finalAssetUrl, gate
     && !clean(gate?.sourceReviewFileId);
 }
 
+export function isLegacyRawSourceIdentityBlock(gate) {
+  const prior = gate?.poetryPleaseHandoff || {};
+  return gate.handoffStatus === "blocked" && prior.status === "blocked" && prior.error === "final_asset_matches_raw_source"
+    && clean(prior.sourceRecordId) === `weaver:video:${clean(gate.sourceFileId)}`
+    && !clean(prior.attemptId) && !clean(prior.canonicalVideoId) && !clean(prior.canonicalVideoUrl)
+    && !clean(prior.finalAssetUrl) && prior.ok === false;
+}
+
 export function prepareVideoIdentityReview(candidate, payload, actor) {
   const gate = candidate?.gate;
   if (!gate || gate.decision !== "ready_for_poetry_please" || candidate.publicationRestricted
-    || candidate.existingCanonicalVideoId || clean(gate.poetryPleaseHandoff?.status)) {
+    || candidate.existingCanonicalVideoId
+    || (clean(gate.poetryPleaseHandoff?.status) && !isLegacyRawSourceIdentityBlock(gate))) {
     throw new Error("Only an approved, unsent video with no receiver identity can be reviewed here.");
   }
   const sourceReviewFileId = clean(payload.sourceReviewFileId);

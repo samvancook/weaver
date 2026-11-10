@@ -46,3 +46,6 @@ data/*
 !footage_helper_auth.mjs
 
 !footage_event_links.mjs
+
+!footage_event_progress.mjs
+!footage_provenance.mjs

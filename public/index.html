@@ -11,7 +11,7 @@
     })();
   </script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
-  <link rel="stylesheet" href="/style.css?v=20261109-video-workspace" />
+  <link rel="stylesheet" href="/style.css?v=20261110-unified-video-review" />
 </head>
 <body>
   <div class="shell">
@@ -118,9 +118,17 @@
 
           <div class="gathering-fields gathering-fields--video" id="gathering-video-fields" hidden>
             <label class="field field--full">
-              <span>Video Set</span>
+              <span>Show</span>
+              <select id="gathering-video-view">
+                <option value="todo">My review queue</option>
+                <option value="reviewed">My reviewed videos</option>
+                <option value="library">Video library</option>
+              </select>
+            </label>
+            <label class="field field--full">
+              <span>Event</span>
               <select id="gathering-video-priority-set">
-                <option value="">Choose a video set</option>
+                <option value="">All events</option>
                 <option value="bpl-charm-city-2026">BPL Charm City 2026</option>
                 <option value="mn-writers-respond-loft">MN Writers Respond @ The Loft</option>
                 <option value="mpmu-2026-finals">MPMU 2026 Finals</option>
@@ -129,19 +137,38 @@
                 <option value="publishers-poetry-slam-2026-camera-y">Publisher's Poetry Slam 2026 - Camera Y</option>
               </select>
             </label>
+            <label class="field field--span-3">
+              <span>Find a video</span>
+              <input id="gathering-video-search" type="search" placeholder="Author, title or event" />
+            </label>
+            <label class="field field--span-3" id="gathering-video-status-field" hidden>
+              <span>Status</span>
+              <select id="gathering-video-status-filter">
+                <option value="">All statuses</option>
+                <option value="needs_review">Needs review</option>
+                <option value="review_complete">Review complete</option>
+                <option value="ready_for_handoff">Ready for handoff</option>
+                <option value="needs_editing">Needs editing</option>
+                <option value="needs_check">Needs a check</option>
+                <option value="sent">Sent to Poetry Please</option>
+              </select>
+            </label>
             <label class="field field--full">
               <span>Weaver task / Curation Form</span>
               <input id="gathering-video-playlist-url" type="url" placeholder="Paste a Weaver curation task link or Google Form URL" />
             </label>
             <div class="gathering-inline-tools field--full">
-              <button id="gathering-video-load-playlist" class="button button--secondary" type="button">Load Playlist</button>
+              <button id="gathering-video-load-playlist" class="button button--secondary" type="button">Load videos</button>
               <button id="gathering-video-prev-item" class="button button--secondary" type="button" disabled>Previous Item</button>
               <button id="gathering-video-next-item" class="button button--secondary" type="button" disabled>Next Item</button>
               <button id="gathering-video-open-item" class="button button--secondary" type="button" disabled>Open Video</button>
               <button id="gathering-video-save-rating" class="button" type="button" disabled>Save Rating &amp; Next</button>
-              <p class="hint gathering-source-hint" id="gathering-video-playlist-status">Load a curation form to prefill the event name, author, and poem title, then advance through the playlist as you submit.</p>
+              <p id="gathering-video-save-status" class="hint" role="status" aria-live="polite"></p>
+              <p class="hint gathering-source-hint" id="gathering-video-playlist-status">Choose an event or All events, then load videos. Switch views to revisit your saved reviews or browse the library.</p>
             </div>
             <p class="hint field--full" id="gathering-video-excerpt-guidance" aria-live="polite" hidden></p>
+            <p class="hint field--full" id="gathering-video-review-progress" aria-live="polite" hidden></p>
+            <div class="field field--full" id="gathering-video-library-results" hidden></div>
             <p class="hint field--full" id="gathering-video-release-warning" hidden></p>
             <div class="hint field--full" id="gathering-video-related-assets" hidden></div>
             <label class="field field--span-3">
@@ -605,6 +632,6 @@
     </main>
   </div>
 
-  <script src="/app.js?v=20261109-video-workspace"></script>
+  <script src="/app.js?v=20261110-legacy-identity"></script>
 </body>
 </html>
