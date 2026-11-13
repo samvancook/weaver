@@ -1549,7 +1549,7 @@ function applyGatheringVideoPlaylistItem(item, { preserveQuote = false } = {}) {
   }
   if(elements.gatheringVideoReviewProgress){
     const progress=item.reviewProgress,box=elements.gatheringVideoReviewProgress;box.hidden=!progress;
-    box.textContent=progress?`${videoLibraryStatusLabel(item.libraryStatus)} · ${progress.reviewerCount} reviewers · ${progress.excerptCount} excerpts${!progress.reviewComplete?' (minimum: 5 reviewers and 3 excerpts)':''}${item.review?.rating?' · Your saved rating: '+String(item.review.rating).replace(/_/g,' '):''}`:'';
+    box.textContent=progress?`${videoLibraryStatusLabel(item.libraryStatus)} · ${progress.reviewerCount} reviewers · ${progress.excerptCount} excerpts${!progress.reviewComplete?' (minimum: 5 reviewers and 1 excerpt)':''}${item.pipeline?.message?' · '+item.pipeline.message:''}${item.review?.rating?' · Your saved rating: '+String(item.review.rating).replace(/_/g,' '):''}`:'';
   }
   updateGatheringVideoPlaylistUi();
   updateGatheringQuoteMeta();
@@ -1574,6 +1574,7 @@ function normalizeVideoPlaylistItem(rawItem, eventName) {
     videoReleaseStatus: cleanSheetWhitespace(rawItem?.videoReleaseStatus),
     publicationRestricted: Boolean(rawItem?.publicationRestricted),
     reviewProgress: rawItem?.reviewProgress || null,
+    pipeline: rawItem?.pipeline || null,
     needsPriorityReview: rawItem?.needsPriorityReview !== false,
     libraryStatus: rawItem?.libraryStatus || 'needs_review',
     review: rawItem?.review && typeof rawItem.review === "object" ? rawItem.review : null
@@ -1881,7 +1882,7 @@ function renderVideoCurationCandidates() {
     (!elements.videoCurationEvent?.value || eventFor(candidate) === elements.videoCurationEvent.value)
     && (handoffFilter === "all" || (handoffFilter === "sent") === isSent(candidate))
   ));
-  if (elements.videoCurationStatus) elements.videoCurationStatus.textContent = `${filtered.length} of ${videoCurationCandidates.length} ranked videos · ${events.length} events`;
+  if (elements.videoCurationStatus) elements.videoCurationStatus.textContent = `${filtered.length} of ${videoCurationCandidates.length} ranked videos · ${events.length} events · Automatic PP delivery: 8.5 average, 5 reviewers, 1 excerpt`;
   if (!filtered.length) {
     container.textContent = "No videos match these filters.";
     return;

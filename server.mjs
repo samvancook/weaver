@@ -1,3 +1,5 @@
+import {VIDEO_AUTO_POLICY, advanceVideoPipeline, localVideoPipelineState, publicVideoPipelineState, videoPipelineKey} from './video_pipeline.mjs';
+import {verifyVideoPipelineCaller} from './video_pipeline_auth.mjs';
 import { resolveEventTarget } from "./footage_event_links.mjs";
 import { buildFootageProgress, footageProvenanceForFile } from "./footage_event_progress.mjs";
 import { prepareEventIntake, footageEventAsSet, currentEventReceipt, validateEventManifest, fileId as footageFileId } from "./footage_event_intake.mjs";
@@ -227,6 +229,7 @@ const ADMIN_MUTATION_PATHS = new Set([
   "/api/save-graphics-qc",
   "/api/save-review-single",
   "/api/save-reviews",
+  "/api/admin/video-pipeline/run",
   "/api/admin/video-curation-gates",
   "/api/admin/video-curation-gates/handoff",
   "/api/admin/video-curation-gates/context",
@@ -2376,12 +2379,14 @@ async function loadVideoReviewLibrary(reviewerEmail = "", prioritySetId = "") {
   if (selected && !PRIORITY_VIDEO_SETS.has(selected)) throw new Error("Unknown priority video set.");
   const sets = selected ? [PRIORITY_VIDEO_SETS.get(selected)] : Array.from(PRIORITY_VIDEO_SETS.values());
   const email = cleanSheetWhitespace(reviewerEmail).toLowerCase();
-  const [reviewResult, gateResult] = await Promise.all([
+  const [reviewResult, gateResult, pipelineResult] = await Promise.all([
     syncWeaverRuntimeDb("get_curation_reviews", {}),
-    syncWeaverRuntimeDb("get_video_curation_gates", {})
+    syncWeaverRuntimeDb("get_video_curation_gates", {}),
+    syncWeaverRuntimeDb("get_video_pipeline", {})
   ]);
   if (!reviewResult.ok || !gateResult.ok) throw new Error("Current video reviews or handoff statuses could not be read.");
   const gates = new Map((gateResult.records || []).map(g => [g.candidateId, g]));
+  const pipelineStates = new Map((pipelineResult?.records || []).map(state=>[state.pipelineId,state]));
   const results = await Promise.all(sets.map(async set => {
     const [sourceMedia, folderFiles, connections] = await Promise.all([
       getVideoSetMediaType(set), listVideoSetFiles(set), getFootageAssetConnections(set.id)
@@ -2416,13 +2421,14 @@ async function loadVideoReviewLibrary(reviewerEmail = "", prioritySetId = "") {
         inventoryEventNames:[...new Set(connections.filter(c=>c.sourceFileId===file.id).map(c=>c.inventoryEventName))],
         canonicalTextLinkStatus:"not_linked",weaverExcerptCount:progress.excerptCount,
         videoReleaseStatus,publicationRestricted:Boolean(videoReleaseStatus),reviewProgress:progress,
+        pipeline:publicVideoPipelineState(pipelineStates.get(videoPipelineKey({prioritySetId:set.id,sourceFileId:file.id}))),
         libraryStatus:status,needsPriorityReview:!progress.reviewComplete && status !== 'sent',
         review:own ? {rating:own.rating,notes:own.notes||'',status:own.status,updatedAt:own.updatedAt,excerptRecordIds:own.excerptRecordIds||[]} : null
       };
     });
   }));
   const items = results.flat();
-  return {ok:true,prioritySetId:selected,items,count:items.length,
+  return {ok:true,policy:VIDEO_AUTO_POLICY,prioritySetId:selected,items,count:items.length,
     sets:sets.map((set,i)=>({id:set.id,label:set.label,totalCount:results[i].length,
       remainingCount:results[i].filter(item=>item.needsPriorityReview&&!item.review?.rating).length,
       reviewedCount:results[i].filter(item=>item.review?.rating).length}))};
@@ -2583,17 +2589,8 @@ async function getVideoCurationCandidates(prioritySetId = "") {
       const candidateId = buildVideoCurationCandidateId(set.id, sourceFileId);
       const existingGate = gatesByCandidateId.get(candidateId) || null;
       if (!reviews.length && !existingGate) return null;
-      const scoreValues = reviews.map(review => {
-        const rawLegacyScore = cleanSheetWhitespace(review.legacyScore);
-        const legacyScore = rawLegacyScore === "" ? NaN : Number(rawLegacyScore);
-        if (cleanSheetWhitespace(review.ratingSource) === "legacy_import" && Number.isFinite(legacyScore)) {
-          return legacyScore;
-        }
-        return VIDEO_CURATION_SCORE_BY_RATING[cleanSheetWhitespace(review.rating).toLowerCase()] ?? null;
-      }).filter(score => Number.isFinite(score));
-      const baseScore = scoreValues.length
-        ? scoreValues.reduce((total, score) => total + score, 0) / scoreValues.length
-        : 0;
+      const quality = videoReviewProgress(reviews);
+      const baseScore = quality.candidateScore;
       const excerptRecordIds = Array.from(new Set(reviews.flatMap(review => (
         Array.isArray(review.excerptRecordIds) ? review.excerptRecordIds : []
       )).map(cleanSheetWhitespace).filter(Boolean))).sort();
@@ -2647,7 +2644,7 @@ async function getVideoCurationCandidates(prioritySetId = "") {
         threshold: VIDEO_CURATION_CANDIDATE_THRESHOLD,
         isEligible: !releaseStatus && candidateScore >= VIDEO_CURATION_CANDIDATE_THRESHOLD,
         excerptRecordIds,
-        reviewCount: reviews.length,
+        reviewCount: quality.reviewerCount,
         reviewEvidence: buildVideoReviewEvidence(files, Array.isArray(reviewsResult?.records) ? reviewsResult.records : [], sourceFileId),
         ratings: reviews.map(review => ({
           reviewId: cleanSheetWhitespace(review.reviewId),
@@ -2707,6 +2704,7 @@ async function saveVideoCurationGate(payload = {}, decidedBy = "") {
     }
   });
   invalidateQueueSnapshots();
+  await enqueueVideoPipeline(prioritySetId, sourceFileId, "gate_saved");
   return result;
 }
 
@@ -2741,6 +2739,7 @@ async function resolveVideoCurationIdentity(payload, actor) {
   });
   if (!result.saved) throw new Error(result.reason || "The gate changed during identity review; reload and inspect it.");
   invalidateQueueSnapshots();
+  await enqueueVideoPipeline(prioritySetId, sourceFileId, "identity_saved");
   return { ok: true, changed: true, gate: result.record };
 }
 
@@ -2751,6 +2750,10 @@ async function handoffVideoCurationGate(payload = {}) {
   const candidates = await getVideoCurationCandidates(prioritySetId);
   const candidate = candidates.candidates.find(item => item.prioritySetId === prioritySetId && item.sourceFileId === sourceFileId);
   if (!candidate?.gate) throw new Error("Save the video gate before sending it to Poetry Please.");
+  if (payload.automatic && (candidate.reviewCount < VIDEO_AUTO_POLICY.minReviewers
+    || candidate.baseScore < VIDEO_AUTO_POLICY.minScore || !candidate.excerptRecordIds.length)) {
+    throw new Error("Automatic video policy changed before send; no video was sent.");
+  }
   if (candidate.existingCanonicalVideoId) {
     throw new Error("This video already exists in Poetry Please. Register a verified rendition under its canonical video ID; the video import would replace its primary media.");
   }
@@ -2876,7 +2879,7 @@ async function inspectVideoReceiverState(prioritySetId, sourceFileId) {
   const summary = summarizeVideoReceiverState(candidate, receipt);
   if (!summary.received) return { ok: true, checkedAt: new Date().toISOString(), receiver: summary };
   const versions = await read(`videoRenditions?videoId=${encodeURIComponent(summary.canonicalVideoId)}`);
-  return { ok: true, checkedAt: new Date().toISOString(), receiver: summarizeVideoReceiverState(candidate, receipt, versions) };
+  return { ok: true, checkedAt: new Date().toISOString(), receiver: summarizeVideoReceiverState(candidate, receipt, versions), readiness: receipt.readiness || null, receipt };
 }
 
 async function refreshVideoCurationReceipt(payload = {}, checkedBy = "") {
@@ -2900,17 +2903,79 @@ async function refreshVideoCurationReceipt(payload = {}, checkedBy = "") {
   });
   if (!saved?.saved) throw new Error(saved?.reason || "Receipt changed; refresh the gate before trying again.");
   invalidateQueueSnapshots();
+  await enqueueVideoPipeline(prioritySetId, sourceFileId, "receipt_refreshed");
   return { ok: true, gate: saved.record };
+}
+
+async function enqueueVideoPipeline(prioritySetId, sourceFileId, trigger) {
+  try {
+    const result = await syncWeaverRuntimeDb("enqueue_video_pipeline", {prioritySetId, sourceFileId, trigger});
+    return result?.ok ? {status: "queued_for_pipeline", policy: VIDEO_AUTO_POLICY} : {status: "needs_attention", error: result?.error || "Pipeline wakeup could not be recorded"};
+  } catch(error) {
+    // The source save is already durable; the scheduled full scan also sees it.
+    return {status:"needs_attention",error:String(error.message).slice(0,500)};
+  }
+}
+
+async function inspectVideoPipelineCandidate(candidate) {
+  const inspection = await inspectVideoReceiverState(candidate.prioritySetId,candidate.sourceFileId);
+  const receipt = inspection.receipt;
+  if (!receipt?.received || !candidate.gate) return inspection;
+  const gate = candidate.gate, handoff = gate.poetryPleaseHandoff || {};
+  if (["sending","failed","needs_reconciliation"].includes(handoff.status)) {
+    const result = await syncWeaverRuntimeDb("reconcile_video_pipeline_gate", {expectedGate:gate,receipt});
+    if (!result?.saved) inspection.reconciliationPending = true;
+  } else if (handoff.status === "sent_to_poetry_please") {
+    const parsed = parsePoetryPleaseVideoReceipt(receipt,gate);
+    if (["durableCopyStatus","durableCopyError","durableByteCount","durableChecksum","storageMode","mediaStatus","storedReviewCount","storedSelectedExcerptIdCount"].some(key=>String(parsed[key]??"")!==String(handoff[key]??""))) {
+      const saved = await syncWeaverRuntimeDb("refresh_video_curation_receipt", {prioritySetId:candidate.prioritySetId,
+        sourceFileId:candidate.sourceFileId,attemptId:handoff.attemptId||"",checkedBy:"weaver:video-pipeline",receipt:parsed});
+      if (!saved?.saved) throw new Error("Receipt changed during pipeline refresh");
+    }
+  }
+  return inspection;
+}
+
+async function runVideoPipeline({dryRun = false, trigger = "scheduled"} = {}) {
+  if (dryRun) {
+    const result = await getVideoCurationCandidates();
+    const states = result.candidates.map(candidate => localVideoPipelineState(candidate));
+    return {ok:true,dryRun:true,policy:VIDEO_AUTO_POLICY,count:states.length,
+      stages:states.reduce((out,state)=>(out[state.stage]=(out[state.stage]||0)+1,out),{})};
+  }
+  const claim = await syncWeaverRuntimeDb("claim_video_pipeline", {trigger});
+  if (!claim?.claimed) return {ok:true,skipped:true,reason:claim?.reason||"runner_active"};
+  let states = [];
+  try {
+    const [result, previous] = await Promise.all([getVideoCurationCandidates(), syncWeaverRuntimeDb("get_video_pipeline", {})]);
+    if (!previous.ok) throw new Error("Pipeline state could not be read");
+    const run = await advanceVideoPipeline({candidates:result.candidates,previous:previous.records,
+      inspect:candidate=>inspectVideoPipelineCandidate(candidate),
+      deliver:candidate=>autoAdvanceVideoCuration(candidate.prioritySetId,candidate.sourceFileId)});
+    states = run.states;
+    const summary = {policy:VIDEO_AUTO_POLICY,checked:run.checked,sends:run.sends,count:states.length,
+      stages:states.reduce((out,state)=>(out[state.stage]=(out[state.stage]||0)+1,out),{})};
+    const saved = await syncWeaverRuntimeDb("save_video_pipeline", {token:claim.token,states,summary});
+    if (!saved?.ok) throw new Error(saved?.error||"Pipeline state save failed");
+    console.log("[video-pipeline]",JSON.stringify(summary));
+    return {ok:true,...summary};
+  } catch(error) {
+    await syncWeaverRuntimeDb("save_video_pipeline", {token:claim.token,states:[],summary:{error:String(error.message).slice(0,500)}}).catch(()=>{});
+    throw error;
+  }
+}
+
+async function getPublicVideoPipeline(prioritySetId = "") {
+  const result = await syncWeaverRuntimeDb("get_video_pipeline", {prioritySetId});
+  if (!result.ok) throw new Error("Pipeline state could not be read");
+  return {ok:true,schemaVersion:"1",policy:VIDEO_AUTO_POLICY,records:result.records.map(state=>publicVideoPipelineState(state))};
 }
 
 async function autoAdvanceVideoCuration(prioritySetId, sourceFileId) {
   const candidates = await getVideoCurationCandidates(prioritySetId);
   const candidate = candidates.candidates.find(item => item.sourceFileId === sourceFileId);
-  if (!candidate || candidate.publicationRestricted || candidate.candidateScore < 9 || !candidate.excerptRecordIds.length) return null;
-  const reviewerCount = new Set(candidate.ratings.map(review => (
-    cleanSheetWhitespace(review.reviewerEmail).toLowerCase()
-  )).filter(Boolean)).size;
-  if (reviewerCount < 5 || candidate.gate?.poetryPleaseHandoff?.status) return null;
+  if (!candidate || candidate.publicationRestricted || candidate.candidateScore < VIDEO_AUTO_POLICY.minScore || !candidate.excerptRecordIds.length) return null;
+  if (candidate.reviewCount < VIDEO_AUTO_POLICY.minReviewers || candidate.gate?.poetryPleaseHandoff?.status) return null;
   if (candidate.gate && candidate.gate.decision !== "ready_for_poetry_please") return null;
 
   const knownPublishableUrl = candidate.sourceMediaType === "FV" ? candidate.sourceVideoUrl : "";
@@ -2918,7 +2983,7 @@ async function autoAdvanceVideoCuration(prioritySetId, sourceFileId) {
   if (!publishableAssetUrl) {
     if (!candidate.gate) {
       await syncWeaverRuntimeDb("upsert_video_curation_gate", {
-        gate: { ...candidate, decision: "send_to_editing", note: "Qualified for publication; final publishable video needed.", decidedBy: "weaver:auto" }
+        gate: { ...candidate, decision: "send_to_editing", note: "Qualified for Poetry Please review; finished video needed.", decidedBy: "weaver:auto" }
       });
     }
     return { status: "send_to_editing" };
@@ -2935,7 +3000,7 @@ async function autoAdvanceVideoCuration(prioritySetId, sourceFileId) {
   if (candidate.existingCanonicalVideoId && !candidate.gate?.poetryPleaseHandoff?.status) {
     return { status: "ready_for_poetry_please", requiresExistingCanonicalReconciliation: true };
   }
-  const handoff = await handoffVideoCurationGate({ prioritySetId, sourceFileId });
+  const handoff = await handoffVideoCurationGate({ prioritySetId, sourceFileId, automatic: true });
   return { status: handoff.ok ? "sent_to_poetry_please" : "already_started", ...handoff };
 }
 
@@ -2971,7 +3036,7 @@ async function savePriorityVideoReview(payload = {}) {
   });
   if (!result?.ok) throw new Error(result?.error || "Video review could not be saved.");
   try {
-    result.autoHandoff = await autoAdvanceVideoCuration(set.id, sourceFileId);
+    result.autoHandoff = await enqueueVideoPipeline(set.id, sourceFileId, "review_saved");
   } catch (error) {
     result.autoHandoff = { status: "needs_attention", error: error.message };
   }
@@ -8634,6 +8699,25 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  if (url.pathname === "/api/internal/video-pipeline/tick" && req.method === "POST") {
+    try {
+      await verifyVideoPipelineCaller(req);
+      await refreshFootageEventSets();
+      const payload = JSON.parse(await readRequestBody(req)||"{}");
+      return sendJson(res,200,await runVideoPipeline({dryRun:payload.dryRun===true,trigger:"scheduled"}));
+    } catch(error) { return sendJson(res,Number(error.statusCode||500),{ok:false,error:error.message}); }
+  }
+  if (url.pathname === "/api/admin/video-pipeline/run" && req.method === "POST") {
+    try {
+      await refreshFootageEventSets();
+      const payload = JSON.parse(await readRequestBody(req)||"{}");
+      return sendJson(res,200,await runVideoPipeline({dryRun:payload.dryRun===true,trigger:"administrator"}));
+    } catch(error) {return sendJson(res,500,{ok:false,error:error.message});}
+  }
+  if (url.pathname === "/api/intake/video-pipeline" && req.method === "GET") {
+    try {return sendJson(res,200,await getPublicVideoPipeline(url.searchParams.get("prioritySetId")||""));}
+    catch(error){return sendJson(res,503,{ok:false,error:error.message});}
+  }
   if (url.pathname === "/health") {
     return sendJson(res, 200, { ok: true, service: "weaver-web" });
   }

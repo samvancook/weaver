@@ -77,6 +77,7 @@ FIRESTORE_HANDOFF_ACTIONS = {
     "finish_video_curation_handoff",
     "refresh_video_curation_receipt",
     "get_video_curation_gates",
+    "claim_video_pipeline", "save_video_pipeline", "get_video_pipeline", "enqueue_video_pipeline", "reconcile_video_pipeline_gate",
 }
 
 EXPECTED_FIRESTORE_PROJECT_ID = "button-weaver-internal"
@@ -1039,6 +1040,121 @@ def resolve_video_curation_identity(connection, payload: dict[str, Any]) -> dict
         record.update({"handoffStatus": "ready", "poetryPleaseHandoff": {}})
     saved = connection.write_raw_document_if_unchanged(FIRESTORE_VIDEO_CURATION_GATES_COLLECTION, gate_id, record, update_time)
     return {"ok": True, "saved": bool(saved), "reason": "" if saved else "concurrent_identity_change", "record": saved}
+
+
+FIRESTORE_VIDEO_PIPELINE_COLLECTION = "videoPipelineStates"
+FIRESTORE_VIDEO_PIPELINE_CONTROL = "videoPipelineControl"
+
+
+def write_video_pipeline_record(connection, collection, key, record, version):
+    if not version:
+        return connection.create_raw_document_if_absent(collection, key, record)
+    return connection.write_raw_document_if_unchanged(collection, key, record, version)
+
+
+def reconcile_video_pipeline_gate(connection, payload):
+    expected = payload.get("expectedGate") or {}
+    receipt = payload.get("receipt") or {}
+    event = normalize_text(expected.get("prioritySetId"))
+    source = normalize_text(expected.get("sourceFileId"))
+    key = hashlib.sha256(f"{event}|{source}".encode()).hexdigest()[:32]
+    old, version = connection.get_raw_document_versioned(FIRESTORE_VIDEO_CURATION_GATES_COLLECTION, key)
+    prior = (old or {}).get("poetryPleaseHandoff") or {}
+    media = receipt.get("media") or {}
+    context = receipt.get("review") or {}
+    def drive_id(value):
+        match = re.search(r"(?:/d/|[?&]id=)([A-Za-z0-9_-]+)", str(value or ""))
+        return match.group(1) if match else ""
+    if (not old or old != expected or old.get("decision") != "ready_for_poetry_please"
+            or prior.get("status") not in {"sending", "failed", "needs_reconciliation"}
+            or receipt.get("ok") is not True or receipt.get("received") is not True
+            or receipt.get("ambiguousVideoMatch") or not normalize_text(receipt.get("canonicalVideoId"))
+            or receipt.get("sourceRecordId") != old.get("videoRecordId")
+            or prior.get("sourceRecordId", old.get("videoRecordId")) != old.get("videoRecordId")
+            or (prior.get("canonicalVideoId") and prior["canonicalVideoId"] != receipt["canonicalVideoId"])
+            or (receipt.get("event") or {}).get("sourceEvent") != old.get("sourceEvent")
+            or media.get("reviewOnly") is not True
+            or not drive_id(old.get("publishableAssetUrl"))
+            or drive_id(media.get("driveLink")) != drive_id(old.get("publishableAssetUrl"))
+            or not isinstance(context.get("reviewCount"), int)
+            or context["reviewCount"] < int(old.get("reviewCount") or 0)
+            or not isinstance(context.get("selectedExcerptIdCount"), int)
+            or context["selectedExcerptIdCount"] < len(old.get("selectedExcerptRecordIds") or [])):
+        return {"ok": True, "saved": False, "reason": "receiver_or_gate_changed"}
+    now = utc_now_iso()
+    handoff = {**prior, "previousHandoff": prior, "status": "sent_to_poetry_please", "ok": True,
+               "sourceRecordId": receipt["sourceRecordId"], "canonicalVideoId": receipt["canonicalVideoId"],
+               "canonicalVideoUrl": "https://poetryplease.org/m?item=" + receipt["canonicalVideoId"],
+               "storedReviewCount": context["reviewCount"], "storedSelectedExcerptIdCount": context["selectedExcerptIdCount"],
+               "receiptCheckedAt": now, "reconciledBy": "weaver:video-pipeline"}
+    record = {**old, "poetryPleaseHandoff": handoff, "handoffStatus": "sent_to_poetry_please", "updatedAt": now,
+              "history": (list(old.get("history") or []) + [{"event": "video_pipeline_receiver_reconciliation", "at": now,
+                            "previousStatus": prior.get("status"), "canonicalVideoId": receipt["canonicalVideoId"]}])[-20:]}
+    saved = connection.write_raw_document_if_unchanged(FIRESTORE_VIDEO_CURATION_GATES_COLLECTION, key, record, version)
+    return {"ok": True, "saved": bool(saved), "record": saved}
+
+
+def claim_video_pipeline(connection, payload):
+    now = time.time()
+    prior, version = connection.get_raw_document_versioned(FIRESTORE_VIDEO_PIPELINE_CONTROL, "runner")
+    if float((prior or {}).get("leaseExpiresAt") or 0) > now:
+        return {"ok": True, "claimed": False, "reason": "runner_active"}
+    token = uuid.uuid4().hex
+    record = {**(prior or {}), "token": token, "leaseExpiresAt": now + 330,
+              "startedAt": utc_now_iso(), "trigger": normalize_text(payload.get("trigger"))}
+    saved = write_video_pipeline_record(connection, FIRESTORE_VIDEO_PIPELINE_CONTROL, "runner", record, version)
+    return {"ok": True, "claimed": bool(saved), "token": token if saved else ""}
+
+
+def enqueue_video_pipeline(connection, payload):
+    event = normalize_text(payload.get("prioritySetId"))
+    source = normalize_text(payload.get("sourceFileId"))
+    if not event or not source:
+        raise ValueError("An exact pipeline source is required")
+    key = hashlib.sha256(f"{event}|{source}".encode()).hexdigest()[:32]
+    old, version = connection.get_raw_document_versioned(FIRESTORE_VIDEO_PIPELINE_COLLECTION, key)
+    record = {**(old or {}), "pipelineId": key, "prioritySetId": event, "sourceFileId": source,
+              "requestedAt": utc_now_iso(), "requestTrigger": normalize_text(payload.get("trigger")),
+              "calendarReady": False}
+    saved = write_video_pipeline_record(connection, FIRESTORE_VIDEO_PIPELINE_COLLECTION, key, record, version)
+    return {"ok": bool(saved), "queued": bool(saved)}
+
+
+def get_video_pipeline(connection, payload):
+    records = connection.list_raw_documents(FIRESTORE_VIDEO_PIPELINE_COLLECTION)
+    event = normalize_text(payload.get("prioritySetId"))
+    return {"ok": True, "records": [r for r in records if not event or r.get("prioritySetId") == event]}
+
+
+def save_video_pipeline(connection, payload):
+    lease, version = connection.get_raw_document_versioned(FIRESTORE_VIDEO_PIPELINE_CONTROL, "runner")
+    if (not lease or not normalize_text(payload.get("token"))
+            or lease.get("token") != payload.get("token")
+            or float(lease.get("leaseExpiresAt") or 0) <= time.time()):
+        return {"ok": False, "error": "pipeline_lease_changed"}
+    records = payload.get("states") or []
+    if not isinstance(records, list) or len(records) > 500:
+        raise ValueError("Invalid pipeline state batch")
+    keys = set()
+    for state in records:
+        key = hashlib.sha256(f"{state.get('prioritySetId')}|{state.get('sourceFileId')}".encode()).hexdigest()[:32]
+        if key != state.get("pipelineId") or key in keys:
+            raise ValueError("Pipeline state identity is missing or duplicated")
+        keys.add(key)
+    for state in records:
+        key = state["pipelineId"]
+        prior, state_version = connection.get_raw_document_versioned(FIRESTORE_VIDEO_PIPELINE_COLLECTION, key)
+        record = {**(prior or {}), **state}
+        # Do not consume a review/edit event that arrived after this scan began.
+        if (prior or {}).get("requestedAt", "") > lease.get("startedAt", ""):
+            record["calendarReady"] = False
+        saved = write_video_pipeline_record(connection, FIRESTORE_VIDEO_PIPELINE_COLLECTION, key, record, state_version)
+        if not saved:
+            raise ValueError("Pipeline state changed during save; next scan will reconcile")
+    record = {**lease, "leaseExpiresAt": 0, "finishedAt": utc_now_iso(),
+              "lastRun": payload.get("summary") or {}}
+    saved = write_video_pipeline_record(connection, FIRESTORE_VIDEO_PIPELINE_CONTROL, "runner", record, version)
+    return {"ok": bool(saved), "savedCount": len(records), "finished": bool(saved)}
 
 
 def fetch_video_curation_gates(connection, payload: dict[str, Any]) -> dict[str, Any]:
@@ -2242,6 +2358,16 @@ def main() -> int:
             result = finish_video_curation_handoff(connection, payload)
         elif action == "refresh_video_curation_receipt":
             result = refresh_video_curation_receipt(connection, payload)
+        elif action == "reconcile_video_pipeline_gate":
+            result = reconcile_video_pipeline_gate(connection, payload)
+        elif action == "claim_video_pipeline":
+            result = claim_video_pipeline(connection, payload)
+        elif action == "save_video_pipeline":
+            result = save_video_pipeline(connection, payload)
+        elif action == "get_video_pipeline":
+            result = get_video_pipeline(connection, payload)
+        elif action == "enqueue_video_pipeline":
+            result = enqueue_video_pipeline(connection, payload)
         elif action == "get_video_curation_gates":
             result = fetch_video_curation_gates(connection, payload)
         else:
