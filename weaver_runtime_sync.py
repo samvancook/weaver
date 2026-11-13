@@ -77,6 +77,7 @@ FIRESTORE_HANDOFF_ACTIONS = {
     "finish_video_curation_handoff",
     "refresh_video_curation_receipt",
     "get_video_curation_gates", "get_video_media_classification",
+    "get_video_media_resolutions", "save_video_media_resolution", "prepare_resolved_video_gate",
     "claim_video_pipeline", "save_video_pipeline", "get_video_pipeline", "enqueue_video_pipeline", "reconcile_video_pipeline_gate",
 }
 
@@ -1155,6 +1156,87 @@ def save_video_pipeline(connection, payload):
               "lastRun": payload.get("summary") or {}}
     saved = write_video_pipeline_record(connection, FIRESTORE_VIDEO_PIPELINE_CONTROL, "runner", record, version)
     return {"ok": bool(saved), "savedCount": len(records), "finished": bool(saved)}
+
+
+VIDEO_MEDIA_RESOLUTIONS = "videoMediaResolutions"
+
+
+def video_resolution_key(event, source):
+    return hashlib.sha256(f"{event}|{source}".encode()).hexdigest()[:32]
+
+
+def get_video_media_resolutions(connection, payload):
+    event = normalize_text(payload.get("prioritySetId"))
+    source = normalize_text(payload.get("sourceFileId"))
+    if source:
+        if not event:
+            raise ValueError("prioritySetId is required")
+        record = connection.get_raw_document(VIDEO_MEDIA_RESOLUTIONS, video_resolution_key(event, source))
+        records = [record] if record else []
+    else:
+        records = connection.list_raw_documents(VIDEO_MEDIA_RESOLUTIONS)
+        if event:
+            records = [r for r in records if r.get("prioritySetId") == event]
+    return {"ok": True, "records": records}
+
+
+def save_video_media_resolution(connection, payload):
+    record = dict(payload.get("record") or {})
+    event, source = normalize_text(record.get("prioritySetId")), normalize_text(record.get("sourceFileId"))
+    if not event or record.get("type") not in {"recording", "event_scope"}:
+        raise ValueError("Exact event and resolution type are required")
+    if record["type"] == "recording" and not source:
+        raise ValueError("Exact reviewed source file is required")
+    key = video_resolution_key(event, source if record["type"] == "recording" else "@scope")
+    old, version = connection.get_raw_document_versioned(VIDEO_MEDIA_RESOLUTIONS, key)
+    if int((old or {}).get("revision") or 0) != payload.get("expectedRevision", 0):
+        return {"ok": False, "conflict": True, "reason": "resolution_changed"}
+    now = utc_now_iso()
+    record.update({"resolutionId": key, "revision": int((old or {}).get("revision") or 0) + 1,
+                   "createdAt": (old or {}).get("createdAt") or now, "updatedAt": now})
+    event_note = {"at": now, "actor": normalize_text(payload.get("actor")), "action": normalize_text(payload.get("event")),
+                  "status": record.get("status"), "primaryFileId": record.get("primaryFileId")}
+    record["history"] = (list((old or {}).get("history") or []) + [event_note])[-40:]
+    saved = (connection.write_raw_document_if_unchanged(VIDEO_MEDIA_RESOLUTIONS, key, record, version)
+             if old else connection.create_raw_document_if_absent(VIDEO_MEDIA_RESOLUTIONS, key, record))
+    return {"ok": bool(saved), "saved": bool(saved), "conflict": not bool(saved), "record": saved}
+
+
+def prepare_resolved_video_gate(connection, payload):
+    candidate = dict(payload.get("candidate") or {})
+    event, source = normalize_text(candidate.get("prioritySetId")), normalize_text(candidate.get("sourceFileId"))
+    if not event or not source:
+        raise ValueError("Exact reviewed source required")
+    key = video_resolution_key(event, source)
+    resolution = connection.get_raw_document(VIDEO_MEDIA_RESOLUTIONS, key) or {}
+    primary = next((a for a in resolution.get("assets", []) if a.get("fileId") == resolution.get("primaryFileId")), {})
+    if resolution.get("status") != "resolved" or (resolution.get("pairing") or {}).get("status") != "verified" or primary.get("mediaType") != "FV":
+        return {"ok": False, "reason": "media_not_resolved"}
+    old, version = connection.get_raw_document_versioned(FIRESTORE_VIDEO_CURATION_GATES_COLLECTION, key)
+    if old != payload.get("expectedGate"):
+        return {"ok": False, "reason": "gate_changed"}
+    if (old or {}).get("decision") in {"hold", "reject"} or ((old or {}).get("poetryPleaseHandoff") or {}).get("status"):
+        return {"ok": False, "reason": "explicit_hold_or_attempt"}
+    if candidate.get("publicationRestricted") or candidate.get("releaseStatus") or float(candidate.get("baseScore") or 0) < 8.5 or int(candidate.get("reviewCount") or 0) < 5 or not candidate.get("excerptRecordIds"):
+        return {"ok": False, "reason": "standing_policy_not_satisfied"}
+    released_file = re.match(r"^https://drive\.google\.com/file/d/([A-Za-z0-9_-]+)(?:/|$)", normalize_text((old or {}).get("publishableAssetUrl")))
+    if (old or {}).get("decision") == "ready_for_poetry_please" and released_file and released_file.group(1) == primary.get("fileId") and (candidate.get("sourceMediaType") != "FV" or (old or {}).get("sourceReviewFileId")):
+        return {"ok": True, "saved": False, "record": old}
+    now = utc_now_iso()
+    root = normalize_text((old or {}).get("sourceReviewFileId")) or normalize_text(resolution.get("reviewedSourceFileId")) or source
+    record = {**candidate, **(old or {}), "gateId": key, "candidateId": f"weaver:video:{event}:{source}",
+              "videoRecordId": f"weaver:video:{root}", "sourceReviewFileId": root,
+              "decision": "ready_for_poetry_please", "status": "ready_for_poetry_please", "handoffStatus": "ready",
+              "baseScore": candidate.get("baseScore"), "candidateScore": candidate.get("baseScore"), "excerptBonus": 0, "reviewCount": candidate.get("reviewCount"),
+              "publishableAssetUrl": primary["url"], "selectedExcerptRecordIds": (old or {}).get("selectedExcerptRecordIds") or candidate["excerptRecordIds"],
+              "decidedBy": "weaver:auto", "decidedAt": now, "updatedAt": now,
+              "releaseApproval": {"kind": "standing_policy", "minScore": 8.5, "minReviewers": 5, "mediaResolutionRevision": resolution["revision"], "at": now},
+              "history": (list((old or {}).get("history") or []) + [{"event": "standing_policy_ready_after_media_resolution", "at": now, "previousDecision": (old or {}).get("decision")}])[-40:]}
+    for field in ["gate", "mediaResolution", "knownAssets", "ratings", "reviewEvidence"]:
+        record.pop(field, None)
+    saved = (connection.write_raw_document_if_unchanged(FIRESTORE_VIDEO_CURATION_GATES_COLLECTION, key, record, version)
+             if old else connection.create_raw_document_if_absent(FIRESTORE_VIDEO_CURATION_GATES_COLLECTION, key, record))
+    return {"ok": bool(saved), "saved": bool(saved), "record": saved, "reason": "" if saved else "gate_changed"}
 
 
 def get_video_media_classification(connection, payload):
@@ -2372,6 +2454,12 @@ def main() -> int:
             result = claim_video_pipeline(connection, payload)
         elif action == "save_video_pipeline":
             result = save_video_pipeline(connection, payload)
+        elif action == "get_video_media_resolutions":
+            result = get_video_media_resolutions(connection, payload)
+        elif action == "save_video_media_resolution":
+            result = save_video_media_resolution(connection, payload)
+        elif action == "prepare_resolved_video_gate":
+            result = prepare_resolved_video_gate(connection, payload)
         elif action == "get_video_media_classification":
             result = get_video_media_classification(connection, payload)
         elif action == "get_video_pipeline":

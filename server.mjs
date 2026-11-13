@@ -1,3 +1,5 @@
+import {createVideoResolutionService} from './video_resolution_service.mjs';
+import {assertResolvedVideoMedia,mediaResolutionPublic,normalizeVideoIdentity} from './video_resolution.mjs';
 import {recordedFolderMediaType,traceVideoFolderMediaType,videoFileMediaType} from './video_media_classification.mjs';
 import {VIDEO_AUTO_POLICY, advanceVideoPipeline, localVideoPipelineState, publicVideoPipelineState, videoPipelineKey} from './video_pipeline.mjs';
 import {verifyVideoPipelineCaller} from './video_pipeline_auth.mjs';
@@ -231,6 +233,7 @@ const ADMIN_MUTATION_PATHS = new Set([
   "/api/save-review-single",
   "/api/save-reviews",
   "/api/admin/video-pipeline/run",
+  "/api/admin/video-media-links", "/api/admin/video-media-scope", "/api/admin/video-media-resolutions",
   "/api/admin/video-curation-gates",
   "/api/admin/video-curation-gates/handoff",
   "/api/admin/video-curation-gates/context",
@@ -2164,6 +2167,7 @@ function overlayRuntimeHandoffState(record, handoffStateByRequestId = null) {
 async function fetchDriveJson(url) {
   const token = await getServiceAccountAccessToken();
   const response = await fetch(url, {
+    signal: AbortSignal.timeout(20000),
     headers: {
       Authorization: `Bearer ${token}`
     }
@@ -2220,7 +2224,7 @@ async function getDriveFolderMetadata(folderId) {
 
 async function getDriveFileMetadata(fileId) {
   const url = new URL(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}`);
-  url.searchParams.set("fields", "id,name,mimeType,trashed,parents,thumbnailLink,webViewLink,createdTime,videoMediaMetadata");
+  url.searchParams.set("fields", "id,name,mimeType,trashed,parents,thumbnailLink,webViewLink,createdTime,size,md5Checksum,videoMediaMetadata");
   url.searchParams.set("supportsAllDrives", "true");
   return fetchDriveJson(url);
 }
@@ -2374,12 +2378,15 @@ async function loadVideoReviewLibrary(reviewerEmail = "", prioritySetId = "") {
   if (selected && !PRIORITY_VIDEO_SETS.has(selected)) throw new Error("Unknown priority video set.");
   const sets = selected ? [PRIORITY_VIDEO_SETS.get(selected)] : Array.from(PRIORITY_VIDEO_SETS.values());
   const email = cleanSheetWhitespace(reviewerEmail).toLowerCase();
-  const [reviewResult, gateResult, pipelineResult] = await Promise.all([
+  const [reviewResult, gateResult, pipelineResult, mediaResult] = await Promise.all([
     syncWeaverRuntimeDb("get_curation_reviews", {}),
     syncWeaverRuntimeDb("get_video_curation_gates", {}),
-    syncWeaverRuntimeDb("get_video_pipeline", {})
+    syncWeaverRuntimeDb("get_video_pipeline", {}),
+    syncWeaverRuntimeDb("get_video_media_resolutions", {})
   ]);
   if (!reviewResult.ok || !gateResult.ok) throw new Error("Current video reviews or handoff statuses could not be read.");
+  if (!mediaResult?.ok) throw new Error("Durable video media resolutions could not be read.");
+  const mediaRecords = mediaResult.records || [];
   const gates = new Map((gateResult.records || []).map(g => [g.candidateId, g]));
   const pipelineStates = new Map((pipelineResult?.records || []).map(state=>[state.pipelineId,state]));
   const results = await Promise.all(sets.map(async set => {
@@ -2405,7 +2412,7 @@ async function loadVideoReviewLibrary(reviewerEmail = "", prioritySetId = "") {
         && g.poetryPleaseHandoff?.canonicalVideoId===canonicalId):null;
       const gate=currentGate?.poetryPleaseHandoff?.status==='sent_to_poetry_please'?currentGate:acceptedPrior||currentGate;
       const identityConfirmed=!requiresManualVideoIdentityReview({sourceMediaType:sourceMedia.sourceMediaType,sourceFileId:file.id,sourceReviewFileId:reviewRoot},file.webViewLink||`https://drive.google.com/file/d/${file.id}/view`,gate||{});
-      const status = videoLibraryStatus(progress, sourceMedia.sourceMediaType, videoReleaseStatus, gate,identityConfirmed);
+      const status = videoLibraryStatus(progress, sourceMedia.sourceMediaType, videoReleaseStatus, gate,identityConfirmed,mediaRecords.find(r=>r.type==='recording'&&r.prioritySetId===set.id&&r.sourceFileId===file.id));
       return {
         ...(set.inventoryTitles?.[file.id] ? {author:set.inventoryTitles[file.id].performer,poemTitle:set.inventoryTitles[file.id].title} : parsePriorityVideoFileName(file.name)),
         bookTitle:cleanSheetWhitespace(set.bookTitle),releaseCatalog:cleanSheetWhitespace(set.releaseCatalog),
@@ -2415,6 +2422,7 @@ async function loadVideoReviewLibrary(reviewerEmail = "", prioritySetId = "") {
         relatedVideoAssets:connections.filter(c=>c.sourceFileId===file.id).flatMap(c=>c.assets||[]),
         footageConnections:footageProvenanceForFile(connections,file.id),
         inventoryEventNames:[...new Set(connections.filter(c=>c.sourceFileId===file.id).map(c=>c.inventoryEventName))],
+        mediaResolution:mediaResolutionPublic(mediaRecords.find(r=>r.type==='recording'&&r.prioritySetId===set.id&&r.sourceFileId===file.id)),
         canonicalTextLinkStatus:"not_linked",weaverExcerptCount:progress.excerptCount,
         videoReleaseStatus,publicationRestricted:Boolean(videoReleaseStatus),reviewProgress:progress,
         pipeline:publicVideoPipelineState(pipelineStates.get(videoPipelineKey({prioritySetId:set.id,sourceFileId:file.id}))),
@@ -2553,6 +2561,34 @@ function buildVideoCurationCandidateId(prioritySetId, sourceFileId) {
   return `weaver:video:${prioritySetId}:${sourceFileId}`;
 }
 
+async function listVideoResolutionFolderEntries(folderId) {
+  if (!/^[-\w]{15,}$/.test(folderId)) throw new Error("Exact folder ID required");
+  const files = []; let pageToken = "";
+  do {
+    const url = new URL("https://www.googleapis.com/drive/v3/files");
+    url.searchParams.set("q", `'${folderId}' in parents and trashed=false and (mimeType contains 'video/' or mimeType='application/vnd.google-apps.folder')`);
+    url.searchParams.set("fields", "nextPageToken,incompleteSearch,files(id,name,mimeType,parents,webViewLink,size,md5Checksum,videoMediaMetadata)");
+    url.searchParams.set("pageSize", "1000"); url.searchParams.set("supportsAllDrives", "true"); url.searchParams.set("includeItemsFromAllDrives", "true");
+    if (pageToken) url.searchParams.set("pageToken", pageToken);
+    const result = await fetchDriveJson(url);
+    if (result.incompleteSearch) throw new Error("Drive reported an incomplete finished-folder search");
+    files.push(...(result.files || [])); pageToken = result.nextPageToken || "";
+    if (files.length > 1000) throw new Error("Finished-folder search exceeds event bounds");
+  } while (pageToken);
+  return files;
+}
+
+const videoResolutionService = createVideoResolutionService({
+  db:(action,payload)=>syncWeaverRuntimeDb(action,payload),getFile:id=>getDriveFileMetadata(id),
+  fileRole:url=>getVideoAssetMediaType(url),folderRole:id=>getVideoFolderMediaType(id),
+  listEntries:id=>listVideoResolutionFolderEntries(id),getSet:id=>PRIORITY_VIDEO_SETS.get(id),
+  getCandidates:id=>getVideoCurationCandidates(id),enqueue:(set,id,trigger)=>enqueueVideoPipeline(set,id,trigger)
+});
+
+async function attachVideoMediaResolutions(candidates) {
+  return videoResolutionService.attach(candidates);
+}
+
 async function getVideoCurationCandidates(prioritySetId = "") {
   const gateResult = await syncWeaverRuntimeDb("get_video_curation_gates", {});
   const gatesByCandidateId = new Map(
@@ -2659,7 +2695,7 @@ async function getVideoCurationCandidates(prioritySetId = "") {
       return candidate;
     }).filter(Boolean);
   }));
-  const rankedCandidates = candidatesBySet.flat();
+  const rankedCandidates = await attachVideoMediaResolutions(candidatesBySet.flat());
   return {
     ok: true,
     threshold: VIDEO_CURATION_CANDIDATE_THRESHOLD,
@@ -2687,15 +2723,22 @@ async function saveVideoCurationGate(payload = {}, decidedBy = "") {
   if (payload.decision === "ready_for_poetry_please" && !candidate.excerptRecordIds.length) {
     throw new Error("At least one excerpt must be pulled before sending this video to Poetry Please.");
   }
+  if (payload.publishableAssetUrl && cleanSheetWhitespace(payload.publishableAssetUrl) !== cleanSheetWhitespace(candidate.gate?.publishableAssetUrl)) {
+    throw new Error("Save video file links separately before changing the release decision.");
+  }
+  if (payload.decision === "ready_for_poetry_please") {
+    const primary = candidate.mediaResolution?.assets?.find(a=>a.fileId===candidate.mediaResolution.primaryFileId);
+    assertResolvedVideoMedia({...candidate,gate:{...candidate.gate,publishableAssetUrl:primary?.url}});
+  }
   const result = await syncWeaverRuntimeDb("upsert_video_curation_gate", {
     gate: {
       ...candidate,
       decision: cleanSheetWhitespace(payload.decision),
-      selectedExcerptRecordIds: candidate.excerptRecordIds,
+      selectedExcerptRecordIds: candidate.gate?.selectedExcerptRecordIds?.length ? candidate.gate.selectedExcerptRecordIds : (payload.decision === "ready_for_poetry_please" ? candidate.excerptRecordIds : []),
       editingInstructions: String(payload.editingInstructions || ""),
-      publishableAssetUrl: cleanSheetWhitespace(payload.publishableAssetUrl)
-        || (payload.decision === "ready_for_poetry_please" && candidate.sourceMediaType === "FV"
-          ? candidate.sourceVideoUrl : ""),
+      publishableAssetUrl: payload.decision === "ready_for_poetry_please"
+        ? candidate.mediaResolution.assets.find(a=>a.fileId===candidate.mediaResolution.primaryFileId).url
+        : candidate.gate?.publishableAssetUrl || "",
       note: String(payload.note || ""),
       decidedBy
     }
@@ -2747,6 +2790,7 @@ async function handoffVideoCurationGate(payload = {}) {
   const candidates = await getVideoCurationCandidates(prioritySetId);
   const candidate = candidates.candidates.find(item => item.prioritySetId === prioritySetId && item.sourceFileId === sourceFileId);
   if (!candidate?.gate) throw new Error("Save the video gate before sending it to Poetry Please.");
+  const verifiedMedia = await videoResolutionService.verifySelected(candidate);
   if (payload.automatic && (candidate.reviewCount < VIDEO_AUTO_POLICY.minReviewers
     || candidate.baseScore < VIDEO_AUTO_POLICY.minScore || !candidate.excerptRecordIds.length)) {
     throw new Error("Automatic video policy changed before send; no video was sent.");
@@ -2757,9 +2801,7 @@ async function handoffVideoCurationGate(payload = {}) {
   if (candidate.publicationRestricted) throw new Error("A publication-restricted source cannot be sent to Poetry Please.");
   if (!candidate.excerptRecordIds.length) throw new Error("At least one excerpt must be pulled before sending this video to Poetry Please.");
   const finalAssetUrl = cleanSheetWhitespace(candidate.gate.publishableAssetUrl);
-  const publishableAssetMediaType = candidate.sourceMediaType === "FV"
-    && driveFileId(finalAssetUrl) === candidate.sourceFileId
-    ? "FV" : await getVideoAssetMediaType(finalAssetUrl);
+  const publishableAssetMediaType = verifiedMedia.mediaType;
   const gate = { ...candidate.gate, publishableAssetMediaType };
   const record = buildWeaverVideoImport(candidate, gate);
   const receiptUrl = `${poetryPleaseApiUrl.replace(/\/$/, "")}/internal/weaverVideoReceipt?sourceRecordId=${encodeURIComponent(record.sourceRecordId)}`;
@@ -2946,20 +2988,25 @@ async function runVideoPipeline({dryRun = false, trigger = "scheduled"} = {}) {
   if (dryRun) {
     const result = await getVideoCurationCandidates();
     const states = result.candidates.map(candidate => localVideoPipelineState(candidate));
-    return {ok:true,dryRun:true,policy:VIDEO_AUTO_POLICY,count:states.length,
+    const preview = {ok:true,dryRun:true,scopeChecks:await videoResolutionService.previewScopes(),policy:VIDEO_AUTO_POLICY,count:states.length,
       stages:states.reduce((out,state)=>(out[state.stage]=(out[state.stage]||0)+1,out),{})};
+    console.log("[video-resolution-preview]",JSON.stringify(preview));
+    return preview;
   }
   const claim = await syncWeaverRuntimeDb("claim_video_pipeline", {trigger});
+  const pipelineStartedAt = Date.now();
   if (!claim?.claimed) return {ok:true,skipped:true,reason:claim?.reason||"runner_active"};
   let states = [];
   try {
     const [result, previous] = await Promise.all([getVideoCurationCandidates(), syncWeaverRuntimeDb("get_video_pipeline", {})]);
     if (!previous.ok) throw new Error("Pipeline state could not be read");
-    const run = await advanceVideoPipeline({candidates:result.candidates,previous:previous.records,
+    const resolution = await videoResolutionService.prepare(result.candidates);
+    const run = await advanceVideoPipeline({candidates:resolution.candidates,previous:previous.records,
+      budgetMs:Math.max(30000,260000-(Date.now()-pipelineStartedAt)),
       inspect:candidate=>inspectVideoPipelineCandidate(candidate),
       deliver:candidate=>autoAdvanceVideoCuration(candidate.prioritySetId,candidate.sourceFileId)});
     states = run.states;
-    const summary = {policy:VIDEO_AUTO_POLICY,checked:run.checked,sends:run.sends,count:states.length,
+    const summary = {policy:VIDEO_AUTO_POLICY,resolutionsChecked:resolution.checked,checked:run.checked,sends:run.sends,count:states.length,
       stages:states.reduce((out,state)=>(out[state.stage]=(out[state.stage]||0)+1,out),{})};
     const saved = await syncWeaverRuntimeDb("save_video_pipeline", {token:claim.token,states,summary});
     if (!saved?.ok) throw new Error(saved?.error||"Pipeline state save failed");
@@ -2982,33 +3029,11 @@ async function autoAdvanceVideoCuration(prioritySetId, sourceFileId) {
   const candidate = candidates.candidates.find(item => item.sourceFileId === sourceFileId);
   if (!candidate || candidate.publicationRestricted || candidate.candidateScore < VIDEO_AUTO_POLICY.minScore || !candidate.excerptRecordIds.length) return null;
   if (candidate.reviewCount < VIDEO_AUTO_POLICY.minReviewers || candidate.gate?.poetryPleaseHandoff?.status) return null;
-  if (candidate.gate && candidate.gate.decision !== "ready_for_poetry_please") return null;
-  if (!["OM", "FV"].includes(candidate.sourceMediaType)) return { status: "needs_media_classification" };
-
-  const knownPublishableUrl = candidate.sourceMediaType === "FV" ? candidate.sourceVideoUrl : "";
-  const publishableAssetUrl = cleanSheetWhitespace(candidate.gate?.publishableAssetUrl || knownPublishableUrl);
-  if (!publishableAssetUrl) {
-    if (!candidate.gate) {
-      await syncWeaverRuntimeDb("upsert_video_curation_gate", {
-        gate: { ...candidate, decision: "send_to_editing", note: "Qualified for Poetry Please review; finished video needed.", decidedBy: "weaver:auto" }
-      });
-    }
-    return { status: "send_to_editing" };
-  }
-  if (!candidate.gate) {
-    await syncWeaverRuntimeDb("upsert_video_curation_gate", {
-      gate: { ...candidate, decision: "ready_for_poetry_please", publishableAssetUrl, decidedBy: "weaver:auto" }
-    });
-    invalidateQueueSnapshots();
-  }
-  if (requiresManualVideoIdentityReview(candidate, publishableAssetUrl, candidate.gate)) {
-    return { status: "ready_for_poetry_please", requiresManualIdentityReview: true };
-  }
-  if (candidate.existingCanonicalVideoId && !candidate.gate?.poetryPleaseHandoff?.status) {
-    return { status: "ready_for_poetry_please", requiresExistingCanonicalReconciliation: true };
-  }
-  const handoff = await handoffVideoCurationGate({ prioritySetId, sourceFileId, automatic: true });
-  return { status: handoff.ok ? "sent_to_poetry_please" : "already_started", ...handoff };
+  if (candidate.gate?.decision !== "ready_for_poetry_please") return null;
+  assertResolvedVideoMedia(candidate);
+  if (candidate.existingCanonicalVideoId) return {status:"ready_for_poetry_please",requiresExistingCanonicalReconciliation:true};
+  const handoff = await handoffVideoCurationGate({prioritySetId,sourceFileId,automatic:true});
+  return {status:handoff.ok?"sent_to_poetry_please":"already_started",...handoff};
 }
 
 async function savePriorityVideoReview(payload = {}) {
@@ -8963,6 +8988,18 @@ const server = http.createServer(async (req, res) => {
     } catch (error) {
       return sendJson(res, Number(error.statusCode || 500), { ok: false, error: error.message });
     }
+  }
+
+  if (url.pathname === "/api/admin/video-media-resolutions" && req.method === "GET") {
+    try { await verifyAdministrativeCaller(req); return sendJson(res,200,{ok:true,records:await videoResolutionService.read()}); }
+    catch(error){return sendJson(res,Number(error.statusCode||503),{ok:false,error:error.message});}
+  }
+  if (["/api/admin/video-media-links","/api/admin/video-media-scope"].includes(url.pathname) && req.method === "POST") {
+    try {
+      const admin=req.weaverAdmin||await verifyAdministrativeCaller(req),payload=JSON.parse(await readRequestBody(req)||"{}");
+      const result=url.pathname.endsWith("media-links")?await videoResolutionService.saveLinks(payload,admin.email):await videoResolutionService.saveScope(payload,admin.email);
+      invalidateQueueSnapshots();return sendJson(res,200,result);
+    }catch(error){return sendJson(res,Number(error.statusCode||409),{ok:false,error:error.message});}
   }
 
   if (url.pathname === "/api/admin/video-curation-gates" && req.method === "POST") {

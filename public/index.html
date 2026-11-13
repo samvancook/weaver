@@ -519,6 +519,19 @@
                 <option value="all">All videos</option>
               </select>
             </label>
+            <section aria-label="Media resolution and editing queue">
+              <h4>Media resolution &amp; editing queue</h4>
+              <p>The scheduled worker checks finished edits before requesting editing. Uncertain matches stay here for resolution.</p>
+              <button type="button" class="button button--secondary" id="video-media-resolution-refresh">Refresh resolution queue</button>
+              <div id="video-media-resolution-queue" aria-live="polite"></div>
+              <details><summary>Finished-edit search folders for the selected event</summary>
+                <label class="field"><span>Finished-video folders — one per line</span><textarea id="video-finished-search-folders"></textarea></label>
+                <label><input type="checkbox" id="video-finished-coverage"> These folders cover this event’s finished edits, or no finished-edit folder exists yet.</label>
+                <label class="field"><span>Scope confirmation evidence</span><textarea id="video-finished-scope-evidence"></textarea></label>
+                <button type="button" class="button button--secondary" id="video-finished-scope-save">Save event search scope</button>
+                <p id="video-finished-scope-state" role="status"></p>
+              </details>
+            </section>
             <div id="video-curation-candidates" aria-live="polite"></div>
           </section>
         </details>

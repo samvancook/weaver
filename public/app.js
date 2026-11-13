@@ -1790,6 +1790,13 @@ function videoPipelineNextStep(candidate) {
   if (gate.decision === "hold" || gate.decision === "reject") return "Editorial hold · no delivery action.";
   if (candidate.sourceMediaType === "unknown") return `Next: verify the source as OM or FV. Classification: ${candidate.sourceMediaTypeReason || "not verified"}. No automatic editing or delivery decision will be made.`;
   if (gate.decision === "send_to_editing") return candidate.sourceMediaType === "OM" ? "Next: attach the finished edit while preserving the reviewed recording identity." : "Next: review the saved editing decision; the current source is marked FV.";
+  if (candidate.mediaResolutionRequired) {
+    const media=candidate.mediaResolution;
+    if (!media) return "The scheduled worker will resolve this review file and check for existing edits.";
+    if (media.status === "resolved") return gate.decision === "ready_for_poetry_please" ? "Verified finished media · ready for receiver preflight." : "Finished media verified · waiting for the release-policy check.";
+    if (media.status === "editing_requested") return "Editing requested after a complete event lookup found no matching finished edit.";
+    return media.reason || "Media resolution needs a check.";
+  }
   if (gate.decision !== "ready_for_poetry_please") return "Next: choose an editorial decision. Ratings and excerpt counts do not select the video for you.";
   if (candidate.sourceMediaType === "OM") return "Next: attach the finished edit while preserving the reviewed recording identity.";
   if (candidate.requiresManualIdentityReview) return "Next: verify the original recording identity using the evidence form below.";
@@ -1937,22 +1944,33 @@ function renderVideoCurationCandidates() {
       ${candidate.isEligible || candidate.gate ? `
       <label class="field"><span>Decision</span><select data-field="decision">
         <option value="">Choose</option>
-        <option value="send_to_editing">Send to editing</option>
+        <option value="send_to_editing" disabled>Legacy editing route — resolver checks existing edits</option>
         <option value="ready_for_poetry_please">Ready for Poetry Please</option>
         <option value="hold">Hold</option>
         <option value="reject">Reject</option>
       </select></label>
-      <label class="field"><span>Final publishable video URL</span><input data-field="publishableAssetUrl" type="url" value="${escapeAttribute(gate.publishableAssetUrl || suggestedPublishableAssetUrl)}"></label>
+      <fieldset><legend>Linked video files</legend>
+      <p>Save files without changing release decisions or excerpt approvals. After media verification, the approved 8.5/five-reviewer policy can advance this recording automatically. Use Hold to pause delivery.</p>
+      <label class="field"><span>Source role</span><select data-field="sourceRole"><option value="unknown">Needs confirmation</option><option value="OM">Original media (OM)</option><option value="FV">Finished video (FV)</option></select></label>
+      <label class="field"><span>Video file links — one per line</span><textarea data-field="assetUrls">${escapeHtml((candidate.mediaResolution?.assets||[]).map(a=>a.url).join("\n") || gate.publishableAssetUrl || suggestedPublishableAssetUrl)}</textarea></label>
+      <label class="field"><span>Selected finished file URL</span><input data-field="primaryAssetUrl" type="url" value="${escapeAttribute(candidate.mediaResolution?.primaryUrl || gate.publishableAssetUrl || suggestedPublishableAssetUrl)}"></label>
+      <label class="field"><span>Pairing evidence or source-role confirmation</span><textarea data-field="pairingEvidence">${escapeHtml(candidate.mediaResolution?.pairing?.evidence || "")}</textarea></label>
+      <label><input type="checkbox" data-field="confirmPairing"> I confirm the selected finished file belongs to this reviewed recording.</label>
+      <button type="button" class="button button--secondary" data-action="save-links">Save file links</button>
+      <p role="status" data-media-state>${escapeHtml(candidate.mediaResolution?.reason || "Media resolution has not run yet.")}</p>
+      </fieldset>
       <label class="field"><span>Editing instructions</span><textarea data-field="editingInstructions">${escapeHtml(gate.editingInstructions || "")}</textarea></label>
       <label class="field"><span>Decision note</span><textarea data-field="note">${escapeHtml(gate.note || "")}</textarea></label>
       <p>${escapeHtml(gate.poetryPleaseHandoff?.status || gate.handoffStatus || "")}</p>
       ${gate.poetryPleaseHandoff?.durableCopyStatus ? `<p>PP copy: ${escapeHtml(gate.poetryPleaseHandoff.durableCopyStatus)}${gate.poetryPleaseHandoff.durableByteCount ? ` · ${Number(gate.poetryPleaseHandoff.durableByteCount).toLocaleString()} bytes` : ""}${gate.poetryPleaseHandoff.reviewOnly ? " · Review only" : ""}${gate.poetryPleaseHandoff.durableCopyError ? ` · ${escapeHtml(gate.poetryPleaseHandoff.durableCopyError)}` : ""}</p>` : ""}
-      <button type="button" class="button button--secondary" data-action="save">Save Decision</button>
+      <button type="button" class="button button--secondary" data-action="save">Save release decision</button>
       ${gate.decision === "ready_for_poetry_please" && !gate.poetryPleaseHandoff?.status && !candidate.existingCanonicalVideoId && !candidate.requiresManualIdentityReview ? '<button type="button" class="button" data-action="handoff">Send to Poetry Please</button>' : ""}
       ${gate.decision === "ready_for_poetry_please" && gate.poetryPleaseHandoff?.status === "failed" && !candidate.existingCanonicalVideoId ? '<button type="button" class="button button--secondary" data-action="retry-timeout">Retry verified failed timeout</button>' : ""}
       ${gate.poetryPleaseHandoff?.status === "sent_to_poetry_please" && gate.poetryPleaseHandoff?.canonicalVideoId ? '<button type="button" class="button button--secondary" data-action="receipt">Refresh PP receipt</button>' : ""}
       ` : ""}
       `;
+      if (article.querySelector('[data-field="sourceRole"]')) article.querySelector('[data-field="sourceRole"]').value = candidate.mediaResolution?.sourceRole || candidate.sourceMediaType || "unknown";
+      article.querySelector('[data-action="save-links"]')?.addEventListener("click", () => saveVideoFileLinks(candidate, article));
       if (article.querySelector('[data-field="decision"]')) article.querySelector('[data-field="decision"]').value = gate.decision || "";
       article.querySelector('[data-action="resolve-identity"]')?.addEventListener("click", () => resolveReviewedVideoIdentity(candidate, article));
       article.querySelector('[data-action="inspect-receiver"]')?.addEventListener("click", () => inspectVideoReceiverState(candidate, article));
@@ -2055,9 +2073,52 @@ async function loadVideoCurationCandidates() {
       videoWorkspaceFilterApplied = true;
     }
     renderVideoExcerptDelivery();
+    await loadVideoMediaResolutionQueue();
   } catch (error) {
     if (elements.videoCurationStatus) elements.videoCurationStatus.textContent = error.message;
   }
+}
+
+async function saveVideoFileLinks(candidate, article) {
+  const field=name=>article.querySelector(`[data-field="${name}"]`)?.value||"";
+  const state=article.querySelector("[data-media-state]"),button=article.querySelector('[data-action="save-links"]');
+  button.disabled=true;
+  try {
+    const primaryUrl=field("primaryAssetUrl"),primaryFileId=primaryUrl.match(/\/file\/d\/([\w-]+)/)?.[1]||"";
+    const urls=[...new Set([...field("assetUrls").split(/\r?\n/),primaryUrl].map(v=>v.trim()).filter(Boolean))];
+    const response=await adminFetch("/api/admin/video-media-links",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({prioritySetId:candidate.prioritySetId,sourceFileId:candidate.sourceFileId,
+      urls,primaryFileId,sourceRole:field("sourceRole"),confirmPairing:article.querySelector('[data-field="confirmPairing"]').checked,evidence:field("pairingEvidence"),expectedRevision:candidate.mediaResolution?.revision||0})});
+    const result=await response.json().catch(()=>({}));if(!response.ok||!result.ok)throw Error(result.error||"File links were not saved");
+    state.textContent="File links saved. Release decision and excerpt approval unchanged.";setStatus(state.textContent);await loadVideoCurationCandidates();
+  }catch(error){state.textContent=error.message;}finally{button.disabled=false;}
+}
+
+async function loadVideoMediaResolutionQueue() {
+  const list=document.getElementById("video-media-resolution-queue");if(!list)return;
+  try {
+    const response=await adminFetch("/api/admin/video-media-resolutions"),body=await response.json();if(!response.ok||!body.ok)throw Error(body.error||"Resolution queue unavailable");
+    const records=body.records||[];list.replaceChildren();
+    for(const row of records.filter(r=>r.type==='recording'&&r.status!=='resolved')){
+      const item=document.createElement("p"),link=document.createElement("a");link.textContent=`${row.author||""} · ${row.title||""}`;
+      link.href=`/?view=videos&prioritySetId=${encodeURIComponent(row.prioritySetId)}`;item.append(link,document.createTextNode(` — ${row.status}: ${row.reason||""}${row.editingRequest?.status==='open'?` · Editing request ${row.editingRequest.requestId}`:""}`));list.append(item);
+    }
+    if(!list.childElementCount)list.textContent="No unresolved media or open editing requests.";
+    const event=elements.videoCurationEvent?.value||"",c=videoCurationCandidates.find(c=>(c.sourceEvent||c.eventName||c.prioritySetLabel)===event);
+    const scope=c?records.find(r=>r.type==='event_scope'&&r.prioritySetId===c.prioritySetId):null;
+    const folders=document.getElementById("video-finished-search-folders");if(folders&&document.activeElement!==folders){folders.value=(scope?.finishedFolderIds||[]).map(id=>`https://drive.google.com/drive/folders/${id}`).join("\n");folders.dataset.revision=String(scope?.revision||0);}
+  }catch(error){list.textContent=error.message;}
+}
+
+async function saveVideoFinishedScope() {
+  const state=document.getElementById("video-finished-scope-state");
+  try {
+    const event=elements.videoCurationEvent?.value||"",candidates=videoCurationCandidates.filter(c=>(c.sourceEvent||c.eventName||c.prioritySetLabel)===event);
+    const sets=[...new Set(candidates.map(c=>c.prioritySetId))];if(sets.length!==1)throw Error("Choose one event before confirming its finished-edit folders");
+    const field=document.getElementById("video-finished-search-folders"),values=field.value.split(/\r?\n/).map(v=>v.trim()).filter(Boolean);
+    const finishedFolderIds=values.map(v=>v.match(/\/folders\/([\w-]+)/)?.[1]||v);
+    const response=await adminFetch("/api/admin/video-media-scope",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({prioritySetId:sets[0],finishedFolderIds,expectedRevision:Number(field.dataset.revision||0),confirmedCoverage:document.getElementById("video-finished-coverage").checked,evidence:document.getElementById("video-finished-scope-evidence").value})});
+    const result=await response.json();if(!response.ok||!result.ok)throw Error(result.error||"Search scope was not saved");state.textContent="Event search scope saved. The scheduled worker will check it.";await loadVideoMediaResolutionQueue();
+  }catch(error){state.textContent=error.message;}
 }
 
 async function saveVideoCurationDecision(candidate, article) {
@@ -2066,7 +2127,6 @@ async function saveVideoCurationDecision(candidate, article) {
     prioritySetId: candidate.prioritySetId,
     sourceFileId: candidate.sourceFileId,
     decision: field("decision"),
-    publishableAssetUrl: field("publishableAssetUrl"),
     editingInstructions: field("editingInstructions"),
     note: field("note")
   };
@@ -7759,3 +7819,6 @@ async function initializeApp() {
 }
 
 initializeApp();
+
+document.getElementById("video-media-resolution-refresh")?.addEventListener("click",loadVideoMediaResolutionQueue);
+document.getElementById("video-finished-scope-save")?.addEventListener("click",saveVideoFinishedScope);
