@@ -2918,8 +2918,17 @@ async function enqueueVideoPipeline(prioritySetId, sourceFileId, trigger) {
 }
 
 async function inspectVideoPipelineCandidate(candidate) {
-  const inspection = await inspectVideoReceiverState(candidate.prioritySetId,candidate.sourceFileId);
-  const receipt = inspection.receipt;
+  const read = async path => {
+    const response = await fetch(`${poetryPleaseApiUrl.replace(/\/$/, "")}/internal/${path}`, {
+      headers:{"x-api-key":poetryPleaseApiKey},signal:AbortSignal.timeout(15000)});
+    const body = await response.json().catch(()=>({}));
+    if (!response.ok) throw new Error(body.error||`Receiver check failed (${response.status})`);
+    return body;
+  };
+  const receipt = await read(`weaverVideoReceipt?sourceRecordId=${encodeURIComponent(candidate.videoRecordId)}`);
+  const summary = summarizeVideoReceiverState(candidate,receipt);
+  const versions = summary.received ? await read(`videoRenditions?videoId=${encodeURIComponent(summary.canonicalVideoId)}`) : null;
+  const inspection = {receiver:summarizeVideoReceiverState(candidate,receipt,versions),readiness:receipt.readiness||null,receipt};
   if (!receipt?.received || !candidate.gate) return inspection;
   const gate = candidate.gate, handoff = gate.poetryPleaseHandoff || {};
   if (["sending","failed","needs_reconciliation"].includes(handoff.status)) {
