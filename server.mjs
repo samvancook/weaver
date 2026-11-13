@@ -1,4 +1,4 @@
-import {traceVideoFolderMediaType,videoFileMediaType} from './video_media_classification.mjs';
+import {recordedFolderMediaType,traceVideoFolderMediaType,videoFileMediaType} from './video_media_classification.mjs';
 import {VIDEO_AUTO_POLICY, advanceVideoPipeline, localVideoPipelineState, publicVideoPipelineState, videoPipelineKey} from './video_pipeline.mjs';
 import {verifyVideoPipelineCaller} from './video_pipeline_auth.mjs';
 import { resolveEventTarget } from "./footage_event_links.mjs";
@@ -2229,7 +2229,17 @@ const videoFolderTypeCache = new Map();
 async function getVideoFolderMediaType(folderId) {
   const cached = videoFolderTypeCache.get(folderId);
   if (cached && cached.expiresAt > Date.now()) return cached.value;
-  const value = traceVideoFolderMediaType(folderId, getDriveFileMetadata);
+  const value = (async () => {
+    const observed = await traceVideoFolderMediaType(folderId, getDriveFileMetadata);
+    if (observed.sourceMediaType !== 'unknown') return observed;
+    try {
+      const saved = await syncWeaverRuntimeDb('get_video_media_classification', {sourceFolderId:folderId});
+      if (!saved?.ok) throw new Error('Classification evidence unavailable');
+      return recordedFolderMediaType(observed, saved.records?.[0], folderId);
+    } catch {
+      return {...observed,sourceMediaTypeRecordStatus:'unavailable'};
+    }
+  })();
   videoFolderTypeCache.set(folderId, { value, expiresAt: Date.now() + 5 * 60_000 });
   return value;
 }

@@ -29,7 +29,7 @@ export async function traceVideoFolderMediaType(folderId,getFolder) {
   if(['folder_cycle','folder_depth_limit','multiple_parents'].includes(traceStatus)){
     result.sourceMediaType='unknown';result.sourceMediaTypeFolderId='';result.sourceMediaTypeReason=traceStatus;
   }else if(result.sourceMediaType==='unknown'&&result.sourceMediaTypeReason!=='conflicting_folder_roles'&&traceStatus!=='complete')result.sourceMediaTypeReason=traceStatus;
-  return {...result,sourceMediaTypeTraceStatus:traceStatus,
+  return {...result,sourceMediaTypeTraceStatus:traceStatus,sourceMediaTypeObservedFolders:folders.map(f=>({id:f.id,name:f.name})),
     ...(traceStatus!=='complete'?{sourceMediaTypeTraceStoppedAt:currentId}:{})};
 }
 export function videoFileMediaType(set,file,fallback) {
@@ -40,4 +40,20 @@ export function videoFileMediaType(set,file,fallback) {
   return {sourceMediaType:type,sourceMediaTypeFolderId:'',sourceMediaLabel:'Inventory-linked video',
     sourceMediaTypeReason:type==='unknown'?(types.size>1?'conflicting_inventory_roles':'inventory_role_unverified'):'exact_inventory_asset',
     sourceMediaTypeEvidence:assets.map(a=>({driveFileId:a.driveFileId,mediaType:a.mediaType,mediaTypeEvidence:a.mediaTypeEvidence||null}))};
+}
+
+// Administrative evidence is private durable ledger data, bound to the exact
+// currently listed source folder. It never changes approval or recording identity.
+export function recordedFolderMediaType(observed,record,folderId,now=Date.now()) {
+  if(observed.sourceMediaType!=='unknown'||!['no_explicit_folder_role','ancestor_unavailable'].includes(observed.sourceMediaTypeReason))return observed;
+  const path=record?.folderPath||[],first=observed.sourceMediaTypeObservedFolders?.[0];
+  const connected=path.length>1&&path.every((f,i)=>i===path.length-1||f.parentId===path[i+1].id);
+  const proof=classifyDriveFolderPath(path);
+  if(record?.schemaVersion!=='1'||record.status!=='confirmed'||record.verificationSource!=='drive_metadata'
+    ||record.sourceFolderId!==folderId||path[0]?.id!==folderId||first?.id!==folderId||path[0]?.name!==first.name
+    ||!connected||!['OM','FV'].includes(record.mediaType)||proof.sourceMediaType!==record.mediaType
+    ||!clean(record.verifiedBy).includes('@')||!Number.isFinite(Date.parse(record.verifiedAt))||Date.parse(record.verifiedAt)>now+300000)return observed;
+  return {...observed,sourceMediaType:record.mediaType,sourceMediaTypeFolderId:proof.sourceMediaTypeFolderId,
+    sourceMediaTypeReason:'recorded_drive_ancestry',sourceMediaTypeEvidence:proof.sourceMediaTypeEvidence,
+    sourceMediaTypeVerification:{sourceFolderId:folderId,verifiedAt:record.verifiedAt,verificationSource:record.verificationSource}};
 }

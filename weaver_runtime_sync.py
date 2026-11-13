@@ -76,7 +76,7 @@ FIRESTORE_HANDOFF_ACTIONS = {
     "release_video_curation_handoff_claim",
     "finish_video_curation_handoff",
     "refresh_video_curation_receipt",
-    "get_video_curation_gates",
+    "get_video_curation_gates", "get_video_media_classification",
     "claim_video_pipeline", "save_video_pipeline", "get_video_pipeline", "enqueue_video_pipeline", "reconcile_video_pipeline_gate",
 }
 
@@ -1155,6 +1155,14 @@ def save_video_pipeline(connection, payload):
               "lastRun": payload.get("summary") or {}}
     saved = write_video_pipeline_record(connection, FIRESTORE_VIDEO_PIPELINE_CONTROL, "runner", record, version)
     return {"ok": bool(saved), "savedCount": len(records), "finished": bool(saved)}
+
+
+def get_video_media_classification(connection, payload):
+    folder_id = normalize_text(payload.get("sourceFolderId"))
+    if not re.fullmatch(r"[A-Za-z0-9_-]{15,}", folder_id):
+        raise ValueError("Exact Drive sourceFolderId is required")
+    record = connection.get_raw_document("videoMediaClassifications", folder_id)
+    return {"ok": True, "records": [record] if record else []}
 
 
 def fetch_video_curation_gates(connection, payload: dict[str, Any]) -> dict[str, Any]:
@@ -2364,6 +2372,8 @@ def main() -> int:
             result = claim_video_pipeline(connection, payload)
         elif action == "save_video_pipeline":
             result = save_video_pipeline(connection, payload)
+        elif action == "get_video_media_classification":
+            result = get_video_media_classification(connection, payload)
         elif action == "get_video_pipeline":
             result = get_video_pipeline(connection, payload)
         elif action == "enqueue_video_pipeline":

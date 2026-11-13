@@ -25,3 +25,13 @@ test('an old automatic editing gate cannot turn an unclassified source into an e
  assert.equal(localVideoPipelineState({...c,sourceMediaType:'FV'}).stage,'needs_editing_decision');
  assert.equal(localVideoPipelineState({...c,gate:{decision:'hold'}}).stage,'held');
 });
+
+test('verified administrative ancestry resolves hidden parents only for the exact still-matching folder',async()=>{
+ const {recordedFolderMediaType}=await import('../video_media_classification.mjs');
+ const observed=await traceVideoFolderMediaType('camera',async()=>({id:'camera',name:'Camera Y'}));
+ const record={schemaVersion:'1',status:'confirmed',verificationSource:'drive_metadata',sourceFolderId:'camera',mediaType:'OM',verifiedBy:'admin@example.com',verifiedAt:new Date().toISOString(),folderPath:[{id:'camera',name:'Camera Y',parentId:'om'},{id:'om',name:'Original Media (OM)'}]};
+ assert.equal(recordedFolderMediaType(observed,record,'camera').sourceMediaType,'OM');
+ for(const patch of [{status:'revoked'},{sourceFolderId:'other'},{mediaType:'FV'},{verifiedBy:''},{folderPath:[{id:'camera',name:'Changed',parentId:'om'},record.folderPath[1]]},{folderPath:[{...record.folderPath[0],parentId:'wrong'},record.folderPath[1]]}])assert.equal(recordedFolderMediaType(observed,{...record,...patch},'camera').sourceMediaType,'unknown');
+ assert.equal(recordedFolderMediaType({...observed,sourceMediaTypeReason:'multiple_parents'},record,'camera').sourceMediaType,'unknown');
+ assert.equal(recordedFolderMediaType({...observed,sourceMediaType:'FV'},record,'camera').sourceMediaType,'FV');
+});

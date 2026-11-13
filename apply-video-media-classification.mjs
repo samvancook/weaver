@@ -3,7 +3,7 @@ const root=process.argv[2]||'/app',patches=[
   {
     "file": "server.mjs",
     "before": "async function getVideoFolderMediaType(folderId) {\n  const cached = videoFolderTypeCache.get(folderId);\n  if (cached && cached.expiresAt > Date.now()) return cached.value;\n  const value = (async () => {\n    try {\n      const folders = [];\n      const visited = new Set();\n      let currentId = folderId;\n      while (currentId && !visited.has(currentId) && folders.length < 20) {\n        visited.add(currentId);\n        const folder = await getDriveFileMetadata(currentId);\n        folders.push(folder);\n        currentId = Array.isArray(folder.parents) ? folder.parents[0] : \"\";\n      }\n      if (currentId) return { sourceMediaType: \"unknown\", sourceMediaTypeFolderId: \"\" };\n      return classifyDriveFolderPath(folders);\n    } catch {\n      return { sourceMediaType: \"unknown\", sourceMediaTypeFolderId: \"\" };\n    }\n  })();\n  videoFolderTypeCache.set(folderId, { value, expiresAt: Date.now() + 5 * 60_000 });\n  return value;\n}\n",
-    "after": "async function getVideoFolderMediaType(folderId) {\n  const cached = videoFolderTypeCache.get(folderId);\n  if (cached && cached.expiresAt > Date.now()) return cached.value;\n  const value = traceVideoFolderMediaType(folderId, getDriveFileMetadata);\n  videoFolderTypeCache.set(folderId, { value, expiresAt: Date.now() + 5 * 60_000 });\n  return value;\n}\n"
+    "after": "async function getVideoFolderMediaType(folderId) {\n  const cached = videoFolderTypeCache.get(folderId);\n  if (cached && cached.expiresAt > Date.now()) return cached.value;\n  const value = (async () => {\n    const observed = await traceVideoFolderMediaType(folderId, getDriveFileMetadata);\n    if (observed.sourceMediaType !== 'unknown') return observed;\n    try {\n      const saved = await syncWeaverRuntimeDb('get_video_media_classification', {sourceFolderId:folderId});\n      if (!saved?.ok) throw new Error('Classification evidence unavailable');\n      return recordedFolderMediaType(observed, saved.records?.[0], folderId);\n    } catch {\n      return {...observed,sourceMediaTypeRecordStatus:'unavailable'};\n    }\n  })();\n  videoFolderTypeCache.set(folderId, { value, expiresAt: Date.now() + 5 * 60_000 });\n  return value;\n}\n"
   },
   {
     "file": "server.mjs",
@@ -54,12 +54,27 @@ const root=process.argv[2]||'/app',patches=[
     "file": "public/app.js",
     "before": "      <p>${escapeHtml(candidate.prioritySetLabel || \"\")} \u00b7 ${escapeHtml(candidate.sourceMediaType || \"unknown\")} \u00b7 Reviewer average ${Number(candidate.baseScore || 0).toFixed(2)}${candidate.isEligible ? \"\" : \" \u00b7 Below candidate threshold\"}</p>\n",
     "after": "      <p>${escapeHtml(candidate.prioritySetLabel || \"\")} \u00b7 ${escapeHtml(candidate.sourceMediaType || \"unknown\")}${candidate.sourceMediaTypeReason ? \" \u00b7 \" + escapeHtml(candidate.sourceMediaTypeReason) : \"\"} \u00b7 Reviewer average ${Number(candidate.baseScore || 0).toFixed(2)}${candidate.isEligible ? \"\" : \" \u00b7 Below candidate threshold\"}</p>\n"
+  },
+  {
+    "file": "weaver_runtime_sync.py",
+    "before": "    \"get_video_curation_gates\",",
+    "after": "    \"get_video_curation_gates\", \"get_video_media_classification\","
+  },
+  {
+    "file": "weaver_runtime_sync.py",
+    "before": "def fetch_video_curation_gates(",
+    "after": "def get_video_media_classification(connection, payload):\n    folder_id = normalize_text(payload.get(\"sourceFolderId\"))\n    if not re.fullmatch(r\"[A-Za-z0-9_-]{15,}\", folder_id):\n        raise ValueError(\"Exact Drive sourceFolderId is required\")\n    record = connection.get_raw_document(\"videoMediaClassifications\", folder_id)\n    return {\"ok\": True, \"records\": [record] if record else []}\n\n\ndef fetch_video_curation_gates("
+  },
+  {
+    "file": "weaver_runtime_sync.py",
+    "before": "        elif action == \"get_video_pipeline\":",
+    "after": "        elif action == \"get_video_media_classification\":\n            result = get_video_media_classification(connection, payload)\n        elif action == \"get_video_pipeline\":"
   }
 ];
 const sources=new Map([...new Set(patches.map(p=>p.file))].map(f=>[f,fs.readFileSync(path.join(root,f),'utf8')]));
 const errors=[];
 for(const p of patches){const s=sources.get(p.file);if(s.split(p.before).length!==2){errors.push('Changed patch target '+p.file+' '+p.before.slice(0,90));continue;}sources.set(p.file,s.replace(p.before,p.after));}
-for(const [file,prefix]of [['server.mjs',"import {traceVideoFolderMediaType,videoFileMediaType} from './video_media_classification.mjs';\n"],['video_curation_handoff.mjs',"export {classifyDriveFolderPath} from './video_media_classification.mjs';\n"]]){if(sources.get(file).includes(prefix.trim()))errors.push('Already applied '+file);else sources.set(file,prefix+sources.get(file));}
+for(const [file,prefix]of [['server.mjs',"import {recordedFolderMediaType,traceVideoFolderMediaType,videoFileMediaType} from './video_media_classification.mjs';\n"],['video_curation_handoff.mjs',"export {classifyDriveFolderPath} from './video_media_classification.mjs';\n"]]){if(sources.get(file).includes(prefix.trim()))errors.push('Already applied '+file);else sources.set(file,prefix+sources.get(file));}
 assert.equal(errors.length,0,errors.join('\n'));
 for(const [f,s]of sources)fs.writeFileSync(path.join(root,f),s);
 console.log('Applied guarded per-file media classification and unknown routing repair.');
