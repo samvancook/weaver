@@ -22,8 +22,8 @@ const root=process.argv[2]||'/app',patches=[
   },
   {
     "file": "server.mjs",
-    "before": "    const sourceMedia = await getVideoSetMediaType(set);\n    const footageConnections",
-    "after": "    const setSourceMedia = await getVideoSetMediaType(set);\n    const footageConnections"
+    "before": "    const sourceMedia = await getVideoSetMediaType(set);\n",
+    "after": "    const setSourceMedia = await getVideoSetMediaType(set);\n"
   },
   {
     "file": "server.mjs",
