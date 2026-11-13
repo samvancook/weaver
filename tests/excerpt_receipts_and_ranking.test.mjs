@@ -1,3 +1,4 @@
+import {videoFileMediaType} from '../video_media_classification.mjs';
 import {videoReviewProgress} from '../video_curation_handoff.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -86,7 +87,7 @@ test('excerpt collection does not change ranking or candidate eligibility', asyn
   })));
   const build = runInNewContext(`(${fn('getVideoCurationCandidates')})`, {
     syncWeaverRuntimeDb: async action => ({ records: action === 'get_curation_reviews' ? reviews : [] }),
-    videoReviewProgress, PRIORITY_VIDEO_SETS: new Map([['event', { id: 'event', label: 'Event' }]]),
+    videoFileMediaType, videoReviewProgress, PRIORITY_VIDEO_SETS: new Map([['event', { id: 'event', label: 'Event' }]]),
     cleanSheetWhitespace: clean, getVideoSetMediaType: async () => ({ sourceMediaType: 'FV' }),
     listVideoSetFiles: async () => files, isPriorityVideoFileIncluded: () => true,
     reconcileVideoReviews: (_files, rows) => rows, buildVideoCurationCandidateId: (set,id) => set+id,

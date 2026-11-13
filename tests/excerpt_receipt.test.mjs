@@ -31,7 +31,7 @@ const next=runInNewContext(`(${app.match(/function videoPipelineNextStep\([^]*?\
 test('next steps separate identity, editorial selection, copy state and excerpt approval',()=>{
  assert.match(next({gate:{}}),/editorial decision/);
  assert.match(next({publicationRestricted:true,gate:{}}),/clearance/);
- assert.match(next({requiresManualIdentityReview:true,gate:{decision:'ready_for_poetry_please'}}),/recording identity/);
+ assert.match(next({sourceMediaType:'FV',requiresManualIdentityReview:true,gate:{decision:'ready_for_poetry_please'}}),/recording identity/);
  assert.match(next({sourceMediaType:'OM',gate:{decision:'ready_for_poetry_please'}}),/finished edit/);
  assert.match(next({gate:{poetryPleaseHandoff:{status:'sent_to_poetry_please',durableCopyStatus:'copying'}}}),/copying/);
  assert.match(next({gate:{poetryPleaseHandoff:{status:'sent_to_poetry_please',durableCopyStatus:'verified'}}}),/Excerpt approval.*separate/);
