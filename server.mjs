@@ -5626,6 +5626,60 @@ function buildPoetryPleaseExcerptRecord(record) {
   };
 }
 
+function registeredExcerptVideoSource(record, candidate, receiver) {
+  const clean = cleanSheetWhitespace;
+  const root = clean(candidate.sourceReviewFileId);
+  const canonical = clean(candidate.existingCanonicalVideoId);
+  if (!root || !canonical || candidate.sourceFileId !== record.sourceVideoFileId
+    || candidate.sourceEvent !== record.sourceEvent
+    || candidate.videoRecordId !== `weaver:video:${root}`
+    || candidate.gate?.decision !== "ready_for_poetry_please"
+    || receiver.received !== true || receiver.canonicalVideoId !== canonical
+    || receiver.sourceRecordId !== candidate.videoRecordId
+    || receiver.event?.sourceEvent !== record.sourceEvent) return null;
+  const matches = (receiver.renditions || []).filter(asset =>
+    asset.assetType === "video_rendition" && asset.contentCollection === "videos"
+    && asset.contentDocId === canonical && asset.sourceRecordId === candidate.videoRecordId
+    && asset.reviewedSourceFileId === root && asset.outputFileId === record.sourceVideoFileId
+    && asset.status === "active" && clean(asset.assetId || asset.id)
+    && (asset.validationState === "verified_bytes"
+      || (asset.role === "master" && asset.validationState === "source_reported")));
+  if (matches.length !== 1) return null;
+  return { canonicalVideoId: canonical, evidence: {
+    mode: "registered_video_rendition", canonicalVideoId: canonical,
+    sourceRecordId: record.sourceRecordId, sourceVideoFileId: record.sourceVideoFileId,
+    reviewedSourceFileId: root, renditionAssetId: matches[0].assetId || matches[0].id,
+    checkedAt: new Date().toISOString()
+  } };
+}
+
+async function resolveRegisteredExcerptVideoSource(record) {
+  const result = await getVideoCurationCandidates();
+  const candidates = (result.candidates || []).filter(candidate =>
+    candidate.sourceFileId === record.sourceVideoFileId && candidate.sourceEvent === record.sourceEvent
+    && candidate.existingCanonicalVideoId && candidate.sourceReviewFileId);
+  if (candidates.length !== 1) return null;
+  const candidate = candidates[0];
+  const state = await inspectVideoReceiverState(candidate.prioritySetId, candidate.sourceFileId);
+  return registeredExcerptVideoSource(record, candidate, state.receiver);
+}
+
+function videoExcerptBookFallback(record, response, result) {
+  if (response.status !== 400 || result?.error !== "no_importable_weaver_excerpt_records"
+    || Number(result.createdCount || 0) || Number(result.updatedCount || 0)
+    || (Array.isArray(result.results) && result.results.length)
+    || record.contentType !== "EXC" || !record.sourceVideoFileId || !record.sourceContentId
+    || !cleanSheetWhitespace(record.sourceRecordId) || !cleanSheetWhitespace(record.bookTitle)
+    || cleanSheetWhitespace(record.bookShortener)) return null;
+  return {
+    payload: { ...record, bookTitle: "", sourceBookTitle: record.bookTitle },
+    evidence: { mode: "video_source_after_book_metadata_rejection", sourceBookTitle: record.bookTitle,
+      receiverError: result.error, sourceRecordId: record.sourceRecordId,
+      sourceVideoFileId: record.sourceVideoFileId, canonicalVideoId: record.sourceContentId,
+      attemptedAt: new Date().toISOString() }
+  };
+}
+
 async function handoffApprovedExcerptsToPoetryPlease(records = []) {
   const approvedRecords = Array.isArray(records) ? records.map(buildPoetryPleaseExcerptRecord).filter(Boolean) : [];
   if (!approvedRecords.length) {
@@ -5654,9 +5708,15 @@ async function handoffApprovedExcerptsToPoetryPlease(records = []) {
       });
       continue;
     }
+    let routingEvidence;
     try {
       if (record.sourceVideoFileId) {
-        const canonicalVideoId = poetryPleaseVideoIdForSourceFile(record.sourceVideoFileId, videoGates);
+        let canonicalVideoId = poetryPleaseVideoIdForSourceFile(record.sourceVideoFileId, videoGates);
+        if (!canonicalVideoId && record.contentType === "EXC") {
+          const registered = await resolveRegisteredExcerptVideoSource(record);
+          canonicalVideoId = registered?.canonicalVideoId || "";
+          routingEvidence = registered?.evidence;
+        }
         if (!canonicalVideoId && record.contentType === "EXC") {
           errorCount += 1;
           results.push({
@@ -5669,19 +5729,20 @@ async function handoffApprovedExcerptsToPoetryPlease(records = []) {
         }
         if (canonicalVideoId) record.sourceContentId = canonicalVideoId;
       }
-      const response = await fetch(`${poetryPleaseApiUrl.replace(/\/$/, "")}/internal/weaverImport`, {
+      const post = payload => fetch(`${poetryPleaseApiUrl.replace(/\/$/, "")}/internal/weaverImport`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": poetryPleaseApiKey
-        },
-        body: JSON.stringify({
-          contentType: record.contentType,
-          payload: record
-        })
+        headers: { "Content-Type": "application/json", "x-api-key": poetryPleaseApiKey },
+        body: JSON.stringify({ contentType: record.contentType, payload })
       });
-
-      const result = await response.json().catch(() => ({}));
+      let response = await post(record);
+      let result = await response.json().catch(() => ({}));
+      const fallback = record.sourceVideoFileId && record.bookTitle
+        ? videoExcerptBookFallback(record, response, result) : null;
+      routingEvidence = fallback ? { ...fallback.evidence, ...(routingEvidence ? { videoSource: routingEvidence } : {}) } : routingEvidence;
+      if (fallback) {
+        response = await post(fallback.payload);
+        result = await response.json().catch(() => ({}));
+      }
       const failedItem = Array.isArray(result.results) ? result.results.find(item => item.ok === false) : null;
       if (!response.ok || !result.ok || Number(result.errorCount || 0) > 0 || failedItem) {
         errorCount += 1;
@@ -5689,7 +5750,8 @@ async function handoffApprovedExcerptsToPoetryPlease(records = []) {
           recordId: record.recordId,
           ok: false,
           error: result.error || failedItem?.error || `Poetry Please EXC handoff failed with ${response.status}`,
-          response: result
+          response: result,
+          ...(routingEvidence ? { routingEvidence } : {})
         });
         continue;
       }
@@ -5711,7 +5773,8 @@ async function handoffApprovedExcerptsToPoetryPlease(records = []) {
         recordId: record.recordId,
         ok: true,
         poetryPleaseItemId: itemId,
-        response: result
+        response: result,
+        ...(routingEvidence ? { routingEvidence } : {})
       });
     } catch (error) {
       errorCount += 1;
@@ -5719,7 +5782,8 @@ async function handoffApprovedExcerptsToPoetryPlease(records = []) {
         recordId: record.recordId,
         ok: false,
         error: error.message,
-        response: {}
+        response: {},
+        ...(routingEvidence ? { routingEvidence } : {})
       });
     }
   }
@@ -5754,6 +5818,7 @@ async function updateExcerptHandoffStatuses(records, poetryPlease) {
   };
   const statusUpdates = handoffRecords.map(record => ({
     ...record,
+    ...(resultsFor(record)[0]?.routingEvidence ? { routingEvidence: resultsFor(record)[0].routingEvidence } : {}),
     handoffStatus: acknowledged(record) ? "sent" : "failed",
     handedOffAt: !acknowledged(record)
       ? String(record.handedOffAt || "")

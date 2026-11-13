@@ -8,7 +8,22 @@ test('distinct reviewers and unique excerpts determine completion, separately fo
  const reconciled=reconcileVideoReviews([{id:'a',name:'a'}],[...rated,...rated.map(r=>({...r,reviewerEmail:r.reviewerEmail.toUpperCase()}))]);
  assert.equal(videoReviewProgress(reconciled).reviewerCount,5);assert.equal(videoReviewProgress(reconciled).excerptCount,3);
  assert.equal(videoReviewProgress(reviews('a',4)).reviewComplete,false);assert.equal(videoReviewProgress(rated.map(r=>({...r,excerptRecordIds:['one']}))).reviewComplete,false);
- assert.equal(videoReviewProgress([{...rated[0],ratingSource:'legacy_import',legacyScore:0}]).candidateScore,0.5);
+ assert.equal(videoReviewProgress([{...rated[0],ratingSource:'legacy_import',legacyScore:0}]).candidateScore,0);
+});
+test('collecting excerpts changes progress without raising the review score or crossing the auto threshold',()=>{
+ const ratings=['moved_me','moved_me','moved_me','like','like'];
+ const original=ratings.map((rating,i)=>({reviewerEmail:`r${i}@example.com`,rating,excerptRecordIds:[]}));
+ const collected=original.map((r,i)=>({...r,excerptRecordIds:i<2?['one','two','three']:[]}));
+ assert.equal(videoReviewProgress(original).candidateScore,9);
+ assert.equal(videoReviewProgress(collected).candidateScore,9);
+ assert.equal(videoReviewProgress(collected).excerptCount,3);
+ assert.equal(videoReviewProgress(collected).reviewComplete,true);
+ const below=collected.map(r=>({...r,ratingSource:'legacy_import',legacyScore:8.95}));
+ assert.equal(videoReviewProgress(below).candidateScore,8.95);
+ assert.equal(videoLibraryStatus(videoReviewProgress(below),'FV','',null),'review_complete');
+ assert.equal(videoLibraryStatus(videoReviewProgress(below),'FV','',{poetryPleaseHandoff:{status:'sent_to_poetry_please'}}),'sent');
+ assert.equal(videoReviewProgress(collected.map(r=>({...r,rating:'moved_me'}))).candidateScore,10);
+ assert.equal(videoReviewProgress([]).candidateScore,0);
 });
 test('review completion cannot turn OM, restrictions, holds or uncertain sends into ready-for-handoff',()=>{
  const p=videoReviewProgress(reviews('a'));assert.equal(videoLibraryStatus(p,'FV','',null),'ready_for_handoff');
