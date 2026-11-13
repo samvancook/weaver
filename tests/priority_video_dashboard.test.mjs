@@ -57,7 +57,7 @@ test("video scoreboard offers an event filter and ranks within event groups", ()
 test("scoreboard keeps below-threshold reviews and preserves the saved excerpt selection", () => {
   assert.match(server, /if \(!reviews\.length && !existingGate\) return null/);
   assert.match(server, /return candidate;\s*\}\)\.filter\(Boolean\)/);
-  assert.match(server, /selectedExcerptRecordIds: candidate\.excerptRecordIds/);
+  assert.match(server, /selectedExcerptRecordIds: candidate\.gate\?/);
   assert.match(server, /const gate = \{ \.\.\.candidate\.gate, publishableAssetMediaType \}/);
   assert.doesNotMatch(app, /data-excerpt-id/);
   assert.match(app, /candidate\.ratings/);

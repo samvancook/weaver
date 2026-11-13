@@ -80,10 +80,11 @@ export function videoReviewProgress(reviews = []) {
   return videoQualitySummary(reviews);
 }
 
-export function videoLibraryStatus(progress, mediaType, releaseStatus, gate, identityConfirmed = true) {
+export function videoLibraryStatus(progress, mediaType, releaseStatus, gate, identityConfirmed = true, mediaResolution = null) {
   if (gate?.poetryPleaseHandoff?.status === 'sent_to_poetry_please') return 'sent';
   if (!progress.reviewComplete) return 'needs_review';
   if (gate?.decision === 'hold' || gate?.decision === 'reject') return 'review_complete';
+  if (mediaResolution) return mediaResolution.status === 'resolved' && gate?.decision === 'ready_for_poetry_please' && !releaseStatus && identityConfirmed ? 'ready_for_handoff' : mediaResolution.status === 'editing_requested' ? 'needs_editing' : 'needs_check';
   if (gate?.decision === 'send_to_editing') return mediaType === 'OM' ? 'needs_editing' : 'needs_check';
   if (progress.candidateScore < VIDEO_AUTO_POLICY.minScore && gate?.decision !== 'ready_for_poetry_please') return 'review_complete';
   if (mediaType === 'OM') return 'needs_editing';

@@ -1,3 +1,4 @@
+import {assertResolvedVideoMedia} from '../video_resolution.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
@@ -14,7 +15,7 @@ const empty={ok:true,received:false,sourceRecordId:record.sourceRecordId,canonic
 function harness(changedBeforeSend=false){
   const calls=[];let receiptReads=0;let claimed;
   const ctx=vm.createContext({AbortSignal,Date,poetryPleaseApiKey:'synthetic',poetryPleaseApiUrl:'https://pp.example/api',cleanSheetWhitespace:x=>String(x||'').trim(),driveFileId,
-    getVideoCurationCandidates:async()=>({candidates:[{prioritySetId:'event',sourceFileId:'final',sourceMediaType:'FV',excerptRecordIds:['e1'],gate}]}),
+    videoResolutionService:{verifySelected:async c=>assertResolvedVideoMedia(c)}, assertResolvedVideoMedia, getVideoCurationCandidates:async()=>({candidates:[{mediaResolution:{status:'resolved',pairing:{status:'verified'},primaryFileId:'final',assets:[{fileId:'final',mediaType:'FV',url:record.finalAssetUrl}],checkedAt:new Date().toISOString()},prioritySetId:'event',sourceFileId:'final',sourceMediaType:'FV',excerptRecordIds:['e1'],gate}]}),
     buildWeaverVideoImport:()=>record,assertVideoRetryPreflight,assertVideoImportPreflight,assertVideoClaimMatchesRecord,assertVideoImportReadback,
     parsePoetryPleaseVideoImport:()=>({ok:true,status:'sent_to_poetry_please',canonicalVideoId:canonical}),
     syncWeaverRuntimeDb:async(action,payload)=>{calls.push(action);if(action==='claim_video_curation_handoff'){assert.equal(payload.retryFailedProof.importLedgerId,'old-ledger');claimed={...gate,poetryPleaseHandoff:{status:'sending',attemptId:'new-attempt',previousHandoff:gate.poetryPleaseHandoff}};return {claimed:true,record:claimed};} if(action==='release_video_curation_handoff_claim')return {released:true};if(action==='finish_video_curation_handoff')return {saved:true,record:{...gate,poetryPleaseHandoff:payload.poetryPleaseHandoff}};throw Error(action);},
