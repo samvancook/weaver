@@ -12,6 +12,7 @@ const { getPendingRecordsForBookKey } = runInNewContext(
   {
     REVIEW_VIDEO_EVENT_KEY: "__video_event__:",
     REVIEW_VIDEOS_BOOK_KEY: "__video_excerpts__",
+    excerptReviewTask: null, REVIEW_EXCERPT_TASK_KEY:"__excerpt_review_task__", filterExcerptTaskRecords: records=>records,
     getPendingVideoRecords: records => records.filter(record => record.intakeMode === "video"),
     extractGoogleDriveFileId: () => "",
     normalizeBookKey: value => value.toLowerCase()
