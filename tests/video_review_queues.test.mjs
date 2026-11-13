@@ -1,3 +1,4 @@
+import {VIDEO_AUTO_POLICY,publicVideoPipelineState,videoPipelineKey} from '../video_pipeline.mjs';
 import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import vm from 'node:vm';
 import {videoReviewProgress,videoLibraryStatus,reconcileVideoReviews,resolveVideoReviewSourceFileId,poetryPleaseVideoIdForSourceFile,requiresManualVideoIdentityReview} from '../video_curation_handoff.mjs';
 const app=fs.readFileSync(new URL('../public/app.js',import.meta.url),'utf8'),server=fs.readFileSync(new URL('../server.mjs',import.meta.url),'utf8');
@@ -7,7 +8,7 @@ test('distinct reviewers and unique excerpts determine completion, separately fo
  const rated=reviews('a');assert.equal(videoReviewProgress(rated).reviewComplete,true);
  const reconciled=reconcileVideoReviews([{id:'a',name:'a'}],[...rated,...rated.map(r=>({...r,reviewerEmail:r.reviewerEmail.toUpperCase()}))]);
  assert.equal(videoReviewProgress(reconciled).reviewerCount,5);assert.equal(videoReviewProgress(reconciled).excerptCount,3);
- assert.equal(videoReviewProgress(reviews('a',4)).reviewComplete,false);assert.equal(videoReviewProgress(rated.map(r=>({...r,excerptRecordIds:['one']}))).reviewComplete,false);
+ assert.equal(videoReviewProgress(reviews('a',4)).reviewComplete,false);assert.equal(videoReviewProgress(rated.map(r=>({...r,excerptRecordIds:[]}))).reviewComplete,false);
  assert.equal(videoReviewProgress([{...rated[0],ratingSource:'legacy_import',legacyScore:0}]).candidateScore,0);
 });
 test('collecting excerpts changes progress without raising the review score or crossing the auto threshold',()=>{
@@ -18,8 +19,8 @@ test('collecting excerpts changes progress without raising the review score or c
  assert.equal(videoReviewProgress(collected).candidateScore,9);
  assert.equal(videoReviewProgress(collected).excerptCount,3);
  assert.equal(videoReviewProgress(collected).reviewComplete,true);
- const below=collected.map(r=>({...r,ratingSource:'legacy_import',legacyScore:8.95}));
- assert.equal(videoReviewProgress(below).candidateScore,8.95);
+ const below=collected.map(r=>({...r,ratingSource:'legacy_import',legacyScore:8.49}));
+ assert.equal(videoReviewProgress(below).candidateScore,8.49);
  assert.equal(videoLibraryStatus(videoReviewProgress(below),'FV','',null),'review_complete');
  assert.equal(videoLibraryStatus(videoReviewProgress(below),'FV','',{poetryPleaseHandoff:{status:'sent_to_poetry_please'}}),'sent');
  assert.equal(videoReviewProgress(collected.map(r=>({...r,rating:'moved_me'}))).candidateScore,10);
@@ -38,8 +39,8 @@ function serverHarness(){
  const calls=[],data=[...reviews('ready'),...reviews('pending',1).map(r=>({...r,reviewerEmail:'me@example.com'})),...reviews('raw')];
  const gateRecords=[];
  const sets=new Map([['event',{id:'event',label:'Finals',folderId:'folder'}]]),files=['ready','pending','raw','unseen'].map(id=>({id,name:id}));
- const s={PRIORITY_VIDEO_SETS:sets,cleanSheetWhitespace:x=>String(x||'').trim(),videoReviewProgress,videoLibraryStatus,reconcileVideoReviews,resolveVideoReviewSourceFileId,poetryPleaseVideoIdForSourceFile,requiresManualVideoIdentityReview,
- syncWeaverRuntimeDb:async(action)=>{calls.push(action);if(action==='get_curation_reviews')return{ok:true,records:data};if(action==='get_video_curation_gates')return{ok:true,records:gateRecords};throw Error('Unexpected writer');},
+ const s={VIDEO_AUTO_POLICY,publicVideoPipelineState,videoPipelineKey,PRIORITY_VIDEO_SETS:sets,cleanSheetWhitespace:x=>String(x||'').trim(),videoReviewProgress,videoLibraryStatus,reconcileVideoReviews,resolveVideoReviewSourceFileId,poetryPleaseVideoIdForSourceFile,requiresManualVideoIdentityReview,
+ syncWeaverRuntimeDb:async(action)=>{calls.push(action);if(action==='get_curation_reviews')return{ok:true,records:data};if(action==='get_video_curation_gates')return{ok:true,records:gateRecords};if(action==='get_video_pipeline')return{ok:true,records:[]};throw Error('Unexpected writer');},
  getVideoSetMediaType:async()=>({sourceMediaType:'FV'}),listVideoSetFiles:async()=>files,getFootageAssetConnections:async()=>[],isPriorityVideoFileIncluded:()=>true,
  getPriorityVideoReleaseStatus:name=>name==='raw'?'unverified':'',parsePriorityVideoFileName:name=>({author:'Poet',poemTitle:name}),footageProvenanceForFile:()=>[],buildVideoCurationCandidateId:(set,id)=>set+':'+id,encodeURIComponent};
  vm.createContext(s);vm.runInContext(fn(server,'loadVideoReviewLibrary')+'\n'+fn(server,'getPriorityVideoSetAvailability'),s);return{s,calls,data,gateRecords};

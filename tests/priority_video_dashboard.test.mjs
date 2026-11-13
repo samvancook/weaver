@@ -1,3 +1,4 @@
+import {videoQualitySummary} from '../video_pipeline.mjs';
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -79,7 +80,8 @@ test("LABC intake keeps the four supplied files review-only until approval evide
 });
 
 test("empty imported numeric scores are not displayed or averaged as zero", () => {
-  assert.match(server, /rawLegacyScore === "" \? NaN : Number\(rawLegacyScore\)/);
+  assert.equal(videoQualitySummary([{reviewerEmail:'a',ratingSource:'legacy_import',legacyScore:'',rating:'like'}]).candidateScore,7.5);
+  assert.equal(videoQualitySummary([{reviewerEmail:'a',ratingSource:'legacy_import',legacyScore:0,rating:'like'}]).candidateScore,0);
   assert.match(app, /rating\.legacyScore !== "" && Number\.isFinite\(Number\(rating\.legacyScore\)\)/);
 });
 

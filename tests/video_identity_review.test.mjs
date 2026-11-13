@@ -54,7 +54,7 @@ test('only the exact old raw-source rejection exposes identity review; receiver 
 const server=readFileSync(new URL('../server.mjs',import.meta.url),'utf8');
 function harness({occupied='',driveMismatch=false}={}){
   const calls=[];
-  const context={cleanSheetWhitespace:clean,prepareVideoIdentityReview,assertVideoImportPreflight,
+  const context={enqueueVideoPipeline:async()=>{calls.push({type:"queued"});},cleanSheetWhitespace:clean,prepareVideoIdentityReview,assertVideoImportPreflight,
     poetryPleaseApiUrl:'https://receiver.example/api',poetryPleaseApiKey:'test-key',AbortSignal,Date,
     getVideoCurationCandidates:async()=>({candidates:[structuredClone(candidate)]}),
     getDriveFileMetadata:async()=>({mimeType:'video/quicktime',name:driveMismatch?'Different.mov':candidate.sourceFileName}),
@@ -75,7 +75,7 @@ test('identity save checks every known receiver source and never imports a video
   const save=calls.find(c=>c.type==='resolve_video_curation_identity');
   assert.ok(save);assert.equal(save.body.expectedGate.decidedAt,'original-time');
   assert.equal(save.body.review.reviewedBy,'operator@example.com');
-  assert.equal(calls.length,4);
+  assert.equal(calls.length,5);assert.equal(calls.filter(c=>c.type==="queued").length,1);
 });
 test('a receiver identity on any historical file or mismatching media stops the save',async()=>{
   for(const options of [{occupied:'weaver:video:replacement'},{occupied:'weaver:video:original'},{driveMismatch:true}]){

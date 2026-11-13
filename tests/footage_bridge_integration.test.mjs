@@ -1,3 +1,4 @@
+import {VIDEO_AUTO_POLICY,publicVideoPipelineState,videoPipelineKey} from '../video_pipeline.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -13,7 +14,7 @@ const manifest={sourceSpreadsheetId:INVENTORY_ID,eventName:'Pilot',omFolderId:'e
  titles:[{sourceRow:6000,performer:'Inventory poet',title:'Inventory title',rights:'Have video release',contentLink:`https://drive.google.com/file/d/${id}/view`}]};
 test('receiver saves before acknowledgement, reloads queue after restart, and curation uses inventory titles',async()=>{
  const ledger=new Map(),sets=new Map();let reply;
- const context={prepareEventIntake,footageEventAsSet,currentEventReceipt,validateEventManifest,footageFileId,resolveEventTarget,footageProvenanceForFile,refreshFootageEventSets:async()=>{},getFootageEventProgress:async()=>({status:"checked",byFileId:{}}),verifyFootageReceiptQueue:async()=>true,listVideoSetFiles:async()=>[],getFootageAssetConnections:async()=>[],PRIORITY_VIDEO_SETS:sets,
+ const context={VIDEO_AUTO_POLICY,publicVideoPipelineState,videoPipelineKey,prepareEventIntake,footageEventAsSet,currentEventReceipt,validateEventManifest,footageFileId,resolveEventTarget,footageProvenanceForFile,refreshFootageEventSets:async()=>{},getFootageEventProgress:async()=>({status:"checked",byFileId:{}}),verifyFootageReceiptQueue:async()=>true,listVideoSetFiles:async()=>[],getFootageAssetConnections:async()=>[],PRIORITY_VIDEO_SETS:sets,
   process:{env:{WEAVER_FOOTAGE_BRIDGE_ENABLED:'true'}},decodeURIComponent,
   verifyFootageHelperCaller:async()=>({email:'owner@example.com'}),
   getDriveFileMetadata:async fileId=>({id:fileId,mimeType:'video/mp4',name:'Clip 1.mp4'}),
@@ -25,7 +26,7 @@ test('receiver saves before acknowledgement, reloads queue after restart, and cu
   syncWeaverRuntimeDb:async(action,payload)=>{
    if(action==='save_footage_event'){ledger.set(payload.record.eventId,payload.record);return {ok:true,record:payload.record};}
    if(action==='get_footage_events')return {ok:true,records:payload.eventId?[ledger.get(payload.eventId)].filter(Boolean):[...ledger.values()]};
-   if(action==='get_curation_reviews'||action==='get_video_curation_gates')return {ok:true,records:[]};
+   if(action==='get_curation_reviews'||action==='get_video_curation_gates'||action==='get_video_pipeline')return {ok:true,records:[]};
    throw Error('Unexpected action '+action);
   }
  };
