@@ -466,6 +466,12 @@ function showSheetLinkModal(url) {
 
 function setSubmitState(isBusy, label) {
   isSaving = isBusy;
+  [elements.submitReviewBottom, elements.submitWeirdReviewBottom, document.getElementById("submit-corrections-bottom")].forEach(button => {
+    if (button) { button.disabled = isBusy; button.textContent = label || (isBusy ? "Saving..." : "Submit Decisions"); }
+  });
+  [elements.reviewModule, elements.reviewQueuePanel, elements.weirdModule, elements.weirdQueuePanel, elements.correctionsModule].forEach(panel => {
+    if (panel) panel.inert = isBusy;
+  });
   elements.submitReview.disabled = isBusy;
   if (elements.submitWeirdReview) {
     elements.submitWeirdReview.disabled = isBusy;
@@ -7499,6 +7505,10 @@ async function submitExcerptSet({
   idleLabel,
   progressLabel
 }) {
+  if (isSaving) {
+    setStatus("A save is already in progress. Please wait for its result; another submission was not sent.");
+    return;
+  }
   if (!sourceExcerpts.length) {
     setStatus(emptyMessage);
     return;
@@ -7536,12 +7546,7 @@ async function submitExcerptSet({
     try {
       await requestBatchSave(changedUpdates);
     } catch (batchError) {
-      usedFallback = true;
-      setStatus(
-        `Batch save failed, falling back to row-by-row saves for ${changedUpdates.length} records...`,
-        { error: batchError.message }
-      );
-      await saveReviewsSequentially(changedUpdates);
+      throw new Error(`The save response failed. Some decisions may already be saved. No automatic retry was made. Refresh the queue before trying again. ${batchError.message}`);
     }
 
     if (typeof afterSaveOptimistic === "function") {
