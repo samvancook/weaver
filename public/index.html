@@ -298,6 +298,11 @@
       </section>
 
       <section class="panel panel--wide module-panel module-panel--active" id="review-module">
+        <section id="excerpt-assignment-panel" hidden aria-label="Excerpt review assignment">
+          <h2>Excerpt review assignment</h2>
+          <p id="excerpt-assignment-status" role="status"></p>
+          <p>Opening this link saves no decisions. Sign in to submit approvals. <a href="/">Leave assignment and open Weaver</a></p>
+        </section>
         <div class="panel__header">
           <h2>Book Selection</h2>
           <span class="badge badge--muted" id="book-count-badge">0 Books</span>
@@ -336,6 +341,9 @@
           </label>
           <button id="load-books" class="button button--secondary">Refresh Books</button>
           <button id="load-excerpts" class="button">Load Excerpts</button>
+          <button id="copy-excerpt-review-link" class="button button--secondary" type="button" hidden>Copy review link</button>
+          <input id="excerpt-review-task-url" aria-label="Review assignment URL" type="url" readonly hidden>
+
         </div>
         <p class="hint" id="book-selection-hint">
           `Review queue` is the normal approval lane. Use the separate `Extra review` module for incomplete, conflicting, or otherwise weird rows that deserve their own pass.
@@ -645,6 +653,6 @@
     </main>
   </div>
 
-  <script src="/app.js?v=20261110-legacy-identity"></script>
+  <script src="/app.js?v=20261113-excerpt-task-links"></script>
 </body>
 </html>

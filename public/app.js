@@ -226,6 +226,8 @@ let weirdBookSummaryByKey = new Map();
 let graphicsBookSummaryByKey = new Map();
 let gatheringCatalogPopup = null;
 const contributorShellParams = new URLSearchParams(window.location.search);
+let excerptReviewTask = null;
+const REVIEW_EXCERPT_TASK_KEY = "__excerpt_review_task__";
 
 const REVIEW_SINGLE_BATCH_SIZE = 1;
 const REVIEW_MULTI_BATCH_SIZE = 25;
@@ -862,6 +864,74 @@ async function loadGraphicsRecordsFromSheetsFallback(bookTitle, mode) {
   };
 }
 
+function parseExcerptReviewTask(search) {
+  const params = new URLSearchParams(search);
+  if (!params.has("task")) return null;
+  if (params.getAll("task").length !== 1 || params.get("task") !== "approve-video-excerpts") throw new Error("Unknown excerpt review assignment. No other queue was opened.");
+  if (params.getAll("videoFiles").length !== 1 || params.has("videoSet") || params.has("view")) throw new Error("This assignment needs one unambiguous video scope.");
+  const ids = params.get("videoFiles").split(",");
+  if (!ids.length || ids.length > 50 || ids.some(id => !/^[A-Za-z0-9_-]{15,100}$/.test(id))) throw new Error("Invalid video IDs in this assignment. No other queue was opened.");
+  return {kind:"approve-video-excerpts", videoFileIds:[...new Set(ids)].sort()};
+}
+
+function filterExcerptTaskRecords(records, task) {
+  if (!task) return records;
+  const ids = new Set(task.videoFileIds);
+  return records.filter(record => ids.has(record.sourceVideoFileId || extractGoogleDriveFileId(record.sourceVideoUrl)));
+}
+
+function buildExcerptReviewTaskUrl(origin, ids) {
+  const files = [...new Set(ids)].sort();
+  const url = new URL("/", origin);
+  url.searchParams.set("task", "approve-video-excerpts");
+  url.searchParams.set("videoFiles", files.join(","));
+  parseExcerptReviewTask(url.search);
+  return url.href;
+}
+
+function updateExcerptAssignmentUi() {
+  const panel = document.getElementById("excerpt-assignment-panel");
+  const description = document.getElementById("excerpt-assignment-status");
+  if (excerptReviewTask && panel && description) {
+    panel.hidden = false;
+    const pending = filterExcerptTaskRecords(currentPendingRecords, excerptReviewTask);
+    const titles = [...new Set(pending.map(r => `${r.author} — ${r.title}`))];
+    const progressKnown = excerptReviewTask.videoFileIds.every(id => videoExcerptProgressByFileId.has(id));
+    const approvedVideos = excerptReviewTask.videoFileIds.filter(id => videoExcerptProgressByFileId.get(id)?.approvedCount > 0).length;
+    const progressLabel = progressKnown ? `Approved excerpt present for ${approvedVideos} of ${excerptReviewTask.videoFileIds.length} videos. ` : "Approval counts unavailable. ";
+    description.textContent = progressLabel + `${excerptReviewTask.videoFileIds.length} linked video(s) · ${pending.length} pending excerpts. ${titles.join("; ")}${pending.length ? ". For calendar readiness, approve at least one suitable excerpt per video. Use a light typo/quality check; leave weak excerpts unapproved." : "No pending excerpts are available for these exact videos. They may already be reviewed or unavailable; another queue has not been substituted."}`;
+  }
+  const copy = document.getElementById("copy-excerpt-review-link");
+  if (copy) copy.hidden = getSelectedReviewFilter() !== "videos";
+}
+
+async function copyExcerptReviewLink() {
+  try {
+    const key = elements.bookSelect.value;
+    const records = key ? getPendingRecordsForBookKey(key) : [];
+    const ids = excerptReviewTask && key === REVIEW_EXCERPT_TASK_KEY ? excerptReviewTask.videoFileIds : records.map(r => r.sourceVideoFileId || extractGoogleDriveFileId(r.sourceVideoUrl)).filter(Boolean);
+    const url = buildExcerptReviewTaskUrl(window.location.origin, ids);
+    const field = document.getElementById("excerpt-review-task-url");
+    field.value = url; field.hidden = false;
+    try { await navigator.clipboard.writeText(url); setStatus("Review assignment link copied. It opens this exact video scope and grants no access or approval."); }
+    catch { setStatus("Copy the review assignment URL shown beside the button."); }
+  } catch (error) { setStatus(error.message); }
+}
+
+async function openExcerptReviewAssignment(task) {
+  excerptReviewTask = task;
+  setActiveModule("review");
+  elements.reviewFilter.value = "videos";
+  elements.reviewFilter.disabled = true;
+  elements.reviewDisplayMode.value = "batch";
+  updateExcerptAssignmentUi();
+  if (await loadBooks({preserveSelection:false}) !== true) throw new Error("This assignment could not load. Refresh Books to retry; no other queue was opened.");
+  elements.bookSelect.value = REVIEW_EXCERPT_TASK_KEY;
+  await loadVideoExcerptProgress();
+  await loadExcerpts();
+  updateExcerptAssignmentUi();
+}
+
 function getReviewQueueIncludeSet() {
   const titles = Array.isArray(runtimeConfig.reviewQueueIncludeTitles)
     ? runtimeConfig.reviewQueueIncludeTitles
@@ -963,6 +1033,7 @@ function refreshReviewBookSelect(preserveSelection = true) {
   if (getSelectedReviewFilter() === "videos" && elements.bookSelect) {
     const select = elements.bookSelect;
     select.replaceChildren(new Option("Choose an event or video", ""));
+    if (excerptReviewTask) select.append(new Option("This assignment — all linked videos", REVIEW_EXCERPT_TASK_KEY));
     let group = null;
     let previousEvent = "";
     for (const video of visibleBooks) {
@@ -979,8 +1050,9 @@ function refreshReviewBookSelect(preserveSelection = true) {
       const progressLabel = progress === undefined ? "counts unavailable" : `${progress.pulledCount} pulled (goal 3+), ${progress.approvedCount} approved`;
       group.append(new Option(`${video.title} · ${video.author} (${video.standardCount} pending, ${progressLabel})`, video.key));
     }
-    if (visibleBooks.some(video => video.key === previousSelection)
-      || [...select.options].some(option => option.value === previousSelection)) select.value = previousSelection;
+    if (excerptReviewTask && (!previousSelection || previousSelection === REVIEW_EXCERPT_TASK_KEY)) select.value = REVIEW_EXCERPT_TASK_KEY;
+    if (previousSelection && (visibleBooks.some(video => video.key === previousSelection)
+      || [...select.options].some(option => option.value === previousSelection))) select.value = previousSelection;
   } else {
     populateBookSelect(elements.bookSelect, visibleBooks, previousSelection, book => `${book.title} (${book.standardCount})`);
   }
@@ -1001,6 +1073,7 @@ async function loadVideoExcerptProgress() {
     videoExcerptProgressByFileId = new Map();
   }
   refreshReviewBookSelect(true);
+  updateExcerptAssignmentUi();
 }
 
 function getBookTitleDisplayScore(title) {
@@ -1074,6 +1147,8 @@ function indexBookSummariesByKey(summaries) {
 }
 
 function getPendingRecordsForBookKey(bookKey, records = currentPendingRecords) {
+  records = filterExcerptTaskRecords(records, excerptReviewTask);
+  if (bookKey === REVIEW_EXCERPT_TASK_KEY) return getPendingVideoRecords(records);
   if (bookKey.startsWith(REVIEW_VIDEO_EVENT_KEY)) {
     const event = decodeURIComponent(bookKey.slice(REVIEW_VIDEO_EVENT_KEY.length));
     return getPendingVideoRecords(records).filter(record => (record.sourceEvent || "Unassigned event") === event);
@@ -1096,7 +1171,7 @@ function isVideoReviewRecord(record) {
 }
 
 function getPendingVideoRecords(records = currentPendingRecords) {
-  return records.filter(isVideoReviewRecord);
+  return filterExcerptTaskRecords(records, excerptReviewTask).filter(isVideoReviewRecord);
 }
 
 async function requestMergedBookRecords(sourceExcerpts) {
@@ -1231,6 +1306,7 @@ function refreshToolSummariesInBackground({
 }
 
 function applyPendingBookData(records, { preserveSelection = false } = {}) {
+  records = filterExcerptTaskRecords(records, excerptReviewTask);
   const previousWeirdSelection = preserveSelection ? elements.weirdBookSelect?.value || "" : "";
 
   currentPendingRecords = records;
@@ -1256,6 +1332,7 @@ function applyPendingBookData(records, { preserveSelection = false } = {}) {
     const event = video.sourceEvent || "Unassigned event";
     reviewBookSummaryByKey.set(`${REVIEW_VIDEO_EVENT_KEY}${encodeURIComponent(event)}`, { title: event });
   }
+  if (excerptReviewTask) reviewBookSummaryByKey.set(REVIEW_EXCERPT_TASK_KEY, {title:"this video excerpt assignment"});
   weirdBookSummaryByKey = indexBookSummariesByKey(currentWeirdBookSummaries);
 
   refreshReviewBookSelect(preserveSelection);
@@ -1265,6 +1342,7 @@ function applyPendingBookData(records, { preserveSelection = false } = {}) {
     elements.weirdBookCountBadge.textContent = `${currentWeirdBookSummaries.length} Books`;
   }
 
+  updateExcerptAssignmentUi();
   return allBookSummaries;
 }
 
@@ -1934,6 +2012,7 @@ function renderVideoCurationCandidates() {
         <button type="button" class="button button--secondary" data-action="resolve-identity">Save verified recording identity</button>
         <p data-identity-state role="status"></p>
       </details>` : ""}
+      <p><a href="${escapeAttribute(buildExcerptReviewTaskUrl(window.location.origin, [candidate.sourceReviewFileId || candidate.sourceFileId]))}" target="_blank" rel="noopener noreferrer">Review excerpts for this video</a></p>
       <button type="button" class="button button--secondary" data-action="inspect-receiver">Check Poetry Please video and versions</button>
       <div data-receiver-state aria-live="polite"></div>
       ${candidate.existingCanonicalVideoId && gate.decision === "ready_for_poetry_please" ? '<button type="button" class="button button--secondary" data-action="sync-context">Sync saved reviews and selected excerpts</button><div data-context-state aria-live="polite"></div>' : ""}
@@ -4001,8 +4080,10 @@ async function loadBooks(options = {}) {
       .catch(() => {
         // Keep the queue usable even if validation refresh fails.
       });
+    return true;
   } catch (error) {
     setStatus(`Book load failed: ${error.message}`);
+    return false;
   }
 }
 
@@ -4834,7 +4915,7 @@ async function loadExcerpts() {
     const bookTitle = summary?.title || bookKey;
     setStatus(`Loading excerpts for "${bookTitle}"...`);
     currentExcerpts = getPendingRecordsForBookKey(bookKey);
-    if (bookKey.startsWith(REVIEW_VIDEO_EVENT_KEY) && elements.reviewDisplayMode) {
+    if ((bookKey.startsWith(REVIEW_VIDEO_EVENT_KEY) || bookKey === REVIEW_EXCERPT_TASK_KEY) && elements.reviewDisplayMode) {
       elements.reviewDisplayMode.value = "batch";
     }
     reviewVisibleCount = getReviewBatchSize();
@@ -7793,6 +7874,20 @@ async function initializeApp() {
   refreshGraphicsFolderImportVisibility();
   renderGraphicsFolderImportPreview(null);
   const contributorShell = currentContributorAccess || isContributorShellRequested();
+  if (contributorShellParams.has("task")) {
+    try {
+      const task = parseExcerptReviewTask(window.location.search);
+      if (contributorShell) throw new Error("This contributor account is configured for intake. Sign in with a review-authorized account to approve excerpts.");
+      await openExcerptReviewAssignment(task);
+    } catch (error) {
+      setActiveModule("review");
+      const panel = document.getElementById("excerpt-assignment-panel"); panel.hidden = false;
+      document.getElementById("excerpt-assignment-status").textContent = error.message;
+      if (!excerptReviewTask) { elements.loadExcerpts.disabled = true; elements.loadBooks.disabled = true; }
+      setStatus(error.message);
+    }
+    return;
+  }
   setActiveModule(contributorShell ? "gathering" : "review");
   if (contributorShellParams.has("videoSet")) {
     setStatus("Opening curation task...");
@@ -7822,3 +7917,5 @@ initializeApp();
 
 document.getElementById("video-media-resolution-refresh")?.addEventListener("click",loadVideoMediaResolutionQueue);
 document.getElementById("video-finished-scope-save")?.addEventListener("click",saveVideoFinishedScope);
+
+document.getElementById("copy-excerpt-review-link")?.addEventListener("click", copyExcerptReviewLink);

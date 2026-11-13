@@ -36,3 +36,15 @@ The scheduled resolver follows these rules:
 Administrators can maintain each event's finished-edit search scope and resolve exceptions in **Media resolution & editing queue**. When no finished-edit folder exists, explicitly confirm that fact as the event scope. Editors upload completed files to the confirmed folders or link them in Weaver. The queue is durable; it does not require a browser to stay open.
 
 Poetry Please owns receiver media verification, caption approval and registration of additional renditions for an already received video. Calendar readiness requires fresh receiver evidence tying the selected media and approved caption to the canonical video. Weaver review completion or a collected excerpt alone does not establish that readiness.
+
+## Share an excerpt-review assignment
+
+Open **Review excerpts for this video** on a video card to review that recording's pending excerpts. In the video-excerpt review queue, choose a video or event and click **Copy review link** to share the exact selected scope. A link can also cover a bounded group of video file IDs:
+
+`/?task=approve-video-excerpts&videoFiles=FILE_ID_1,FILE_ID_2`
+
+The link opens batch excerpt review automatically, shows the requested scope and approved-excerpt progress, and preserves that scope through refreshes and saves. For calendar preparation, approve at least one suitable excerpt per video with the agreed light typo/quality check. Opening a link grants no permissions and saves no approvals. Sign in through the existing review flow to submit decisions.
+
+An invalid link displays an error. An empty assignment reports that its exact videos have no available pending excerpts; it does not switch to unrelated work or claim caption approval. **Leave assignment and open Weaver** exits the scope explicitly. Links contain file IDs rather than reviewer emails, credentials or excerpt text.
+
+These are shared task destinations. Named assignees, due dates and task-level completion tracking remain future work; sharing a link does not assign a person or change their access. Existing event `videoSet` links still open video rating and gathering, which is a separate action from excerpt approval.
