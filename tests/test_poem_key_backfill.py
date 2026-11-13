@@ -1,4 +1,5 @@
 import csv
+import json
 import sqlite3
 import tempfile
 import unittest
@@ -9,6 +10,37 @@ from excerpt_library import ensure_schema, fingerprint_excerpt
 
 
 class PoemKeyBackfillTest(unittest.TestCase):
+    def test_json_seed_migrates_legacy_hash_and_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "excerpts.db"
+            seed_path = Path(directory) / "seed.json"
+            connection = sqlite3.connect(db_path)
+            ensure_schema(connection)
+            connection.execute(
+                "INSERT INTO excerpt_sources (id, source_name, source_kind) VALUES (1, 'test', 'test')"
+            )
+            text = "A legacy excerpt"
+            actual_hash = fingerprint_excerpt(text)
+            connection.execute(
+                "INSERT INTO excerpt_entries (id, source_id, source_row_number, excerpt_text, "
+                "normalized_excerpt, excerpt_hash, word_count, character_count, metadata_json) "
+                "VALUES (1, 1, 1, ?, ?, ?, 3, ?, '{}')",
+                (text, text, "0" * 64, len(text)),
+            )
+            connection.commit()
+            connection.close()
+            seed_path.write_text(json.dumps({actual_hash: "BPP-00001"}), encoding="utf-8")
+
+            dry_run = backfill(db_path, seed_path)
+            self.assertEqual((dry_run["updated"], dry_run["hashesUpdated"]), (1, 1))
+            self.assertEqual(backfill(db_path, seed_path, apply=True)["updated"], 1)
+            connection = sqlite3.connect(db_path)
+            self.assertEqual(connection.execute(
+                "SELECT excerpt_hash, poem_key FROM excerpt_entries WHERE id = 1"
+            ).fetchone(), (actual_hash, "BPP-00001"))
+            connection.close()
+            self.assertEqual(backfill(db_path, seed_path, apply=True)["hashesUpdated"], 0)
+
     def test_unique_hash_only_and_idempotent(self):
         with tempfile.TemporaryDirectory() as directory:
             db_path = Path(directory) / "excerpts.db"
