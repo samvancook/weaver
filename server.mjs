@@ -1,3 +1,4 @@
+import {recordedFolderMediaType,traceVideoFolderMediaType,videoFileMediaType} from './video_media_classification.mjs';
 import {VIDEO_AUTO_POLICY, advanceVideoPipeline, localVideoPipelineState, publicVideoPipelineState, videoPipelineKey} from './video_pipeline.mjs';
 import {verifyVideoPipelineCaller} from './video_pipeline_auth.mjs';
 import { resolveEventTarget } from "./footage_event_links.mjs";
@@ -2229,20 +2230,14 @@ async function getVideoFolderMediaType(folderId) {
   const cached = videoFolderTypeCache.get(folderId);
   if (cached && cached.expiresAt > Date.now()) return cached.value;
   const value = (async () => {
+    const observed = await traceVideoFolderMediaType(folderId, getDriveFileMetadata);
+    if (observed.sourceMediaType !== 'unknown') return observed;
     try {
-      const folders = [];
-      const visited = new Set();
-      let currentId = folderId;
-      while (currentId && !visited.has(currentId) && folders.length < 20) {
-        visited.add(currentId);
-        const folder = await getDriveFileMetadata(currentId);
-        folders.push(folder);
-        currentId = Array.isArray(folder.parents) ? folder.parents[0] : "";
-      }
-      if (currentId) return { sourceMediaType: "unknown", sourceMediaTypeFolderId: "" };
-      return classifyDriveFolderPath(folders);
+      const saved = await syncWeaverRuntimeDb('get_video_media_classification', {sourceFolderId:folderId});
+      if (!saved?.ok) throw new Error('Classification evidence unavailable');
+      return recordedFolderMediaType(observed, saved.records?.[0], folderId);
     } catch {
-      return { sourceMediaType: "unknown", sourceMediaTypeFolderId: "" };
+      return {...observed,sourceMediaTypeRecordStatus:'unavailable'};
     }
   })();
   videoFolderTypeCache.set(folderId, { value, expiresAt: Date.now() + 5 * 60_000 });
@@ -2388,12 +2383,13 @@ async function loadVideoReviewLibrary(reviewerEmail = "", prioritySetId = "") {
   const gates = new Map((gateResult.records || []).map(g => [g.candidateId, g]));
   const pipelineStates = new Map((pipelineResult?.records || []).map(state=>[state.pipelineId,state]));
   const results = await Promise.all(sets.map(async set => {
-    const [sourceMedia, folderFiles, connections] = await Promise.all([
+    const [setSourceMedia, folderFiles, connections] = await Promise.all([
       getVideoSetMediaType(set), listVideoSetFiles(set), getFootageAssetConnections(set.id)
     ]);
     const files = folderFiles.filter(file => isPriorityVideoFileIncluded(file, set));
     const reviews = reconcileVideoReviews(files, (reviewResult.records || []).filter(r => r.prioritySetId === set.id));
     return files.map(file => {
+      const sourceMedia = videoFileMediaType(set, file, setSourceMedia);
       const fileReviews = reviews.filter(r => r.sourceFileId === file.id);
       const own = email ? fileReviews.find(r => cleanSheetWhitespace(r.reviewerEmail).toLowerCase() === email) : null;
       const progress = videoReviewProgress(fileReviews);
@@ -2568,7 +2564,7 @@ async function getVideoCurationCandidates(prioritySetId = "") {
     ? [PRIORITY_VIDEO_SETS.get(prioritySetId)].filter(Boolean)
     : Array.from(PRIORITY_VIDEO_SETS.values());
   const candidatesBySet = await Promise.all(sets.map(async set => {
-    const sourceMedia = await getVideoSetMediaType(set);
+    const setSourceMedia = await getVideoSetMediaType(set);
     const footageConnections = await getFootageAssetConnections(set.id);
     const files = (await listVideoSetFiles(set)).filter(file => isPriorityVideoFileIncluded(file, set));
     const reviewsResult = await syncWeaverRuntimeDb("get_curation_reviews", {
@@ -2584,6 +2580,7 @@ async function getVideoCurationCandidates(prioritySetId = "") {
     }
 
     return files.map(file => {
+      const sourceMedia = videoFileMediaType(set, file, setSourceMedia);
       const sourceFileId = cleanSheetWhitespace(file.id);
       const reviews = reviewsByFileId.get(sourceFileId) || [];
       const candidateId = buildVideoCurationCandidateId(set.id, sourceFileId);
@@ -2986,6 +2983,7 @@ async function autoAdvanceVideoCuration(prioritySetId, sourceFileId) {
   if (!candidate || candidate.publicationRestricted || candidate.candidateScore < VIDEO_AUTO_POLICY.minScore || !candidate.excerptRecordIds.length) return null;
   if (candidate.reviewCount < VIDEO_AUTO_POLICY.minReviewers || candidate.gate?.poetryPleaseHandoff?.status) return null;
   if (candidate.gate && candidate.gate.decision !== "ready_for_poetry_please") return null;
+  if (!["OM", "FV"].includes(candidate.sourceMediaType)) return { status: "needs_media_classification" };
 
   const knownPublishableUrl = candidate.sourceMediaType === "FV" ? candidate.sourceVideoUrl : "";
   const publishableAssetUrl = cleanSheetWhitespace(candidate.gate?.publishableAssetUrl || knownPublishableUrl);
@@ -3028,7 +3026,7 @@ async function savePriorityVideoReview(payload = {}) {
     throw new Error("The selected video is not in the requested priority set.");
   }
   const videoReleaseStatus = getPriorityVideoReleaseStatus(file.name, set, sourceFileId);
-  const sourceMedia = await getVideoSetMediaType(set);
+  const sourceMedia = videoFileMediaType(set, file, await getVideoSetMediaType(set));
   const result = await syncWeaverRuntimeDb("upsert_curation_review", {
     review: {
       ...payload,

@@ -15,7 +15,7 @@ test('five independent valid current reviews and 8.5 qualify; excerpts add no sc
 });
 test('qualification respects reviewer minimum, score, excerpt, editing, identity, restrictions and holds',()=>{
  assert.equal(localVideoPipelineState(c).stage,'ready');
- for(const [patch,stage]of [[{reviewCount:4},'awaiting_reviews'],[{baseScore:8.49},'below_threshold'],[{excerptRecordIds:[]},'needs_excerpt'],[{sourceMediaType:'OM'},'needs_editing'],[{requiresManualIdentityReview:true},'needs_identity'],[{publicationRestricted:true},'held'],[{gate:{decision:'hold'}},'held'],[{gate:{decision:'send_to_editing'}},'needs_editing']])assert.equal(localVideoPipelineState({...c,...patch}).stage,stage);
+ for(const [patch,stage]of [[{reviewCount:4},'awaiting_reviews'],[{baseScore:8.49},'below_threshold'],[{excerptRecordIds:[]},'needs_excerpt'],[{sourceMediaType:'OM'},'needs_editing'],[{requiresManualIdentityReview:true},'needs_identity'],[{publicationRestricted:true},'held'],[{gate:{decision:'hold'}},'held'],[{sourceMediaType:'OM',gate:{decision:'send_to_editing'}},'needs_editing'],[{sourceMediaType:'unknown'},'needs_media_classification'],[{gate:{decision:'send_to_editing'}},'needs_editing_decision']])assert.equal(localVideoPipelineState({...c,...patch}).stage,stage);
 });
 test('receiver acceptance, media completion and approved caption are separate positive gates',()=>{
  const state=localVideoPipelineState(c,{},now);

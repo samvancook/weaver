@@ -1,3 +1,4 @@
+export {classifyDriveFolderPath} from './video_media_classification.mjs';
 import {VIDEO_AUTO_POLICY, videoQualitySummary} from './video_pipeline.mjs';
 import {normalizeFootageConnections,receivedFootageConnections} from './footage_provenance.mjs';
 import { createHash } from "node:crypto";
@@ -13,21 +14,6 @@ export function driveFileId(value) {
     || "";
 }
 
-export function classifyDriveFolderPath(folders) {
-  const matches = folders.flatMap(folder => {
-    const name = clean(folder.name);
-    const id = clean(folder.id);
-    return [
-      /(?:^|[\s([/-])(?:FV|Finished Video)(?:$|[\s)\]/:-])/i.test(name) ? { id, type: "FV" } : null,
-      /(?:^|[\s([/-])(?:OM|Original Media)(?:$|[\s)\]/:-])/i.test(name) ? { id, type: "OM" } : null
-    ].filter(Boolean);
-  });
-  const types = new Set(matches.map(folder => folder.type));
-  return {
-    sourceMediaType: types.size === 1 ? [...types][0] : "unknown",
-    sourceMediaTypeFolderId: types.size === 1 ? matches[0].id : ""
-  };
-}
 
 export function resolveCurrentVideoFileId(record, files) {
   const sourceFileId = clean(record?.sourceFileId);
@@ -98,7 +84,7 @@ export function videoLibraryStatus(progress, mediaType, releaseStatus, gate, ide
   if (gate?.poetryPleaseHandoff?.status === 'sent_to_poetry_please') return 'sent';
   if (!progress.reviewComplete) return 'needs_review';
   if (gate?.decision === 'hold' || gate?.decision === 'reject') return 'review_complete';
-  if (gate?.decision === 'send_to_editing') return 'needs_editing';
+  if (gate?.decision === 'send_to_editing') return mediaType === 'OM' ? 'needs_editing' : 'needs_check';
   if (progress.candidateScore < VIDEO_AUTO_POLICY.minScore && gate?.decision !== 'ready_for_poetry_please') return 'review_complete';
   if (mediaType === 'OM') return 'needs_editing';
   if (mediaType !== 'FV' || releaseStatus || !identityConfirmed || (gate?.decision && gate.decision !== 'ready_for_poetry_please')

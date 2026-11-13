@@ -1788,6 +1788,8 @@ function videoPipelineNextStep(candidate) {
   if (candidate.existingCanonicalVideoId) return "Existing Poetry Please video · check its receipt. Register other formats under this same video.";
   if (candidate.publicationRestricted) return "Publication clearance needs review. Internal review can continue.";
   if (gate.decision === "hold" || gate.decision === "reject") return "Editorial hold · no delivery action.";
+  if (candidate.sourceMediaType === "unknown") return `Next: verify the source as OM or FV. Classification: ${candidate.sourceMediaTypeReason || "not verified"}. No automatic editing or delivery decision will be made.`;
+  if (gate.decision === "send_to_editing") return candidate.sourceMediaType === "OM" ? "Next: attach the finished edit while preserving the reviewed recording identity." : "Next: review the saved editing decision; the current source is marked FV.";
   if (gate.decision !== "ready_for_poetry_please") return "Next: choose an editorial decision. Ratings and excerpt counts do not select the video for you.";
   if (candidate.sourceMediaType === "OM") return "Next: attach the finished edit while preserving the reviewed recording identity.";
   if (candidate.requiresManualIdentityReview) return "Next: verify the original recording identity using the evidence form below.";
@@ -1911,7 +1913,7 @@ function renderVideoCurationCandidates() {
       article.className = "excerpt-card";
       article.innerHTML = `
       <summary><strong>${rankByCandidate.get(candidate)}. ${escapeHtml(candidate.sourceFileName || "Untitled video")}</strong> · Score ${Number(candidate.candidateScore || 0).toFixed(2)} · ${Number(candidate.reviewCount || 0)} reviews · ${candidate.excerptRecordIds.length} excerpts</summary>
-      <p>${escapeHtml(candidate.prioritySetLabel || "")} · ${escapeHtml(candidate.sourceMediaType || "unknown")} · Reviewer average ${Number(candidate.baseScore || 0).toFixed(2)}${candidate.isEligible ? "" : " · Below candidate threshold"}</p>
+      <p>${escapeHtml(candidate.prioritySetLabel || "")} · ${escapeHtml(candidate.sourceMediaType || "unknown")}${candidate.sourceMediaTypeReason ? " · " + escapeHtml(candidate.sourceMediaTypeReason) : ""} · Reviewer average ${Number(candidate.baseScore || 0).toFixed(2)}${candidate.isEligible ? "" : " · Below candidate threshold"}</p>
       <p role="status"><strong>${escapeHtml(videoPipelineNextStep(candidate))}</strong></p>
       <p><a href="https://drive.google.com/file/d/${encodeURIComponent(candidate.sourceFileId)}/view" target="_blank" rel="noopener noreferrer">Open source video</a></p>
       ${(candidate.footageConnections || []).length ? `<p>Footage inventory: ${candidate.footageConnections.map(c => `${escapeHtml(c.inventoryEventName)} · source row ${Number(c.sourceRow)}${c.originalMediaFileId ? ` · <a href="https://drive.google.com/file/d/${encodeURIComponent(c.originalMediaFileId)}/view" target="_blank" rel="noopener noreferrer">OM source</a>` : ""}${c.finishedVideoFileId ? ` · <a href="https://drive.google.com/file/d/${encodeURIComponent(c.finishedVideoFileId)}/view" target="_blank" rel="noopener noreferrer">FV deliverable</a>` : ""}`).join("; ")}</p>` : ""}
