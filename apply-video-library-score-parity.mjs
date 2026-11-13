@@ -1,0 +1,13 @@
+import fs from 'node:fs';
+import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
+const target=process.argv[2]||'/app/video_curation_handoff.mjs';
+const source=fs.readFileSync(target,'utf8');
+const pattern=/export function videoReviewProgress\([\s\S]*?\n}\n/g;
+const matches=[...source.matchAll(pattern)];
+assert.equal(matches.length,1,'Expected one video progress function');
+const expected="2cdff29f95349430eccce267898e537d2dae2027b3916f61f8bd1723a5473e70";
+assert.equal(createHash('sha256').update(matches[0][0]).digest('hex'),expected,'Video progress source changed; inspect the current runtime');
+const replacement="export function videoReviewProgress(reviews = []) {\n  const rated = reviews.filter(review => clean(review.rating));\n  const reviewers = new Set(rated.map(review => clean(review.reviewerEmail).toLowerCase()).filter(Boolean));\n  const excerpts = new Set(rated.flatMap(review => review.excerptRecordIds || []).map(clean).filter(Boolean));\n  const scores = rated.map(review => {\n    if (review.ratingSource === 'legacy_import' && clean(review.legacyScore)) {\n      const score = Number(review.legacyScore);\n      return Number.isFinite(score) ? score : null;\n    }\n    return {dislike: 2.5, meh: 5, like: 7.5, moved_me: 10}[clean(review.rating).toLowerCase()] ?? null;\n  }).filter(Number.isFinite);\n  // Excerpts determine collection progress, independently of review quality.\n  const score = scores.length ? scores.reduce((a,b) => a+b,0)/scores.length : 0;\n  return {reviewerCount:reviewers.size, excerptCount:excerpts.size,\n    reviewComplete:reviewers.size >= 5 && excerpts.size >= 3, candidateScore:Number(score.toFixed(2))};\n}\n";
+fs.writeFileSync(target,source.replace(matches[0][0],replacement));
+console.log('Removed video-library excerpt score bonus; progress and gates retained.');

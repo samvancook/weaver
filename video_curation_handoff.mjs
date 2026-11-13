@@ -100,9 +100,8 @@ export function videoReviewProgress(reviews = []) {
     }
     return {dislike: 2.5, meh: 5, like: 7.5, moved_me: 10}[clean(review.rating).toLowerCase()] ?? null;
   }).filter(Number.isFinite);
-  const excerptReviewers = new Set(rated.filter(review => (review.excerptRecordIds || []).length)
-    .map(review => clean(review.reviewerEmail).toLowerCase()).filter(Boolean));
-  const score = scores.length ? scores.reduce((a,b) => a+b,0)/scores.length + Math.min(1,excerptReviewers.size*0.5) : 0;
+  // Excerpts determine collection progress, independently of review quality.
+  const score = scores.length ? scores.reduce((a,b) => a+b,0)/scores.length : 0;
   return {reviewerCount:reviewers.size, excerptCount:excerpts.size,
     reviewComplete:reviewers.size >= 5 && excerpts.size >= 3, candidateScore:Number(score.toFixed(2))};
 }
