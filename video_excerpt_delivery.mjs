@@ -1,5 +1,5 @@
 import {createHash} from 'node:crypto';
-const clean=v=>String(v??'').trim(),norm=v=>clean(v).normalize('NFKC').replace(/\s+/gu,' ').toLowerCase();
+const clean=v=>String(v??'').trim(),norm=v=>clean(v).normalize('NFKC').replace(/\s+/gu,' ');
 export function videoExcerptDeliveryFingerprint(r){const p=r.payload||{},file=clean(r.sourceVideoFileId||p.sourceVideoFileId)||clean(r.sourceVideoUrl||p.sourceVideoUrl).match(/\/file\/d\/([\w-]+)/)?.[1]||'';
  return createHash('sha256').update(JSON.stringify([clean(r.sourceRecordId),norm(r.author),norm(r.poemTitle),norm(r.excerpt),file,clean(r.sourceEvent||p.sourceEvent),clean(r.bookTitle),clean(r.bookShortener),clean(r.releaseCatalog)])).digest('hex');}
 

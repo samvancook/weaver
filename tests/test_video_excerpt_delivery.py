@@ -44,7 +44,9 @@ class VideoExcerptQueueTests(unittest.TestCase):
         self.assertFalse(db.docs);r=self.queued(db)
         self.assertFalse(claim(db,{'expectedRecord':r,'sourceFingerprint':'changed'})['claimed'])
     def test_fingerprint_matches_javascript_unicode_fixture(self):
-        self.assertEqual(fingerprint({**self.record(),"author":"Ｐｏｅｔ","excerpt":"Ａpproved\u00a0lines"}),'6cb5b9ed1c3bba9768c445dd423f75650fc4086f409c9519fbc7515222441ef4')
+        self.assertEqual(fingerprint({**self.record(),"author":"Ｐｏｅｔ","excerpt":"Ａpproved\u00a0lines"}),'298b38dd7d8357689df1d9163731fa699a555a5517a7d9f6d886b20ca4d8b0cb')
+    def test_case_corrections_change_the_approved_source_version(self):
+        self.assertNotEqual(fingerprint(self.record()), fingerprint({**self.record(),"excerpt":"approved lines"}))
     def test_ordinary_upsert_cannot_bypass_a_managed_delivery(self):
         from weaver_runtime_sync import sync_excerpt_handoffs
         db=Store();self.queued(db)

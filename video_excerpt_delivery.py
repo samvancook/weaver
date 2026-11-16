@@ -22,7 +22,7 @@ def file_id(record):
     return direct or (match.group(1) if match else "")
 
 def fingerprint(record):
-    norm = lambda v: " ".join(unicodedata.normalize("NFKC", clean(v)).split()).lower()
+    norm = lambda v: " ".join(unicodedata.normalize("NFKC", clean(v)).split())
     payload = record.get("payload") or {}
     fields = [clean(record.get("sourceRecordId")), norm(record.get("author")), norm(record.get("poemTitle")),
               norm(record.get("excerpt")), file_id(record), clean(record.get("sourceEvent") or payload.get("sourceEvent")),
