@@ -119,6 +119,7 @@ const PRIORITY_VIDEO_SETS = new Map([
     id: "publishers-poetry-slam-2026-camera-y",
     label: "Publisher's Poetry Slam 2026 - Camera Y",
     eventName: "Publisher's Poetry Slam 2026",
+    sourceEventLabel: "Publisher's Poetry Slam 2026",
     folderId: "1D5gKXfvHPIOdyQCaV6yOoA4K8_IClzFs",
     excludeNoPoem: true,
     releaseConfirmedFileIds: [
@@ -2664,7 +2665,7 @@ async function getVideoCurationCandidates(prioritySetId = "") {
           || `https://drive.google.com/file/d/${encodeURIComponent(sourceFileId)}/view`,
         eventName: cleanSheetWhitespace(firstReview.eventName) || set.eventName || set.label,
         sourceEvent: cleanSheetWhitespace(firstReview.sourceEvent) || set.eventName || set.label,
-        sourceEventLabel: cleanSheetWhitespace(firstReview.sourceEventLabel) || set.label,
+        sourceEventLabel: cleanSheetWhitespace(set.sourceEventLabel) || cleanSheetWhitespace(firstReview.sourceEventLabel) || set.label,
         eventReleaseCatalog: cleanSheetWhitespace(firstReview.eventReleaseCatalog) || cleanSheetWhitespace(set.eventReleaseCatalog),
         author: cleanSheetWhitespace(firstReview.author),
         poemTitle: cleanSheetWhitespace(firstReview.poemTitle),
