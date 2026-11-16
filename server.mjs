@@ -8347,6 +8347,9 @@ async function hydrateApprovedFirestoreGraphicRecord(update) {
     || !cleanSheetWhitespace(payload.assetUrl)) {
     throw new Error(`Approved graphic ${completionId || requestId} is missing its matching P.I.G. completion.`);
   }
+  // A PNG can pass QC even when its editable sidecar belongs to another request.
+  // Only hand off a project link that was verified for this completion.
+  const verifiedProject = completion.editableProjectValidationStatus === "verified";
   return {
     ...payload,
     ...update,
@@ -8356,9 +8359,11 @@ async function hydrateApprovedFirestoreGraphicRecord(update) {
     assetLinkUrl: cleanSheetWhitespace(payload.assetUrl),
     assetPreviewUrl: cleanSheetWhitespace(payload.assetPreviewUrl),
     assetSet: Array.isArray(payload.assetSet) ? payload.assetSet : [],
-    pigProjectId: cleanSheetWhitespace(payload.pigProjectId),
-    editableProjectFileId: cleanSheetWhitespace(payload.editableProjectFileId),
-    editableProjectUrl: cleanSheetWhitespace(payload.editableProjectUrl),
+    pigProjectId: verifiedProject ? cleanSheetWhitespace(completion.pigProjectId) : "",
+    editableProjectFileId: verifiedProject ? cleanSheetWhitespace(completion.editableProjectFileId) : "",
+    projectFileId: "",
+    editableProjectUrl: verifiedProject ? cleanSheetWhitespace(completion.editableProjectUrl) : "",
+    editableProjectAvailable: verifiedProject,
     syntheticTest: payload.syntheticTest === true,
   };
 }
