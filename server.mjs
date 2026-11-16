@@ -4877,6 +4877,11 @@ function buildPoetryPleaseGraphicRecord(record) {
 
   return {
     ...graphicIdentity,
+    // A Weaver-requested QI can be a second design for the same excerpt.
+    // Keep its graphic ID distinct while sourceRecordId still links the excerpt.
+    ...(cleanSheetWhitespace(record.graphicsRequestId).startsWith("weaver:qi:")
+      && cleanSheetWhitespace(record.pigCompletionId)
+      ? { docId: `QI-${cleanSheetWhitespace(record.pigCompletionId)}` } : {}),
     source: "weaver_qc_approved_graphic",
     imageType: contentType,
     sourceCompletionId: cleanSheetWhitespace(record.pigCompletionId),
