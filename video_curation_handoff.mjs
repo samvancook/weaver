@@ -17,6 +17,9 @@ export function driveFileId(value) {
 
 export function resolveCurrentVideoFileId(record, files) {
   const sourceFileId = clean(record?.sourceFileId);
+  const linked = files.filter(file => file.reviewSourceFileIds?.includes(sourceFileId));
+  if (linked.length > 1) throw new Error("Ambiguous video performance relationship");
+  if (linked.length === 1) return clean(linked[0].id);
   if (files.some(file => clean(file.id) === sourceFileId)) return sourceFileId;
   const sourceFileName = clean(record?.sourceFileName);
   if (!sourceFileName) return "";
@@ -70,6 +73,7 @@ export function buildVideoReviewEvidence(files, records, currentFileId) {
       sourceFileName: clean(record.sourceFileName),
       mapping: clean(record.sourceFileId) === clean(currentFileId) ? "direct_file_id" : "filename_reconciliation",
       reviewerEmail: clean(record.reviewerEmail), rating: clean(record.rating),
+      ratingSource: clean(record.ratingSource), legacyScore: record.legacyScore ?? null, notes: record.notes || "",
       excerptRecordIds: [...new Set((record.excerptRecordIds || []).map(clean).filter(Boolean))],
       updatedAt: clean(record.updatedAt)
     }));
@@ -193,21 +197,22 @@ export function buildVideoContextUpdate(candidate, receipt) {
     || candidate.publicationRestricted) throw new Error("An existing, ready canonical video is required.");
   assertExistingCanonicalReceipt(receipt, sourceRecordId, canonicalVideoId, candidate.sourceEvent);
   const evidence = candidate.reviewEvidence || [];
-  const reviews = (candidate.ratings || []).flatMap(review => {
+  const reviews = (candidate.performanceContext ? evidence : candidate.ratings || []).flatMap(review => {
     const origins = evidence.filter(row => row.reviewId === review.reviewId);
     if (origins.length !== 1 || !clean(review.reviewId)) return [];
     const origin = origins[0];
     // Only the exact canonical review source or the current FV, not a third
     // source included solely through filename reconciliation.
-    if (![clean(candidate.sourceFileId), clean(candidate.sourceReviewFileId)].includes(clean(origin.sourceFileId))) return [];
+    if (![clean(candidate.sourceFileId), clean(candidate.sourceReviewFileId), ...(candidate.versionSourceFileIds || [])].includes(clean(origin.sourceFileId))) return [];
     return [{ ...review, sourceRecordId: `weaver:video:${origin.sourceFileId}`,
       excerptRecordIds: [...new Set((origin.excerptRecordIds || []).map(clean).filter(Boolean))] }];
   });
   if (!reviews.length || new Set(reviews.map(row => row.reviewId)).size !== reviews.length) {
     throw new Error("Exact stored review identities are required for context delivery.");
   }
-  const selectedExcerptRecordIds = [...new Set((candidate.gate.selectedExcerptRecordIds || []).map(clean).filter(Boolean))];
-  return { canonicalVideoId, sourceRecordId, sourceEvent: clean(candidate.sourceEvent), reviews, selectedExcerptRecordIds };
+  const selectedExcerptRecordIds = [...new Set([...(candidate.gate.selectedExcerptRecordIds || []), ...(candidate.performanceContext ? candidate.excerptRecordIds || [] : [])].map(clean).filter(Boolean))];
+  return { canonicalVideoId, sourceRecordId, sourceEvent: clean(candidate.sourceEvent), reviews, selectedExcerptRecordIds,
+    ...(candidate.performanceContext ? {performanceContext:candidate.performanceContext} : {}) };
 }
 
 export async function syncVideoReviewContext(candidate, { readReceipt, postContext }) {
@@ -222,6 +227,16 @@ export async function syncVideoReviewContext(candidate, { readReceipt, postConte
   }
   const after = await readReceipt(record.sourceRecordId);
   assertExistingCanonicalReceipt(after, record.sourceRecordId, record.canonicalVideoId, record.sourceEvent);
+  if (record.performanceContext) {
+    const saved=after.performanceContext;
+    if (saved?.performanceId !== record.performanceContext.performanceId
+      || saved.sourceRecordId !== record.sourceRecordId
+      || JSON.stringify(saved.poem) !== JSON.stringify(record.performanceContext.poem)
+      || !record.performanceContext.assets.every(a=>saved.assets?.some(b=>b.fileId===a.fileId&&b.url===a.url))
+      || !record.performanceContext.excerptRecordIds.every(id=>saved.excerptRecordIds?.includes(id))) {
+      throw new Error("Poetry Please did not retain the shared performance, versions and excerpt links.");
+    }
+  }
   for (const field of ["driveLink", "videoUrl", "storageMode", "reviewOnly"]) {
     if (JSON.stringify(before.media?.[field]) !== JSON.stringify(after.media?.[field])) {
       throw new Error("Primary media changed during context reconciliation; inspect this video.");
@@ -415,6 +430,7 @@ export function buildWeaverVideoImport(candidate, gate) {
     ? candidate.footageConnections : gate.footageConnections || []);
   return {
     ...(footageConnections.length ? {footageContextVersion:1,footageConnections} : {}),
+    ...(candidate.performanceContext ? {performanceContext:candidate.performanceContext} : {}),
     contentType: "VV",
     sourceSystem: "weaver",
     sourceRecordId,
