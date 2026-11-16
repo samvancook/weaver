@@ -1738,9 +1738,9 @@ class FirestoreLedgerClient:
                 or ""
             ),
             "editableProjectValidationError": (
-                update.get("editableProjectValidationError")
-                or existing.get("editableProjectValidationError")
-                or {}
+                update["editableProjectValidationError"]
+                if "editableProjectValidationError" in update
+                else existing.get("editableProjectValidationError") or {}
             ),
             "reworkReason": str(update.get("reworkReason") or update.get("rejectReason") or existing.get("reworkReason") or ""),
             "metadataIssue": str(update.get("metadataIssue") or existing.get("metadataIssue") or ""),
