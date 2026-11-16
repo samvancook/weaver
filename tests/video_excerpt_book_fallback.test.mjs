@@ -1,3 +1,4 @@
+import {videoFamilyForFile} from "../video_version_families.mjs";
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -22,7 +23,7 @@ test('timeouts, server errors, ordinary validation errors, partial results and s
 test('book imports and missing video identities cannot enter the fallback',()=>{
   for(const extra of [{contentType:'FP'},{sourceVideoFileId:''},{sourceContentId:''},{sourceRecordId:''},{bookTitle:''},{bookShortener:'KNOWN'}])assert.equal(fallback({...record,...extra},{status:400},rejected),null);
 });
-function sender(responses){const calls=[];const context={cleanSheetWhitespace,poetryPleaseApiKey:'test',poetryPleaseApiUrl:'https://receiver.example/api',
+function sender(responses){const calls=[];const context={videoFamilyForFile,cleanSheetWhitespace,poetryPleaseApiKey:'test',poetryPleaseApiUrl:'https://receiver.example/api',
   AbortSignal,buildPoetryPleaseExcerptRecord:r=>({...r}),syncWeaverRuntimeDb:async()=>({records:[]}),poetryPleaseVideoIdForSourceFile:()=> 'VV-test',
   fetch:async(_url,options)=>{calls.push(JSON.parse(options.body));const next=responses.shift();if(next instanceof Error)throw next;return {status:next.status,ok:next.status>=200&&next.status<300,json:async()=>next.body};}};
   const send=runInNewContext(fn('videoExcerptBookFallback')+'\n'+fn('handoffApprovedExcerptsToPoetryPlease')+';handoffApprovedExcerptsToPoetryPlease',context);return {send,calls};}
