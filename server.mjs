@@ -8198,7 +8198,8 @@ async function validateCompletionEditableProjectIdentity(completion = {}) {
       || sourceRecord.graphicsRequestId,
     contentId: projectContentId,
     imageId: selectedRecord.imageId || sourceRecord.imageId || projectContentId,
-    quoteText: project.sourceIdentity?.normalizedText
+    quoteText: project.controlsValues?.poemText
+      || project.sourceIdentity?.normalizedText
       || selectedRecord.quoteText
       || selectedRecord.text
       || sourceRecord.quoteText
