@@ -8175,6 +8175,14 @@ async function validateCompletionEditableProjectIdentity(completion = {}) {
       || project.sourceIdentity?.recordId || selectedRecord.id || sourceRecord.id
       || selectedRecord.sourceRecordId || selectedRecord.recordId || sourceRecord.sourceRecordId
   );
+  const projectRecordId = cleanEditableIdentityValue(
+    project.sourceIdentity?.recordId || selectedRecord.id || selectedRecord.recordId
+  );
+  const projectSourceType = cleanEditableIdentityValue(
+    project.sourceIdentity?.sourceType || selectedRecord.sourceType
+  );
+  const impliedPigRequestId = projectRecordId && projectSourceType.startsWith("poetry_please_")
+    ? `pig:record-${projectRecordId}` : "";
   const projectIdentity = getEditableIdentityValues({
     ...sourceRecord,
     ...selectedRecord,
@@ -8194,7 +8202,8 @@ async function validateCompletionEditableProjectIdentity(completion = {}) {
   const projectRequestIds = [
     project.sourceIdentity?.graphicsRequestId,
     selectedRecord.graphicsRequestId,
-    sourceRecord.graphicsRequestId
+    sourceRecord.graphicsRequestId,
+    impliedPigRequestId
   ].map(cleanEditableIdentityValue).filter(Boolean);
   if (expectedRequestId && projectRequestIds.some(requestId => requestId !== expectedRequestId)) {
     throw new Error(`Editable project ${editableProjectFileId} request identity conflicts with ${expectedRequestId}.`);
@@ -8214,11 +8223,6 @@ async function validateCompletionEditableProjectIdentity(completion = {}) {
       && !projectContentIds.some(value => expectedContentIds.has(value))) {
     throw new Error(`Editable project ${editableProjectFileId} content identity conflicts with completion ${completion.completionId || ""}.`);
   }
-  if (expected.quoteText && projectIdentity.quoteText
-      && normalizeEditableIdentityText(expected.quoteText) !== normalizeEditableIdentityText(projectIdentity.quoteText)) {
-    throw new Error(`Editable project ${editableProjectFileId} text conflicts with completion ${completion.completionId || ""}.`);
-  }
-
   const requestMatches = Boolean(
     expectedRequestId && projectRequestIds.length && projectRequestIds.every(value => value === expectedRequestId)
   );
@@ -8228,6 +8232,9 @@ async function validateCompletionEditableProjectIdentity(completion = {}) {
       && projectIdentity.quoteText
       && normalizeEditableIdentityText(expected.quoteText) === normalizeEditableIdentityText(projectIdentity.quoteText)
   );
+  if (expected.quoteText && projectIdentity.quoteText && !textMatches && !requestMatches) {
+    throw new Error(`Editable project ${editableProjectFileId} text conflicts with completion ${completion.completionId || ""}.`);
+  }
   if (!requestMatches && !contentMatches && !textMatches) {
     throw new Error(`Editable project ${editableProjectFileId} has no verified identity match for this completion.`);
   }
