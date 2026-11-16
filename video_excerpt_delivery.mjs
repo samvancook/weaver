@@ -3,10 +3,15 @@ const clean=v=>String(v??'').trim(),norm=v=>clean(v).normalize('NFKC').replace(/
 export function videoExcerptDeliveryFingerprint(r){const p=r.payload||{},file=clean(r.sourceVideoFileId||p.sourceVideoFileId)||clean(r.sourceVideoUrl||p.sourceVideoUrl).match(/\/file\/d\/([\w-]+)/)?.[1]||'';
  return createHash('sha256').update(JSON.stringify([clean(r.sourceRecordId),norm(r.author),norm(r.poemTitle),norm(r.excerpt),file,clean(r.sourceEvent||p.sourceEvent),clean(r.bookTitle),clean(r.bookShortener),clean(r.releaseCatalog)])).digest('hex');}
 
-export async function runVideoExcerptDeliveries({db,loadApproved,canSend,send,inspect,recordIds=[],budgetMs=45000,max=2,now=Date.now}){
+export async function runVideoExcerptDeliveries({db,loadApproved,canSend,send,inspect,recordIds=[],budgetMs=120000,max=2,now=Date.now}){
  const started=now(),result=await db('get_video_excerpt_delivery_queue',{});if(!result.ok)throw Error('Durable excerpt queue unavailable');
  const ids=new Set(recordIds),work=(result.records||[]).filter(r=>(!ids.size||ids.has(r.recordId))&&['queued','waiting_video','sending','needs_reconciliation','acknowledged'].includes(r.delivery?.state))
   .sort((a,b)=>String(a.delivery.checkedAt||a.delivery.queuedAt).localeCompare(String(b.delivery.checkedAt||b.delivery.queuedAt))||a.recordId.localeCompare(b.recordId));
+ const isReceipt=r=>['acknowledged','needs_reconciliation'].includes(r.delivery.state)||r.delivery.state==='sending'&&r.delivery.leaseExpiresAt*1000<=now();
+ const receipts=work.filter(isReceipt),unsent=work.filter(r=>!isReceipt(r));
+ // Give an existing receiver outcome a chance to close before another send,
+ // while reserving the second slot for unsent work when both lanes have work.
+ work.splice(0,work.length,...(receipts.length&&unsent.length?[receipts[0],unsent[0],...receipts.slice(1),...unsent.slice(1)]:work));
  const summary={ok:true,checked:0,sends:0,received:0,held:0};if(!work.length)return summary;
  const byId=new Map((await loadApproved()).map(r=>[r.recordId,r]));
  const touch=(record,reason,error)=>db('review_video_excerpt_delivery',{expectedRecord:record,reason,error});

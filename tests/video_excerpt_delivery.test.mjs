@@ -18,3 +18,13 @@ test('source save is acknowledged separately when queue persistence fails, witho
  const s={appVersion:'test',buildReviewWriteRanges:()=>[{range:'source'}],enrichAcceptedExcerptUpdate:async r=>{calls.push('enrich');return r;},buildExcerptRuntimeRecord:r=>r,batchUpdateSheetValuesServer:async()=>calls.push('source_saved'),shadowExcerptRecordsToRuntime:async()=>({ok:true}),buildAcceptedExcerptHandoff:r=>r,syncWeaverRuntimeDb:async()=>{calls.push('queue');throw Error('queue offline');},handoffApprovedExcerptsToPoetryPlease:()=>{throw Error('Receiver must not run');}};
  vm.createContext(s);vm.runInContext(fn('syncAcceptedExcerptHandoffs')+'\n'+fn('saveReviewsToSheets'),s);const saved=await s.saveReviewsToSheets([input()]);assert.equal(saved.ok,true);assert.equal(saved.savedCount,1);assert.equal(saved.excerptHandoffs.ok,false);assert.match(saved.excerptHandoffs.error,/Approvals saved/);assert.deepEqual(calls,['enrich','source_saved','queue']);
 });
+
+test('a receipt check precedes the next send without starving the unsent lane',async()=>{
+ const ack={...input(),recordId:'weaver-exc-old',sourceRecordId:'old',handoffStatus:'sent',poetryPleaseItemId:'EXC-OLD'};
+ ack.delivery={schemaVersion:'1',state:'acknowledged',attempts:1,sourceFingerprint:videoExcerptDeliveryFingerprint(ack),queuedAt:'2026-01-02'};
+ const pending={...input(),recordId:'weaver-exc-new',sourceRecordId:'new'};pending.delivery={schemaVersion:'1',state:'queued',attempts:0,sourceFingerprint:videoExcerptDeliveryFingerprint(pending),queuedAt:'2026-01-01'};
+ const calls=[];const secondAck={...ack,recordId:'weaver-exc-other',sourceRecordId:'other',delivery:{...ack.delivery,queuedAt:'2026-01-03'}};secondAck.delivery.sourceFingerprint=videoExcerptDeliveryFingerprint(secondAck);
+ await runVideoExcerptDeliveries({loadApproved:async()=>[ack,pending,secondAck],canSend:async()=> 'parent',inspect:async r=>{calls.push('inspect:'+r.sourceRecordId);throw Error('read unavailable');},send:async()=>{calls.push('send:new');return{ok:true,poetryPleaseItemId:'EXC-NEW'};},db:async(action,p)=>{
+ if(action==='get_video_excerpt_delivery_queue')return{ok:true,records:[pending,secondAck,ack]};if(action==='claim_video_excerpt_delivery'){calls.push('claim:'+p.expectedRecord.sourceRecordId);return{claimed:true,token:'t'};}if(action==='finish_video_excerpt_delivery')return{saved:true,record:{...pending,delivery:{...pending.delivery,state:'acknowledged'}}};if(action==='review_video_excerpt_delivery')return{saved:true};throw Error(action);
+ }});assert.equal(calls[0],'inspect:old');assert.ok(calls.indexOf('claim:new')>0);assert.equal(calls.filter(c=>c==='send:new').length,1);assert.ok(!calls.includes('inspect:other'));
+});

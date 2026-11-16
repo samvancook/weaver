@@ -3018,7 +3018,7 @@ async function runScheduledVideoExcerptDeliveries(options = {}) {
       const matches = (result.results||[]).filter(row=>row.recordId===record.recordId);
       return matches.length===1 ? matches[0] : {ok:false,error:"Missing exact excerpt acknowledgement; reconcile before retry"};
     },
-    inspect:record=>inspectExcerptHandoffReceipt(record.recordId,"weaver:scheduled-excerpt",true,10000),
+    inspect:record=>inspectExcerptHandoffReceipt(record.recordId,"weaver:scheduled-excerpt",true,30000),
     ...options
   });
 }
@@ -5881,7 +5881,7 @@ async function handoffApprovedExcerptsToPoetryPlease(records = [], {expectedCano
         method: "POST",
         headers: { "Content-Type": "application/json", "x-api-key": poetryPleaseApiKey },
         body: JSON.stringify({ contentType: record.contentType, payload }),
-        signal: AbortSignal.timeout(15000)
+        signal: AbortSignal.timeout(30000)
       });
       let response = await post(record);
       let result = await response.json().catch(() => ({}));
