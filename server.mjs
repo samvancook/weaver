@@ -1,4 +1,4 @@
-import {runVideoExcerptDeliveries} from './video_excerpt_delivery.mjs';
+import {runVideoExcerptDeliveries,videoExcerptDeliveryFingerprint} from './video_excerpt_delivery.mjs';
 import {createVideoResolutionService} from './video_resolution_service.mjs';
 import {assertResolvedVideoMedia,mediaResolutionPublic,normalizeVideoIdentity} from './video_resolution.mjs';
 import {recordedFolderMediaType,traceVideoFolderMediaType,videoFileMediaType} from './video_media_classification.mjs';
@@ -6083,16 +6083,22 @@ async function retryExcerptHandoffs({ recordIds = [], statuses = ["queued", "fai
 async function inspectExcerptHandoffReceipt(recordId, checkedBy = "", apply = false, timeoutMs = 30000) {
   if (!poetryPleaseApiKey) throw new Error("Poetry Please connection is not configured.");
   if (!recordId || recordId.length > 400) throw new Error("Choose one exact excerpt handoff.");
-  const [approved, runtime] = await Promise.all([
-    getExcerptHandoffRecords({ recordIds: [recordId] }),
+  const loadApprovedSource = async () => {
+    const approved = await getApprovedExcerptsExportFromSheets();
+    if (!approved?.ok) throw new Error("Current authoritative approvals unavailable");
+    return (approved.records || []).map(buildExcerptHandoffFromApprovedExportRecord).find(row => row?.recordId === recordId);
+  };
+  const [record, runtime] = await Promise.all([
+    loadApprovedSource(),
     syncWeaverRuntimeDb("get_excerpt_handoffs", { recordIds: [recordId] })
   ]);
-  const record = approved.records?.find(row => row.recordId === recordId);
   const stored = runtime.records?.find(row => row.recordId === recordId);
   const expected = stored || record;
   if (!record || !expected || record.contentType !== "EXC"
     || record.sourceRecordId !== expected.sourceRecordId
-    || excerptFingerprint(record.excerpt) !== excerptFingerprint(expected.excerpt)) {
+    || excerptFingerprint(record.excerpt) !== excerptFingerprint(expected.excerpt)
+    || expected.delivery?.schemaVersion === "1" && (videoExcerptDeliveryFingerprint(record) !== expected.delivery.sourceFingerprint
+      || ["sending", "needs_source_review"].includes(expected.delivery.state))) {
     throw new Error("The approved source and saved handoff require review.");
   }
   const source = buildPoetryPleaseExcerptRecord(record);
@@ -6118,10 +6124,8 @@ async function inspectExcerptHandoffReceipt(recordId, checkedBy = "", apply = fa
   const receipt = verifyExcerptReadback(record, acknowledgement, body);
   if (!apply) return { ok: true, receipt, canReconcile: ["failed", "queued"].includes(expected.handoffStatus) };
   if (!checkedBy) throw new Error("Verified administrator required.");
-  if (!stored) {
-    const fresh = (await getExcerptHandoffRecords({ recordIds: [recordId] })).records?.find(row => row.recordId === recordId);
-    if (JSON.stringify(fresh) !== JSON.stringify(record)) throw new Error("The approved source changed; refresh before reconciling.");
-  }
+  const fresh = await loadApprovedSource();
+  if (JSON.stringify(fresh) !== JSON.stringify(record)) throw new Error("The approved source changed; refresh before reconciling.");
   const result = await syncWeaverRuntimeDb("reconcile_excerpt_handoff", { expectedRecord: expected, approvedBaseline: !stored, receipt, checkedBy });
   if (!result.saved) throw new Error(result.reason || "The handoff changed; refresh before reconciling.");
   invalidateQueueSnapshots();

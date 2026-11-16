@@ -58,4 +58,14 @@ class VideoExcerptQueueTests(unittest.TestCase):
             for action in ['queue_video_excerpt_deliveries','get_video_excerpt_delivery_queue','claim_video_excerpt_delivery','finish_video_excerpt_delivery','review_video_excerpt_delivery']:
                 with self.assertRaises(Exception):validate_production_handoff_backend(action)
 
+    def test_receipt_cannot_clear_active_or_changed_source(self):
+        from weaver_runtime_sync import reconcile_excerpt_handoff
+        for state in ['sending', 'needs_source_review']:
+            db=Store();r=self.queued(db)
+            db.docs[(COLLECTION,key(r['recordId']))]['delivery']['state']=state
+            current=copy.deepcopy(db.docs[(COLLECTION,key(r['recordId']))])
+            result=reconcile_excerpt_handoff(db,{'expectedRecord':current,'checkedBy':'operator','receipt':{}})
+            self.assertFalse(result['saved'])
+            self.assertEqual(result['reason'],'excerpt_delivery_requires_source_review')
+
 if __name__=='__main__':unittest.main()

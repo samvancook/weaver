@@ -678,6 +678,8 @@ def reconcile_excerpt_handoff(connection, payload):
         current = expected
     if current != expected:
         return {"ok": True, "saved": False, "reason": "excerpt_handoff_changed"}
+    if (current.get("delivery") or {}).get("schemaVersion") == "1" and current["delivery"].get("state") in {"sending", "needs_source_review"}:
+        return {"ok": True, "saved": False, "reason": "excerpt_delivery_requires_source_review"}
     checked_at = receipt.get("checkedAtMs")
     if (receipt.get("verified") is not True or not isinstance(checked_at, (float, int))
             or not 0 <= time.time() * 1000 - checked_at <= 30000
