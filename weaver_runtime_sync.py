@@ -13,6 +13,8 @@ import unicodedata
 from datetime import datetime
 from typing import Any
 
+from video_excerpt_delivery import queue as queue_video_excerpt_deliveries, get_queue as get_video_excerpt_delivery_queue, claim as claim_video_excerpt_delivery, finish as finish_video_excerpt_delivery, review as review_video_excerpt_delivery
+
 from weaver_runtime_db import (
     DEFAULT_DB_PATH,
     FIRESTORE_EXCERPT_RECORDS_COLLECTION,
@@ -78,6 +80,7 @@ FIRESTORE_HANDOFF_ACTIONS = {
     "refresh_video_curation_receipt",
     "get_video_curation_gates", "get_video_media_classification",
     "get_video_media_resolutions", "save_video_media_resolution", "prepare_resolved_video_gate",
+    "queue_video_excerpt_deliveries", "get_video_excerpt_delivery_queue", "claim_video_excerpt_delivery", "finish_video_excerpt_delivery", "review_video_excerpt_delivery",
     "claim_video_pipeline", "save_video_pipeline", "get_video_pipeline", "enqueue_video_pipeline", "reconcile_video_pipeline_gate",
 }
 
@@ -593,6 +596,8 @@ def sync_excerpt_handoffs(connection, payload: dict[str, Any]) -> dict[str, Any]
             document_id = excerpt_handoff_document_id(record_id)
             existing, version = connection.get_raw_document_versioned(FIRESTORE_EXCERPT_HANDOFFS_COLLECTION, document_id)
             existing = existing or {}
+            if (existing.get("delivery") or {}).get("schemaVersion") == "1":
+                raise ValueError("Scheduled video excerpt delivery requires its guarded queue actions")
             if existing.get("sourceRecordId") and existing.get("sourceRecordId") != handoff.get("sourceRecordId"):
                 raise ValueError("Excerpt handoff source identity changed")
             if existing.get("reconciliation"):
@@ -691,6 +696,8 @@ def reconcile_excerpt_handoff(connection, payload):
              "previousHandedOffAt": current.get("handedOffAt"), "mode": "receipt_only_no_resend"}
     record = {**current, "handoffStatus": "sent", "poetryPleaseItemId": receipt["canonicalExcerptId"],
               "errorMessage": "", "reconciliation": audit, "ledgerUpdatedAt": now}
+    if (current.get("delivery") or {}).get("schemaVersion") == "1":
+        record["delivery"] = {**current["delivery"], "state": "received", "leaseExpiresAt": 0, "checkedAt": now}
     saved = (connection.write_raw_document_if_unchanged(FIRESTORE_EXCERPT_HANDOFFS_COLLECTION, document_id, record, version)
                      if version else connection.create_raw_document_if_absent(FIRESTORE_EXCERPT_HANDOFFS_COLLECTION, document_id, record))
     return {"ok": True, "saved": bool(saved), "record": saved, "reason": "" if saved else "excerpt_handoff_changed"}
@@ -2374,6 +2381,16 @@ def main() -> int:
             result = sync_poetry_please_handoffs(connection, payload)
         elif action == "upsert_excerpt_handoffs":
             result = sync_excerpt_handoffs(connection, payload)
+        elif action == "queue_video_excerpt_deliveries":
+            result = queue_video_excerpt_deliveries(connection, payload)
+        elif action == "get_video_excerpt_delivery_queue":
+            result = get_video_excerpt_delivery_queue(connection, payload)
+        elif action == "claim_video_excerpt_delivery":
+            result = claim_video_excerpt_delivery(connection, payload)
+        elif action == "finish_video_excerpt_delivery":
+            result = finish_video_excerpt_delivery(connection, payload)
+        elif action == "review_video_excerpt_delivery":
+            result = review_video_excerpt_delivery(connection, payload)
         elif action == "get_excerpt_handoffs":
             result = fetch_excerpt_handoffs(connection, payload)
         elif action == "reconcile_excerpt_handoff":
