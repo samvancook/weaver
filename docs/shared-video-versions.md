@@ -27,3 +27,24 @@ Regression tests are in `tests/video_version_families.test.mjs` plus the existin
 queue, bridge, curation handoff and excerpt source suites. Real-data preview and
 protected receiver readbacks are retained locally under
 `.evidence/shared-variants-20261116` (not committed: contains private review data).
+
+## Production verification — 2026-11-16
+
+Weaver PR #98 and Poetry Please PR #400 are merged. Current verified Weaver
+revision: `weaver-shared-variants-v2-20261116`, preserving the concurrently deployed
+excerpt receipt-pacing fix. Canonical Weaver, `footage-bridge` and `video-queues`
+all return 54 BPL performances. Click has three current assets, 12 independent
+reviewers and 14 excerpt references; Waterfall has two, nine and 13 respectively.
+Both existing Poetry Please parents retain the same primary media and expose the
+same context through protected receipts and the downstream rendition API.
+
+All 986 original review records, 44 curation gates and seven intake records were
+compared to the complete before snapshot using typed-map equality: no changes or
+deletions. The two context updates have receiver audit IDs
+`G0rj3nlyduX3rnUsFp5j` and `IVX4iwkpc2PjHi2PE8gz`.
+
+Regression results: 224 of 226 Weaver Node checks pass. The two failing multicard
+project tests also fail on the unmodified base; they concern graphics project
+identity/QC and were left unchanged. The affected video/footage/excerpt checks
+pass. Poetry Please's production CI, authorization emulator, public health and
+anonymous bootstrap checks pass. No publication or Calendar readiness was set.
