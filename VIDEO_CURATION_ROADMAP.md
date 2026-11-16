@@ -210,3 +210,9 @@ The user explicitly instructed confirmation followed by execution, with filename
 The full apply/undo round trip passed in an isolated workbook/Form with exact restoration of source, title values, formulas, choices, navigation/Other settings and help. Production operation `31b3bf52-ae4e-4fba-ace7-1c4503ce7698` then passed VERIFIED with zero errors. Independent readback confirmed the 20 source inputs, six generated filename/link outputs and canonical registry/title counts. Separate audit stores all preimages. Normal Helper remains v43; test Helper v59. 51 focused tests pass. PAGES curation registration remains separately disabled.
 
 The Donte clip-17 duplicate / clip-15 gap, Mariam folder/duplicate-title case and historical Garner alias migration remain review items; no speculative replacement or deletion was performed. See [current report and rollback evidence](integrations/footage-helper/REPORTED_REPAIRS.md). Next product slice remains staff issue reporting and supported source-based repairs in Helper, so the case/owner/status no longer live only in Sam's email.
+
+## Durable excerpt delivery — 2026-11-16
+
+Implemented in the durable video-excerpt delivery repair: separate source saves from receiver delivery; reuse the existing Scheduler and Firestore ledger; claim each exact source before sending; reconcile uncertain outcomes without automatic resends. See [VIDEO_EXCERPT_DELIVERY.md](VIDEO_EXCERPT_DELIVERY.md). Release and live verification evidence belongs in the operational shared-drive record.
+
+Remaining acceptance: observe a real newly approved excerpt through the managed queue and verify its exact PP receipt; obtain an exact-source receiver receipt lookup so old or uncertain imports do not depend on bounded recent history; confirm PP caption/readiness output and Calendar consumption independently. Approval saved with queue persistence failure must remain an explicit unresolved delivery warning.

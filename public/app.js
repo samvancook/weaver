@@ -1893,13 +1893,13 @@ function renderVideoExcerptDelivery() {
   if (!container) return;
   container.replaceChildren();
   const event = elements.videoCurationEvent?.value || "";
-  const records = videoExcerptHandoffs.filter(row => ["failed", "queued"].includes(row.handoffStatus)
+  const records = videoExcerptHandoffs.filter(row => (["failed", "queued"].includes(row.handoffStatus) || row.delivery?.schemaVersion === "1" && row.delivery.state !== "received")
     && (!event || (row.sourceEvent || row.payload?.sourceEvent) === event));
   if (elements.videoExcerptDeliveryStatus) elements.videoExcerptDeliveryStatus.textContent =
     `${records.length} approved video excerpts awaiting delivery or reconciliation. Old failure messages need a current receipt check.`;
   for (const record of records) {
     const card = document.createElement("details"); card.className = "excerpt-card";
-    card.innerHTML = `<summary>${escapeHtml(record.author)} · ${escapeHtml(record.poemTitle)} · ${escapeHtml(record.handoffStatus)}</summary>
+    card.innerHTML = `<summary>${escapeHtml(record.author)} · ${escapeHtml(record.poemTitle)} · ${escapeHtml(record.delivery?.state || record.handoffStatus)}</summary>
       <p>${escapeHtml(record.sourceEvent || record.payload?.sourceEvent || "")}</p>
       <blockquote>${escapeHtml(record.excerpt)}</blockquote>
       <p>${escapeHtml(record.errorMessage || "Queued for delivery")}</p>
@@ -1938,7 +1938,7 @@ function renderVideoExcerptDelivery() {
 async function loadVideoExcerptDelivery() {
   if (elements.videoExcerptDeliveryStatus) elements.videoExcerptDeliveryStatus.textContent = "Loading video excerpt delivery...";
   try {
-    const result = await requestReviewApi("/api/excerpts/handoffs", { status: "failed,queued" });
+    const result = await requestReviewApi("/api/excerpts/handoffs", { status: "failed,queued,sent" });
     videoExcerptHandoffs = (result.records || []).filter(row => row.sourceVideoFileId || row.payload?.sourceVideoFileId || row.sourceVideoUrl || row.payload?.sourceVideoUrl);
     renderVideoExcerptDelivery();
   } catch (error) {
@@ -7543,12 +7543,15 @@ async function submitExcerptSet({
     setStatus(`${progressLabel} ${changedUpdates.length} changed records...`);
 
     let usedFallback = false;
+    let saveResult;
     try {
-      await requestBatchSave(changedUpdates);
+      saveResult = await requestBatchSave(changedUpdates);
     } catch (batchError) {
       throw new Error(`The save response failed. Some decisions may already be saved. No automatic retry was made. Refresh the queue before trying again. ${batchError.message}`);
     }
 
+    const deliveryNote = saveResult?.excerptHandoffs?.ok === false ? " Approvals saved; delivery needs attention: " + (saveResult.excerptHandoffs.error || "check the delivery queue")
+      : saveResult?.excerptHandoffs?.queuedVideoCount ? ` Poetry Please delivery queued for ${saveResult.excerptHandoffs.queuedVideoCount} video excerpts; the scheduled worker will verify delivery.` : "";
     if (typeof afterSaveOptimistic === "function") {
       afterSaveOptimistic(changedUpdates);
     }
@@ -7569,13 +7572,13 @@ async function submitExcerptSet({
       setStatus(
         usedFallback
           ? `Saved ${changedUpdates.length} changed decisions with fallback mode. Those excerpts dropped out of the pending queue.`
-          : `Saved ${changedUpdates.length} changed decisions. Those excerpts dropped out of the pending queue.`
+          : `Saved ${changedUpdates.length} changed decisions. Those excerpts dropped out of the pending queue.${deliveryNote}`
       );
     } else {
       setStatus(
         usedFallback
           ? `Saved ${changedUpdates.length} changed decisions with fallback mode. ${droppedFromQueue} dropped out of queue and ${remainingUpdatedRows} are still showing.`
-          : `Saved ${changedUpdates.length} changed decisions. ${droppedFromQueue} dropped out of queue and ${remainingUpdatedRows} are still showing.`,
+          : `Saved ${changedUpdates.length} changed decisions. ${droppedFromQueue} dropped out of queue and ${remainingUpdatedRows} are still showing.${deliveryNote}`,
         (Array.isArray(refreshed.excerpts) ? refreshed.excerpts : Array.isArray(refreshed.records) ? refreshed.records : []).slice(0, 5)
       );
     }

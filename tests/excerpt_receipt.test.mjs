@@ -40,7 +40,7 @@ const server=readFileSync(new URL('../server.mjs',import.meta.url),'utf8');
 test('reconciliation rereads receipt, persists and reads back without an import',async()=>{
  const calls=[];const context={cleanSheetWhitespace:x=>String(x||'').trim(),excerptFingerprint,findExcerptAcknowledgement,verifyExcerptReadback,
   poetryPleaseApiKey:'test',poetryPleaseApiUrl:'https://receiver.invalid/api',AbortSignal,
-  getExcerptHandoffRecords:async()=>({records:[record]}),buildPoetryPleaseExcerptRecord:r=>r,invalidateQueueSnapshots(){},
+  getApprovedExcerptsExportFromSheets:async()=>({ok:true,records:[record]}),buildExcerptHandoffFromApprovedExportRecord:r=>r,buildPoetryPleaseExcerptRecord:r=>r,invalidateQueueSnapshots(){},
   syncWeaverRuntimeDb:async(action,payload)=>{calls.push({action,payload});return action==='reconcile_excerpt_handoff'?{saved:true}
     :{records:[calls.some(c=>c.action==='reconcile_excerpt_handoff')?{...record,handoffStatus:'sent',poetryPleaseItemId:'EXC-ONE'}:record]};},
   fetch:async(url,options)=>{calls.push({url,options});return {ok:true,json:async()=>url.includes('weaverImportHealth')?health:body};}};
@@ -58,7 +58,7 @@ test('absent runtime ledger requires unchanged approved source before receipt-on
   const source={...record,handoffStatus:'failed',errorMessage:'old 502'};
   const context={cleanSheetWhitespace:x=>String(x||'').trim(),excerptFingerprint,findExcerptAcknowledgement,verifyExcerptReadback,
    poetryPleaseApiKey:'test',poetryPleaseApiUrl:'https://receiver.invalid/api',AbortSignal,
-   getExcerptHandoffRecords:async()=>({records:[++reads>1&&changed?{...source,excerpt:'Changed'}:source]}),
+   getApprovedExcerptsExportFromSheets:async()=>({ok:true,records:[++reads>1&&changed?{...source,excerpt:'Changed'}:source]}),buildExcerptHandoffFromApprovedExportRecord:r=>r,
    buildPoetryPleaseExcerptRecord:r=>r,invalidateQueueSnapshots(){},
    syncWeaverRuntimeDb:async(action,payload)=>{calls.push({action,payload});if(action==='reconcile_excerpt_handoff'){saved=true;return {saved:true};}
     return {records:saved?[{...source,handoffStatus:'sent',poetryPleaseItemId:'EXC-ONE'}]:[]};},
@@ -67,5 +67,15 @@ test('absent runtime ledger requires unchanged approved source before receipt-on
   if(changed) {await assert.rejects(inspect('handoff','operator',true),/approved source changed/);assert.equal(saved,false);}
   else {assert.equal((await inspect('handoff','operator',true)).saved,true);
    assert.equal(calls.find(c=>c.action==='reconcile_excerpt_handoff').payload.approvedBaseline,true);assert.equal(reads,2);}
+ }
+});
+
+test('stored ledger content cannot substitute for a changed or withdrawn authoritative approval',async()=>{
+ for(const current of [[],[{...record,excerpt:'Changed'}]]) {
+  let readReceiver=false;
+  const context={excerptFingerprint,poetryPleaseApiKey:'test',getApprovedExcerptsExportFromSheets:async()=>({ok:true,records:current}),buildExcerptHandoffFromApprovedExportRecord:r=>r,
+   syncWeaverRuntimeDb:async()=>({records:[record]}),fetch:async()=>{readReceiver=true;throw Error('Unexpected receiver read');}};
+  const inspect=runInNewContext(`(${server.match(/async function inspectExcerptHandoffReceipt\([^]*?\n}\n/)[0]})`,context);
+  await assert.rejects(inspect('handoff','operator',true),/approved source and saved handoff require review/);assert.equal(readReceiver,false);
  }
 });

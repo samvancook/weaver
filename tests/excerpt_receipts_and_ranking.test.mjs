@@ -70,7 +70,7 @@ test('durable persistence precedes the compatibility sheet and a storage failure
 
 test('an HTTP success without receiver identity is an uncertain excerpt delivery', async () => {
   const send = runInNewContext(`(${fn('handoffApprovedExcerptsToPoetryPlease')})`, {
-    buildPoetryPleaseExcerptRecord: r => r, poetryPleaseApiKey: 'test-key',
+    AbortSignal, buildPoetryPleaseExcerptRecord: r => r, poetryPleaseApiKey: 'test-key',
     poetryPleaseApiUrl: 'https://receiver.example/api', cleanSheetWhitespace: clean,
     fetch: async () => ({ ok: true, status: 200, json: async () => ({ ok: true, createdCount: 1 }) })
   });

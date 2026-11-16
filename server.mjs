@@ -1,3 +1,4 @@
+import {runVideoExcerptDeliveries,videoExcerptDeliveryFingerprint} from './video_excerpt_delivery.mjs';
 import {createVideoResolutionService} from './video_resolution_service.mjs';
 import {assertResolvedVideoMedia,mediaResolutionPublic,normalizeVideoIdentity} from './video_resolution.mjs';
 import {recordedFolderMediaType,traceVideoFolderMediaType,videoFileMediaType} from './video_media_classification.mjs';
@@ -2984,11 +2985,42 @@ async function inspectVideoPipelineCandidate(candidate) {
   return inspection;
 }
 
+async function runScheduledVideoExcerptDeliveries(options = {}) {
+  return runVideoExcerptDeliveries({
+    db:(action,payload)=>syncWeaverRuntimeDb(action,payload),
+    loadApproved:async()=>{
+      const result = await getApprovedExcerptsExportFromSheets();
+      if (!result?.ok) throw new Error("Current authoritative approvals unavailable");
+      return (result.records||[]).map(buildExcerptHandoffFromApprovedExportRecord).filter(Boolean);
+    },
+    canSend:async record=>{
+      const source = buildPoetryPleaseExcerptRecord(record);
+      if (!source || source.invalid) throw new Error(source?.error || "Approved source incomplete");
+      const gates = (await syncWeaverRuntimeDb("get_video_curation_gates", {})).records || [];
+      const related = gates.filter(g => (g.sourceReviewFileId||g.sourceFileId) === source.sourceVideoFileId);
+      if (related.some(g=>g.publicationRestricted || g.releaseStatus || ["hold","reject"].includes(g.decision))) return "";
+      const canonical = poetryPleaseVideoIdForSourceFile(source.sourceVideoFileId,gates);
+      if (canonical) return canonical;
+      return (await resolveRegisteredExcerptVideoSource(source))?.canonicalVideoId || "";
+    },
+    send:async(record,parent)=>{
+      const result = await handoffApprovedExcerptsToPoetryPlease([record], {expectedCanonicalVideoId:parent});
+      const matches = (result.results||[]).filter(row=>row.recordId===record.recordId);
+      return matches.length===1 ? matches[0] : {ok:false,error:"Missing exact excerpt acknowledgement; reconcile before retry"};
+    },
+    inspect:record=>inspectExcerptHandoffReceipt(record.recordId,"weaver:scheduled-excerpt",true,10000),
+    ...options
+  });
+}
+
 async function runVideoPipeline({dryRun = false, trigger = "scheduled"} = {}) {
   if (dryRun) {
     const result = await getVideoCurationCandidates();
     const states = result.candidates.map(candidate => localVideoPipelineState(candidate));
-    const preview = {ok:true,dryRun:true,scopeChecks:await videoResolutionService.previewScopes(),policy:VIDEO_AUTO_POLICY,count:states.length,
+    const excerptQueue = await syncWeaverRuntimeDb("get_video_excerpt_delivery_queue", {});
+    if (!excerptQueue.ok) throw new Error("Durable excerpt queue unavailable");
+    const excerptDelivery = (excerptQueue.records||[]).reduce((counts,r)=>(counts[r.delivery.state]=(counts[r.delivery.state]||0)+1,counts),{});
+    const preview = {ok:true,dryRun:true,excerptDelivery,scopeChecks:await videoResolutionService.previewScopes(),policy:VIDEO_AUTO_POLICY,count:states.length,
       stages:states.reduce((out,state)=>(out[state.stage]=(out[state.stage]||0)+1,out),{})};
     console.log("[video-resolution-preview]",JSON.stringify(preview));
     return preview;
@@ -2998,6 +3030,9 @@ async function runVideoPipeline({dryRun = false, trigger = "scheduled"} = {}) {
   if (!claim?.claimed) return {ok:true,skipped:true,reason:claim?.reason||"runner_active"};
   let states = [];
   try {
+    let excerptDelivery;
+    try { excerptDelivery = await runScheduledVideoExcerptDeliveries(); }
+    catch(error) { excerptDelivery = {ok:false,error:String(error.message).slice(0,500)}; }
     const [result, previous] = await Promise.all([getVideoCurationCandidates(), syncWeaverRuntimeDb("get_video_pipeline", {})]);
     if (!previous.ok) throw new Error("Pipeline state could not be read");
     const resolution = await videoResolutionService.prepare(result.candidates);
@@ -3006,7 +3041,7 @@ async function runVideoPipeline({dryRun = false, trigger = "scheduled"} = {}) {
       inspect:candidate=>inspectVideoPipelineCandidate(candidate),
       deliver:candidate=>autoAdvanceVideoCuration(candidate.prioritySetId,candidate.sourceFileId)});
     states = run.states;
-    const summary = {policy:VIDEO_AUTO_POLICY,resolutionsChecked:resolution.checked,checked:run.checked,sends:run.sends,count:states.length,
+    const summary = {policy:VIDEO_AUTO_POLICY,excerptDelivery,resolutionsChecked:resolution.checked,checked:run.checked,sends:run.sends,count:states.length,
       stages:states.reduce((out,state)=>(out[state.stage]=(out[state.stage]||0)+1,out),{})};
     const saved = await syncWeaverRuntimeDb("save_video_pipeline", {token:claim.token,states,summary});
     if (!saved?.ok) throw new Error(saved?.error||"Pipeline state save failed");
@@ -5777,7 +5812,7 @@ function videoExcerptBookFallback(record, response, result) {
   };
 }
 
-async function handoffApprovedExcerptsToPoetryPlease(records = []) {
+async function handoffApprovedExcerptsToPoetryPlease(records = [], {expectedCanonicalVideoId = ""} = {}) {
   const approvedRecords = Array.isArray(records) ? records.map(buildPoetryPleaseExcerptRecord).filter(Boolean) : [];
   if (!approvedRecords.length) {
     return { ok: true, skipped: true, reason: "no_records", results: [] };
@@ -5824,12 +5859,14 @@ async function handoffApprovedExcerptsToPoetryPlease(records = []) {
           });
           continue;
         }
+        if (expectedCanonicalVideoId && canonicalVideoId !== expectedCanonicalVideoId) throw new Error("Parent video identity changed before excerpt delivery");
         if (canonicalVideoId) record.sourceContentId = canonicalVideoId;
       }
       const post = payload => fetch(`${poetryPleaseApiUrl.replace(/\/$/, "")}/internal/weaverImport`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-api-key": poetryPleaseApiKey },
-        body: JSON.stringify({ contentType: record.contentType, payload })
+        body: JSON.stringify({ contentType: record.contentType, payload }),
+        signal: AbortSignal.timeout(15000)
       });
       let response = await post(record);
       let result = await response.json().catch(() => ({}));
@@ -6016,7 +6053,13 @@ async function getExcerptHandoffRecords({ recordIds = [], statuses = [] } = {}) 
 
 async function retryExcerptHandoffs({ recordIds = [], statuses = ["queued", "failed"] } = {}) {
   const handoffResult = await getExcerptHandoffRecords({ recordIds, statuses });
-  const records = Array.isArray(handoffResult.records) ? handoffResult.records : [];
+  const allRecords = Array.isArray(handoffResult.records) ? handoffResult.records : [];
+  const managed = allRecords.filter(r=>r.delivery?.schemaVersion === "1");
+  const records = allRecords.filter(r=>r.delivery?.schemaVersion !== "1");
+  if (managed.length) {
+    const run = await runScheduledVideoExcerptDeliveries({recordIds:managed.map(r=>r.recordId)});
+    if (!records.length) return {ok:run.ok,retriedCount:0,managedQueue:true,queueRun:run,records:managed};
+  }
   if (!records.length) {
     return { ok: true, retriedCount: 0, skipped: true, reason: "no_records", records: [] };
   }
@@ -6037,19 +6080,25 @@ async function retryExcerptHandoffs({ recordIds = [], statuses = ["queued", "fai
   };
 }
 
-async function inspectExcerptHandoffReceipt(recordId, checkedBy = "", apply = false) {
+async function inspectExcerptHandoffReceipt(recordId, checkedBy = "", apply = false, timeoutMs = 30000) {
   if (!poetryPleaseApiKey) throw new Error("Poetry Please connection is not configured.");
   if (!recordId || recordId.length > 400) throw new Error("Choose one exact excerpt handoff.");
-  const [approved, runtime] = await Promise.all([
-    getExcerptHandoffRecords({ recordIds: [recordId] }),
+  const loadApprovedSource = async () => {
+    const approved = await getApprovedExcerptsExportFromSheets();
+    if (!approved?.ok) throw new Error("Current authoritative approvals unavailable");
+    return (approved.records || []).map(buildExcerptHandoffFromApprovedExportRecord).find(row => row?.recordId === recordId);
+  };
+  const [record, runtime] = await Promise.all([
+    loadApprovedSource(),
     syncWeaverRuntimeDb("get_excerpt_handoffs", { recordIds: [recordId] })
   ]);
-  const record = approved.records?.find(row => row.recordId === recordId);
   const stored = runtime.records?.find(row => row.recordId === recordId);
   const expected = stored || record;
   if (!record || !expected || record.contentType !== "EXC"
     || record.sourceRecordId !== expected.sourceRecordId
-    || excerptFingerprint(record.excerpt) !== excerptFingerprint(expected.excerpt)) {
+    || excerptFingerprint(record.excerpt) !== excerptFingerprint(expected.excerpt)
+    || expected.delivery?.schemaVersion === "1" && (videoExcerptDeliveryFingerprint(record) !== expected.delivery.sourceFingerprint
+      || ["sending", "needs_source_review"].includes(expected.delivery.state))) {
     throw new Error("The approved source and saved handoff require review.");
   }
   const source = buildPoetryPleaseExcerptRecord(record);
@@ -6063,7 +6112,7 @@ async function inspectExcerptHandoffReceipt(recordId, checkedBy = "", apply = fa
   const read = async (path, authenticated = false) => {
     const response = await fetch(`${poetryPleaseApiUrl.replace(/\/$/, "")}/${path}`, {
       headers: authenticated ? { "x-api-key": poetryPleaseApiKey } : {},
-      signal: AbortSignal.timeout(30000), cache: "no-store"
+      signal: AbortSignal.timeout(timeoutMs), cache: "no-store"
     });
     const body = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(body.error || `Receiver read failed (${response.status}).`);
@@ -6075,10 +6124,8 @@ async function inspectExcerptHandoffReceipt(recordId, checkedBy = "", apply = fa
   const receipt = verifyExcerptReadback(record, acknowledgement, body);
   if (!apply) return { ok: true, receipt, canReconcile: ["failed", "queued"].includes(expected.handoffStatus) };
   if (!checkedBy) throw new Error("Verified administrator required.");
-  if (!stored) {
-    const fresh = (await getExcerptHandoffRecords({ recordIds: [recordId] })).records?.find(row => row.recordId === recordId);
-    if (JSON.stringify(fresh) !== JSON.stringify(record)) throw new Error("The approved source changed; refresh before reconciling.");
-  }
+  const fresh = await loadApprovedSource();
+  if (JSON.stringify(fresh) !== JSON.stringify(record)) throw new Error("The approved source changed; refresh before reconciling.");
   const result = await syncWeaverRuntimeDb("reconcile_excerpt_handoff", { expectedRecord: expected, approvedBaseline: !stored, receipt, checkedBy });
   if (!result.saved) throw new Error(result.reason || "The handoff changed; refresh before reconciling.");
   invalidateQueueSnapshots();
@@ -7616,7 +7663,7 @@ async function saveReviewsToSheets(updates) {
   const runtimeRecords = enrichedUpdates.map(update => buildExcerptRuntimeRecord(update, { sourceRow: update.sourceRow }));
   await batchUpdateSheetValuesServer(requests);
   const runtimeDb = await shadowExcerptRecordsToRuntime(runtimeRecords);
-  const excerptHandoffs = await syncAcceptedExcerptHandoffs(validUpdates);
+  const excerptHandoffs = await syncAcceptedExcerptHandoffs(enrichedUpdates, {alreadyEnriched:true});
   return {
     ok: true,
     version: `${appVersion}-service-account`,
@@ -7636,7 +7683,7 @@ async function saveSingleReviewToSheets(update) {
   const runtimeRecord = buildExcerptRuntimeRecord(enrichedUpdate, { sourceRow: enrichedUpdate.sourceRow });
   await batchUpdateSheetValuesServer(requests);
   const runtimeDb = await shadowExcerptRecordsToRuntime([runtimeRecord]);
-  const excerptHandoffs = await syncAcceptedExcerptHandoffs([update]);
+  const excerptHandoffs = await syncAcceptedExcerptHandoffs([enrichedUpdate], {alreadyEnriched:true});
   return {
     ok: true,
     version: `${appVersion}-service-account`,
@@ -7695,6 +7742,7 @@ async function enrichAcceptedExcerptUpdate(update) {
     || "";
   normalized.sourceEvent = cleanSheetWhitespace(normalized.sourceEvent) || noteMeta.sourceEvent || cleanSheetWhitespace(record.sourceEvent);
   normalized.sourceVideoUrl = cleanSheetWhitespace(normalized.sourceVideoUrl) || noteMeta.sourceVideoUrl || cleanSheetWhitespace(record.sourceVideoUrl);
+  normalized.sourceVideoFileId = cleanSheetWhitespace(normalized.sourceVideoFileId) || extractGoogleDriveFileId(normalized.sourceVideoUrl);
   normalized.curationRating = normalizeCurationRating(normalized.curationRating || noteMeta.curationRating || record.curationRating);
   normalized.curationLegacyScore = normalizeOptionalCurationScore(
     normalized.curationLegacyScore ?? noteMeta.curationLegacyScore ?? record.curationLegacyScore
@@ -7817,8 +7865,8 @@ function buildExcerptHandoffFromApprovedExportRecord(record) {
   };
 }
 
-async function syncAcceptedExcerptHandoffs(updates) {
-  const normalizedUpdates = await Promise.all((Array.isArray(updates) ? updates : []).map(enrichAcceptedExcerptUpdate));
+async function syncAcceptedExcerptHandoffs(updates, {alreadyEnriched = false} = {}) {
+  const normalizedUpdates = alreadyEnriched ? updates : await Promise.all((Array.isArray(updates) ? updates : []).map(enrichAcceptedExcerptUpdate));
   const handoffs = normalizedUpdates
     .map(buildAcceptedExcerptHandoff)
     .filter(Boolean);
@@ -7826,8 +7874,20 @@ async function syncAcceptedExcerptHandoffs(updates) {
     return { ok: true, savedCount: 0, records: [] };
   }
 
+  const videoHandoffs = handoffs.filter(record => record.contentType === "EXC" && record.payload?.sourceVideoFileId);
+  const immediate = handoffs.filter(record => !videoHandoffs.includes(record));
+  let queued = {ok:true,records:[],savedCount:0};
+  if (videoHandoffs.length) {
+    try { queued = await syncWeaverRuntimeDb("queue_video_excerpt_deliveries", {handoffs:videoHandoffs}); }
+    catch(error) { return {ok:false,records:[],queuedVideoCount:0,error:`Approvals saved; delivery queue unavailable: ${error.message}`}; }
+    if (!queued.ok) return {ok:false,records:queued.records||[],error:"Some approvals saved but their delivery queue changed; check delivery status before retrying",queuedVideoCount:queued.savedCount||0};
+    if (!immediate.length) return {ok:!queued.needsReviewCount,savedCount:queued.records.length,records:queued.records,
+      error:queued.needsReviewCount ? "Current approval or prior delivery needs reconciliation; no automatic resend" : "",
+      queuedVideoCount:queued.records.filter(r=>["queued","waiting_video","sending"].includes(r.delivery?.state)).length,
+      poetryPlease:{ok:true,skipped:true,reason:"scheduled_video_excerpt_delivery"}};
+  }
   try {
-    const result = await syncWeaverRuntimeDb("upsert_excerpt_handoffs", { handoffs });
+    const result = await syncWeaverRuntimeDb("upsert_excerpt_handoffs", { handoffs:immediate });
     const records = Array.isArray(result?.records) ? result.records : [];
     let poetryPlease = { ok: true, skipped: true, reason: "no_records" };
     try {
@@ -7839,9 +7899,11 @@ async function syncAcceptedExcerptHandoffs(updates) {
     if (records.length) {
       const statusResult = await updateExcerptHandoffStatuses(records, poetryPlease);
       return {
-        ok: Boolean(result?.ok),
-        savedCount: statusResult.savedCount,
-        records: statusResult.records,
+        ok: Boolean(result?.ok) && !queued.needsReviewCount,
+        error: queued.needsReviewCount ? "Some video approvals need delivery reconciliation; no automatic resend" : "",
+        savedCount: statusResult.savedCount + queued.records.length,
+        records: [...queued.records, ...statusResult.records],
+        queuedVideoCount: queued.records.filter(r=>["queued","waiting_video","sending"].includes(r.delivery?.state)).length,
         poetryPlease
       };
     }
