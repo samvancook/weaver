@@ -13,7 +13,15 @@
 !book_intake_claim.mjs
 !book_intake_readiness.mjs
 !weaver_progress_auth.mjs
+!video_resolution.mjs
+!video_resolution_service.mjs
+!video_excerpt_delivery.mjs
+!video_excerpt_delivery.py
+!video_media_classification.mjs
 !video_curation_handoff.mjs
+!video_pipeline.mjs
+!video_pipeline_auth.mjs
+!excerpt_receipt.mjs
 !video_excerpt_folding.mjs
 !poem_key_seed.mjs
 !catalog_validate.py
