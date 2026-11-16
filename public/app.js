@@ -1587,7 +1587,7 @@ function applyGatheringVideoPlaylistItem(item, { preserveQuote = false } = {}) {
     box.hidden = !assets.length;
     if (assets.length) {
       const label = document.createElement("p");
-      label.textContent = "Related video versions — ratings stay on the version reviewed. Canonical text link not yet recorded.";
+      label.textContent = "Video versions — linked formats share poem excerpts and performance reviews. Original review sources are retained.";
       box.append(label);
       for (const asset of assets) {
         if (!/^https:\/\/drive\.google\.com\//.test(asset.url || "")) continue;
@@ -1654,6 +1654,8 @@ function normalizeVideoPlaylistItem(rawItem, eventName) {
     sourceFileId: cleanSheetWhitespace(rawItem?.sourceFileId),
     sourceFileName: cleanSheetWhitespace(rawItem?.sourceFileName),
     relatedVideoAssets: Array.isArray(rawItem?.relatedVideoAssets) ? rawItem.relatedVideoAssets : [],
+    performanceContext: rawItem?.performanceContext || null,
+    versionSourceFileIds: rawItem?.versionSourceFileIds || [],
     weaverExcerptCount: Math.max(0, Number(rawItem?.weaverExcerptCount) || 0),
     videoReleaseStatus: cleanSheetWhitespace(rawItem?.videoReleaseStatus),
     publicationRestricted: Boolean(rawItem?.publicationRestricted),
@@ -1707,7 +1709,7 @@ function filterGatheringVideoPlaylist({advance=false}={}) {
   playlist.requestedVideoReviewed=false;playlist.requestedVideoUnavailable=false;
   const requestedFile=contributorShellParams.get('video');
   if(requestedFile && (!contributorShellParams.get('videoSet')||playlist.prioritySetId===contributorShellParams.get('videoSet'))){
-    const requested=playlist.allItems.find(item=>item.sourceFileId===requestedFile);
+    const requested=playlist.allItems.find(item=>item.sourceFileId===requestedFile||item.versionSourceFileIds?.includes(requestedFile));
     if(!requested){playlist.items=[];playlist.requestedVideoUnavailable=true;}
     else if(!playlist.items.includes(requested)){
       playlist.items=[];playlist.requestedVideoReviewed=Boolean(requested.review?.rating);

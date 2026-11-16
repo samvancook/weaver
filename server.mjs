@@ -1,3 +1,4 @@
+import {groupVideoVersionFiles, videoPerformanceContext, videoFamilyForFile, candidateMatchesVideoSource} from "./video_version_families.mjs";
 import {runVideoExcerptDeliveries,videoExcerptDeliveryFingerprint} from './video_excerpt_delivery.mjs';
 import {createVideoResolutionService} from './video_resolution_service.mjs';
 import {assertResolvedVideoMedia,mediaResolutionPublic,normalizeVideoIdentity} from './video_resolution.mjs';
@@ -2395,7 +2396,7 @@ async function loadVideoReviewLibrary(reviewerEmail = "", prioritySetId = "") {
     const [setSourceMedia, folderFiles, connections] = await Promise.all([
       getVideoSetMediaType(set), listVideoSetFiles(set), getFootageAssetConnections(set.id)
     ]);
-    const files = folderFiles.filter(file => isPriorityVideoFileIncluded(file, set));
+    const files = groupVideoVersionFiles(folderFiles.filter(file => isPriorityVideoFileIncluded(file, set)), set.id);
     const reviews = reconcileVideoReviews(files, (reviewResult.records || []).filter(r => r.prioritySetId === set.id));
     return files.map(file => {
       const sourceMedia = videoFileMediaType(set, file, setSourceMedia);
@@ -2405,7 +2406,7 @@ async function loadVideoReviewLibrary(reviewerEmail = "", prioritySetId = "") {
       const videoReleaseStatus = getPriorityVideoReleaseStatus(file.name, set, file.id);
       const currentGate = gates.get(buildVideoCurationCandidateId(set.id, file.id));
       const historicalIds=[...new Set(fileReviews.flatMap(r=>r.originalSourceFileIds||[]).filter(id=>id!==file.id))];
-      const reviewRoot=resolveVideoReviewSourceFileId(file.id,historicalIds,gateResult.records,{...(currentGate||{}),prioritySetId:set.id});
+      const reviewRoot=file.videoVersionFamily?.reviewSourceFileId || resolveVideoReviewSourceFileId(file.id,historicalIds,gateResult.records,{...(currentGate||{}),prioritySetId:set.id});
       const canonicalId=reviewRoot?poetryPleaseVideoIdForSourceFile(reviewRoot,gateResult.records):'';
       const acceptedPrior=canonicalId?(gateResult.records||[]).find(g=>g.prioritySetId===set.id
         && (g.sourceReviewFileId||g.sourceFileId)===reviewRoot
@@ -2416,12 +2417,15 @@ async function loadVideoReviewLibrary(reviewerEmail = "", prioritySetId = "") {
       const identityConfirmed=!requiresManualVideoIdentityReview({sourceMediaType:sourceMedia.sourceMediaType,sourceFileId:file.id,sourceReviewFileId:reviewRoot},file.webViewLink||`https://drive.google.com/file/d/${file.id}/view`,gate||{});
       const status = videoLibraryStatus(progress, sourceMedia.sourceMediaType, videoReleaseStatus, gate,identityConfirmed,mediaRecords.find(r=>r.type==='recording'&&r.prioritySetId===set.id&&r.sourceFileId===file.id));
       return {
-        ...(set.inventoryTitles?.[file.id] ? {author:set.inventoryTitles[file.id].performer,poemTitle:set.inventoryTitles[file.id].title} : parsePriorityVideoFileName(file.name)),
+        ...(file.videoVersionFamily ? {author:file.videoVersionFamily.author,poemTitle:file.videoVersionFamily.title} : set.inventoryTitles?.[file.id] ? {author:set.inventoryTitles[file.id].performer,poemTitle:set.inventoryTitles[file.id].title} : parsePriorityVideoFileName(file.name)),
         bookTitle:cleanSheetWhitespace(set.bookTitle),releaseCatalog:cleanSheetWhitespace(set.releaseCatalog),
         videoUrl:cleanSheetWhitespace(file.webViewLink)||`https://drive.google.com/file/d/${encodeURIComponent(file.id)}/view`,
         eventName:set.eventName||set.label,prioritySetId:set.id,sourceFolderId:set.folderId,...sourceMedia,
         sourceFileId:file.id,sourceFileName:file.name,
-        relatedVideoAssets:connections.filter(c=>c.sourceFileId===file.id).flatMap(c=>c.assets||[]),
+        performanceContext:videoPerformanceContext(file,fileReviews.flatMap(r=>r.excerptRecordIds||[])),
+        versionSourceFileIds:file.reviewSourceFileIds || [file.id],
+        relatedVideoAssets:[...connections.filter(c=>c.sourceFileId===file.id).flatMap(c=>c.assets||[]),
+          ...(file.videoVariants || []).map(v=>({driveFileId:v.id,url:v.webViewLink||`https://drive.google.com/file/d/${v.id}/view`,fileName:v.name,role:"format_variant",mediaType:sourceMedia.sourceMediaType}))],
         footageConnections:footageProvenanceForFile(connections,file.id),
         inventoryEventNames:[...new Set(connections.filter(c=>c.sourceFileId===file.id).map(c=>c.inventoryEventName))],
         mediaResolution:mediaResolutionPublic(mediaRecords.find(r=>r.type==='recording'&&r.prioritySetId===set.id&&r.sourceFileId===file.id)),
@@ -2464,7 +2468,7 @@ async function loadPriorityVideoProgress() {
     syncWeaverRuntimeDb("get_curation_reviews", {}),
     Promise.all(sets.map(async set => ({
       set,
-      files: (await listVideoSetFiles(set)).filter(file => isPriorityVideoFileIncluded(file, set))
+      files: groupVideoVersionFiles((await listVideoSetFiles(set)).filter(file => isPriorityVideoFileIncluded(file, set)), set.id)
     })))
   ]);
   const reviews = Array.isArray(reviewResult?.records) ? reviewResult.records : [];
@@ -2552,7 +2556,7 @@ async function loadPriorityVideoAssignmentExport(reviewerEmail, prioritySetId = 
     syncWeaverRuntimeDb("get_curation_reviews", {}),
     Promise.all(sets.map(async set => ({
       set,
-      files: (await listVideoSetFiles(set)).filter(file => isPriorityVideoFileIncluded(file, set))
+      files: groupVideoVersionFiles((await listVideoSetFiles(set)).filter(file => isPriorityVideoFileIncluded(file, set)), set.id)
     })))
   ]);
   const reviews = Array.isArray(reviewResult?.records) ? reviewResult.records : [];
@@ -2604,7 +2608,7 @@ async function getVideoCurationCandidates(prioritySetId = "") {
   const candidatesBySet = await Promise.all(sets.map(async set => {
     const setSourceMedia = await getVideoSetMediaType(set);
     const footageConnections = await getFootageAssetConnections(set.id);
-    const files = (await listVideoSetFiles(set)).filter(file => isPriorityVideoFileIncluded(file, set));
+    const files = groupVideoVersionFiles((await listVideoSetFiles(set)).filter(file => isPriorityVideoFileIncluded(file, set)), set.id);
     const reviewsResult = await syncWeaverRuntimeDb("get_curation_reviews", {
       prioritySetId: set.id
     });
@@ -2622,7 +2626,10 @@ async function getVideoCurationCandidates(prioritySetId = "") {
       const sourceFileId = cleanSheetWhitespace(file.id);
       const reviews = reviewsByFileId.get(sourceFileId) || [];
       const candidateId = buildVideoCurationCandidateId(set.id, sourceFileId);
-      const existingGate = gatesByCandidateId.get(candidateId) || null;
+      const existingGate = gatesByCandidateId.get(candidateId) || (file.videoVersionFamily
+        ? (gateResult.records || []).find(g => g.prioritySetId === set.id
+          && g.sourceReviewFileId === file.videoVersionFamily.reviewSourceFileId
+          && g.poetryPleaseHandoff?.status === "sent_to_poetry_please") : null) || null;
       if (!reviews.length && !existingGate) return null;
       const quality = videoReviewProgress(reviews);
       const baseScore = quality.candidateScore;
@@ -2638,7 +2645,7 @@ async function getVideoCurationCandidates(prioritySetId = "") {
         .flatMap(review => review.originalSourceFileIds || [])
         .map(cleanSheetWhitespace)
         .filter(id => id && id !== sourceFileId))];
-      const sourceReviewFileId = resolveVideoReviewSourceFileId(sourceFileId, historicalSourceIds,
+      const sourceReviewFileId = file.videoVersionFamily?.reviewSourceFileId || resolveVideoReviewSourceFileId(sourceFileId, historicalSourceIds,
         Array.isArray(gateResult?.records) ? gateResult.records : [],
         { ...(existingGate || {}), prioritySetId: set.id });
       const existingCanonicalVideoId = sourceReviewFileId
@@ -2655,6 +2662,8 @@ async function getVideoCurationCandidates(prioritySetId = "") {
         sourceFileId,
         ...sourceMedia,
         sourceReviewFileId,
+        versionSourceFileIds:file.reviewSourceFileIds || [file.id],
+        performanceContext:videoPerformanceContext(file,excerptRecordIds),
         existingCanonicalVideoId,
         knownAssets,
         footageConnections:footageProvenanceForFile(footageConnections,sourceFileId),
@@ -2667,8 +2676,8 @@ async function getVideoCurationCandidates(prioritySetId = "") {
         sourceEvent: cleanSheetWhitespace(firstReview.sourceEvent) || set.eventName || set.label,
         sourceEventLabel: cleanSheetWhitespace(set.sourceEventLabel) || cleanSheetWhitespace(firstReview.sourceEventLabel) || set.label,
         eventReleaseCatalog: cleanSheetWhitespace(firstReview.eventReleaseCatalog) || cleanSheetWhitespace(set.eventReleaseCatalog),
-        author: cleanSheetWhitespace(firstReview.author),
-        poemTitle: cleanSheetWhitespace(firstReview.poemTitle),
+        author: file.videoVersionFamily?.author || cleanSheetWhitespace(firstReview.author),
+        poemTitle: file.videoVersionFamily?.title || cleanSheetWhitespace(firstReview.poemTitle),
         bookTitle: cleanSheetWhitespace(firstReview.bookTitle) || cleanSheetWhitespace(set.bookTitle),
         releaseCatalog: cleanSheetWhitespace(firstReview.releaseCatalog) || cleanSheetWhitespace(set.releaseCatalog) || cleanSheetWhitespace(bookMeta?.releaseCatalog),
         releaseStatus,
@@ -3104,7 +3113,7 @@ async function savePriorityVideoReview(payload = {}) {
   });
   if (!result?.ok) throw new Error(result?.error || "Video review could not be saved.");
   try {
-    result.autoHandoff = await enqueueVideoPipeline(set.id, sourceFileId, "review_saved");
+    result.autoHandoff = await enqueueVideoPipeline(set.id, videoFamilyForFile(sourceFileId,set.id)?.sourceFileId || sourceFileId, "review_saved");
   } catch (error) {
     result.autoHandoff = { status: "needs_attention", error: error.message };
   }
@@ -5768,7 +5777,7 @@ function registeredExcerptVideoSource(record, candidate, receiver) {
   const clean = cleanSheetWhitespace;
   const root = clean(candidate.sourceReviewFileId);
   const canonical = clean(candidate.existingCanonicalVideoId);
-  if (!root || !canonical || candidate.sourceFileId !== record.sourceVideoFileId
+  if (!root || !canonical || (candidate.sourceFileId !== record.sourceVideoFileId && !(candidate.performanceContext && candidate.versionSourceFileIds?.includes(record.sourceVideoFileId)))
     || candidate.sourceEvent !== record.sourceEvent
     || candidate.videoRecordId !== `weaver:video:${root}`
     || candidate.gate?.decision !== "ready_for_poetry_please"
@@ -5794,7 +5803,7 @@ function registeredExcerptVideoSource(record, candidate, receiver) {
 async function resolveRegisteredExcerptVideoSource(record) {
   const result = await getVideoCurationCandidates();
   const candidates = (result.candidates || []).filter(candidate =>
-    candidate.sourceFileId === record.sourceVideoFileId && candidate.sourceEvent === record.sourceEvent
+    candidateMatchesVideoSource(candidate, record.sourceVideoFileId) && candidate.sourceEvent === record.sourceEvent
     && candidate.existingCanonicalVideoId && candidate.sourceReviewFileId);
   if (candidates.length !== 1) return null;
   const candidate = candidates[0];
@@ -5849,7 +5858,7 @@ async function handoffApprovedExcerptsToPoetryPlease(records = [], {expectedCano
     let routingEvidence;
     try {
       if (record.sourceVideoFileId) {
-        let canonicalVideoId = poetryPleaseVideoIdForSourceFile(record.sourceVideoFileId, videoGates);
+        let canonicalVideoId = poetryPleaseVideoIdForSourceFile(videoFamilyForFile(record.sourceVideoFileId)?.reviewSourceFileId || record.sourceVideoFileId, videoGates);
         if (!canonicalVideoId && record.contentType === "EXC") {
           const registered = await resolveRegisteredExcerptVideoSource(record);
           canonicalVideoId = registered?.canonicalVideoId || "";
@@ -6112,7 +6121,7 @@ async function inspectExcerptHandoffReceipt(recordId, checkedBy = "", apply = fa
   let canonicalVideoId = "";
   if (source.sourceVideoFileId) {
     const gates = await syncWeaverRuntimeDb("get_video_curation_gates", {});
-    canonicalVideoId = poetryPleaseVideoIdForSourceFile(source.sourceVideoFileId, gates.records || []);
+    canonicalVideoId = poetryPleaseVideoIdForSourceFile(videoFamilyForFile(source.sourceVideoFileId)?.reviewSourceFileId || source.sourceVideoFileId, gates.records || []);
     if (!canonicalVideoId) throw new Error("Source video has no verified Weaver handoff. Resolve that video first.");
   }
   const read = async (path, authenticated = false) => {

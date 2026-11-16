@@ -57,3 +57,5 @@ data/*
 
 !footage_event_progress.mjs
 !footage_provenance.mjs
+
+!video_version_families.mjs

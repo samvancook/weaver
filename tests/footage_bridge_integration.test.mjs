@@ -1,3 +1,4 @@
+import {groupVideoVersionFiles,videoPerformanceContext} from "../video_version_families.mjs";
 import {mediaResolutionPublic} from '../video_resolution.mjs';
 import {videoFileMediaType} from '../video_media_classification.mjs';
 import {VIDEO_AUTO_POLICY,publicVideoPipelineState,videoPipelineKey} from '../video_pipeline.mjs';
@@ -16,7 +17,7 @@ const manifest={sourceSpreadsheetId:INVENTORY_ID,eventName:'Pilot',omFolderId:'e
  titles:[{sourceRow:6000,performer:'Inventory poet',title:'Inventory title',rights:'Have video release',contentLink:`https://drive.google.com/file/d/${id}/view`}]};
 test('receiver saves before acknowledgement, reloads queue after restart, and curation uses inventory titles',async()=>{
  const ledger=new Map(),sets=new Map();let reply;
- const context={mediaResolutionPublic,videoFileMediaType,VIDEO_AUTO_POLICY,publicVideoPipelineState,videoPipelineKey,prepareEventIntake,footageEventAsSet,currentEventReceipt,validateEventManifest,footageFileId,resolveEventTarget,footageProvenanceForFile,refreshFootageEventSets:async()=>{},getFootageEventProgress:async()=>({status:"checked",byFileId:{}}),verifyFootageReceiptQueue:async()=>true,listVideoSetFiles:async()=>[],getFootageAssetConnections:async()=>[],PRIORITY_VIDEO_SETS:sets,
+ const context={groupVideoVersionFiles,videoPerformanceContext,mediaResolutionPublic,videoFileMediaType,VIDEO_AUTO_POLICY,publicVideoPipelineState,videoPipelineKey,prepareEventIntake,footageEventAsSet,currentEventReceipt,validateEventManifest,footageFileId,resolveEventTarget,footageProvenanceForFile,refreshFootageEventSets:async()=>{},getFootageEventProgress:async()=>({status:"checked",byFileId:{}}),verifyFootageReceiptQueue:async()=>true,listVideoSetFiles:async()=>[],getFootageAssetConnections:async()=>[],PRIORITY_VIDEO_SETS:sets,
   process:{env:{WEAVER_FOOTAGE_BRIDGE_ENABLED:'true'}},decodeURIComponent,
   verifyFootageHelperCaller:async()=>({email:'owner@example.com'}),
   getDriveFileMetadata:async fileId=>({id:fileId,mimeType:'video/mp4',name:'Clip 1.mp4'}),
@@ -98,7 +99,7 @@ test('existing-event preview is read-only and sending preserves the live set and
  const currentFiles=link.pairs.map(([,id])=>({id,name:id,mimeType:'video/mp4'}));
  const oldReview={prioritySetId:originalSet.id,sourceFileId:currentFiles[0].id,reviewerEmail:'reviewer@example.com',rating:'like',excerptRecordIds:['existing-excerpt']};
  const savedReview=JSON.stringify(oldReview);
- const context={footageProvenanceForFile,prepareEventIntake,footageEventAsSet,currentEventReceipt,validateEventManifest,footageFileId,resolveEventTarget,
+ const context={groupVideoVersionFiles,videoPerformanceContext,footageProvenanceForFile,prepareEventIntake,footageEventAsSet,currentEventReceipt,validateEventManifest,footageFileId,resolveEventTarget,
   PRIORITY_VIDEO_SETS:sets,process:{env:{WEAVER_FOOTAGE_BRIDGE_ENABLED:'true'}},decodeURIComponent,
   refreshFootageEventSets:async()=>{},listVideoSetFiles:async()=>currentFiles,
   getFootageEventProgress:async()=>({status:"checked",byFileId:{}}),verifyFootageReceiptQueue:async r=>r.accepted.every(t=>currentFiles.some(f=>f.id===t.sourceFileId)),

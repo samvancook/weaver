@@ -1,3 +1,4 @@
+import {groupVideoVersionFiles,videoPerformanceContext} from "../video_version_families.mjs";
 import {videoFileMediaType} from '../video_media_classification.mjs';
 import {videoReviewProgress} from '../video_curation_handoff.mjs';
 import test from 'node:test';
@@ -54,7 +55,7 @@ test('a partial batch marks only the exact acknowledged item sent', async () => 
 
 test('durable persistence precedes the compatibility sheet and a storage failure stops it', async () => {
   const calls=[];
-  const context={cleanSheetWhitespace:clean,SHEET_SOURCE_CONFIG:{startRow:2,columnMap:{excerptPoetryPleaseStatus:1,
+  const context={groupVideoVersionFiles,videoPerformanceContext,cleanSheetWhitespace:clean,SHEET_SOURCE_CONFIG:{startRow:2,columnMap:{excerptPoetryPleaseStatus:1,
     excerptPoetryPleaseUpdatedAt:2,excerptPoetryPleaseNote:3}},sourceSheetName:'Source',toA1Column:n=>String(n),
     invalidateQueueSnapshots(){},batchUpdateSheetValuesServer:async()=>{calls.push('sheet');throw new Error('offline');},
     syncWeaverRuntimeDb:async(_action,payload)=>{calls.push('durable');return {ok:true,records:payload.handoffs};}};
@@ -85,7 +86,7 @@ test('excerpt collection does not change ranking or candidate eligibility', asyn
     sourceFileId: file.id, reviewerEmail: email, rating: 'like', ratingSource: 'legacy_import',
     legacyScore: 6.95, excerptRecordIds: file.id === 'with-excerpts' ? ['excerpt-'+email] : []
   })));
-  const build = runInNewContext(`(${fn('getVideoCurationCandidates')})`, {
+  const build = runInNewContext(`(${fn('getVideoCurationCandidates')})`, {groupVideoVersionFiles,videoPerformanceContext,
     syncWeaverRuntimeDb: async action => ({ records: action === 'get_curation_reviews' ? reviews : [] }),
     attachVideoMediaResolutions:async rows=>rows, videoFileMediaType, videoReviewProgress, PRIORITY_VIDEO_SETS: new Map([['event', { id: 'event', label: 'Event – Camera', sourceEventLabel: 'Event' }]]),
     cleanSheetWhitespace: clean, getVideoSetMediaType: async () => ({ sourceMediaType: 'FV' }),
