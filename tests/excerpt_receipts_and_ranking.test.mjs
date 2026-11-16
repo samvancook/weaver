@@ -87,7 +87,7 @@ test('excerpt collection does not change ranking or candidate eligibility', asyn
   })));
   const build = runInNewContext(`(${fn('getVideoCurationCandidates')})`, {
     syncWeaverRuntimeDb: async action => ({ records: action === 'get_curation_reviews' ? reviews : [] }),
-    attachVideoMediaResolutions:async rows=>rows, videoFileMediaType, videoReviewProgress, PRIORITY_VIDEO_SETS: new Map([['event', { id: 'event', label: 'Event' }]]),
+    attachVideoMediaResolutions:async rows=>rows, videoFileMediaType, videoReviewProgress, PRIORITY_VIDEO_SETS: new Map([['event', { id: 'event', label: 'Event – Camera', sourceEventLabel: 'Event' }]]),
     cleanSheetWhitespace: clean, getVideoSetMediaType: async () => ({ sourceMediaType: 'FV' }),
     listVideoSetFiles: async () => files, isPriorityVideoFileIncluded: () => true,
     reconcileVideoReviews: (_files, rows) => rows, buildVideoCurationCandidateId: (set,id) => set+id,
@@ -100,6 +100,7 @@ test('excerpt collection does not change ranking or candidate eligibility', asyn
   const result = await build();
   assert.equal(result.candidates.length, 2);
   for (const c of result.candidates) {
+    assert.equal(c.sourceEventLabel, 'Event'); assert.equal(c.prioritySetLabel, 'Event – Camera');
     assert.equal(c.candidateScore, 6.95); assert.equal(c.excerptBonus, 0); assert.equal(c.isEligible, false);
   }
   assert.equal(result.candidates.find(c => c.sourceFileId === 'with-excerpts').excerptRecordIds.length, 2);

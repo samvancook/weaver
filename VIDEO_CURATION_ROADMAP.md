@@ -216,3 +216,9 @@ The Donte clip-17 duplicate / clip-15 gap, Mariam folder/duplicate-title case an
 Implemented in the durable video-excerpt delivery repair: separate source saves from receiver delivery; reuse the existing Scheduler and Firestore ledger; claim each exact source before sending; reconcile uncertain outcomes without automatic resends. See [VIDEO_EXCERPT_DELIVERY.md](VIDEO_EXCERPT_DELIVERY.md). Release and live verification evidence belongs in the operational shared-drive record.
 
 Remaining acceptance: observe a real newly approved excerpt through the managed queue and verify its exact PP receipt; obtain an exact-source receiver receipt lookup so old or uncertain imports do not depend on bounded recent history; confirm PP caption/readiness output and Calendar consumption independently. Approval saved with queue persistence failure must remain an explicit unresolved delivery warning.
+
+## Event metadata contract — 2026-11-16
+
+Use an explicit source-event display label independently of the review-set/camera label. A display-label correction must preserve reviewed source IDs, canonical IDs, editorial decisions and camera provenance. Check the current owner register revision before publishing a cross-project diagnosis; a concurrent handoff can supersede a previously correct label.
+
+Follow-up: provide a typed metadata-only correction path with version preconditions and a readback receipt, instead of reusing an editorial decision save. Track transient receiver errors separately from identity conflicts, and confirm their recovery through scheduled checks before closing them. Retain exact source/output/caption readiness as the acceptance boundary.
