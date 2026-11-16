@@ -8186,7 +8186,8 @@ async function validateCompletionEditableProjectIdentity(completion = {}) {
   const projectSourceType = cleanEditableIdentityValue(
     project.sourceIdentity?.sourceType || selectedRecord.sourceType
   );
-  const impliedPigRequestId = projectRecordId && projectSourceType.startsWith("poetry_please_")
+  const impliedPigRequestId = expected.graphicsRequestId.startsWith("pig:record-")
+    && projectRecordId && projectSourceType.startsWith("poetry_please_")
     ? `pig:record-${projectRecordId}` : "";
   const projectIdentity = getEditableIdentityValues({
     ...sourceRecord,
@@ -8354,7 +8355,15 @@ async function hydrateApprovedFirestoreGraphicRecord(update) {
   }
   // A PNG can pass QC even when its editable sidecar belongs to another request.
   // Only hand off a project link that was verified for this completion.
-  const verifiedProject = completion.editableProjectValidationStatus === "verified";
+  let projectLink = completion;
+  if (completion.editableProjectValidationStatus !== "verified") {
+    try {
+      projectLink = await validateEditableProjectForRework(update);
+    } catch (_) {
+      projectLink = {};
+    }
+  }
+  const verifiedProject = projectLink.editableProjectAvailable === true;
   return {
     ...payload,
     ...update,
@@ -8364,10 +8373,10 @@ async function hydrateApprovedFirestoreGraphicRecord(update) {
     assetLinkUrl: cleanSheetWhitespace(payload.assetUrl),
     assetPreviewUrl: cleanSheetWhitespace(payload.assetPreviewUrl),
     assetSet: Array.isArray(payload.assetSet) ? payload.assetSet : [],
-    pigProjectId: verifiedProject ? cleanSheetWhitespace(completion.pigProjectId) : "",
-    editableProjectFileId: verifiedProject ? cleanSheetWhitespace(completion.editableProjectFileId) : "",
+    pigProjectId: verifiedProject ? cleanSheetWhitespace(projectLink.pigProjectId) : "",
+    editableProjectFileId: verifiedProject ? cleanSheetWhitespace(projectLink.editableProjectFileId) : "",
     projectFileId: "",
-    editableProjectUrl: verifiedProject ? cleanSheetWhitespace(completion.editableProjectUrl) : "",
+    editableProjectUrl: verifiedProject ? cleanSheetWhitespace(projectLink.editableProjectUrl) : "",
     editableProjectAvailable: verifiedProject,
     syntheticTest: payload.syntheticTest === true,
   };
