@@ -6655,6 +6655,73 @@ function summarizeGraphicsHandoffBooks(records = []) {
 }
 
 const COVERAGE_NEEDS_DEFAULT_TARGET_COUNT = 10;
+const CURRENT_TITLES_QI_TARGET = 25;
+let poetryPleaseQiCoverageCache = null;
+
+function normalizeQiCoverageKey(value = "") {
+  return cleanSheetWhitespace(value)
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+async function fetchPoetryPleaseQiCoverageCounts() {
+  if (poetryPleaseQiCoverageCache?.expiresAt > Date.now()) return poetryPleaseQiCoverageCache.value;
+  if (!poetryPleaseApiKey) return { ok: false, countsByBookKey: new Map(), error: "missing_poetry_please_api_key" };
+  try {
+    const url = new URL(`${poetryPleaseApiUrl.replace(/\/$/, "")}/internal/coverageCounts`);
+    url.searchParams.set("lane", "QI");
+    const response = await fetch(url, {
+      headers: { Accept: "application/json", "x-api-key": poetryPleaseApiKey },
+      signal: AbortSignal.timeout(12000)
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload.ok) throw new Error(payload.error || `coverageCounts failed with ${response.status}`);
+    const countsByBookKey = new Map();
+    (Array.isArray(payload.counts) ? payload.counts : []).forEach(entry => {
+      const count = Number(entry.count);
+      if (!Number.isFinite(count) || count < 0) return;
+      for (const value of [entry.bookKey, entry.bookTitle]) {
+        const key = normalizeQiCoverageKey(value);
+        if (key) countsByBookKey.set(key, count);
+      }
+    });
+    const result = { ok: true, countsByBookKey, snapshotMeta: payload.snapshotMeta || null };
+    poetryPleaseQiCoverageCache = { expiresAt: Date.now() + 60_000, value: result };
+    return result;
+  } catch (error) {
+    console.warn("[current_titles] Poetry Please QI coverage unavailable:", error.message);
+    return { ok: false, countsByBookKey: new Map(), error: error.message };
+  }
+}
+
+function applyCurrentTitlesQiHold(records = [], filterMode = "all", coverage = null) {
+  const heldView = filterMode === "current_titles_held";
+  return records.flatMap(record => {
+    const isCurrentTitleQi = cleanSheetWhitespace(record.queueView).toLowerCase() === "current_titles"
+      && cleanSheetWhitespace(record.contentType || record.imageType).toUpperCase() === "QI";
+    if (!isCurrentTitleQi) return heldView ? [] : [record];
+    const bookKey = normalizeQiCoverageKey(record.bookTitle);
+    const count = coverage?.ok && bookKey ? coverage.countsByBookKey.get(bookKey) : undefined;
+    const claimed = cleanSheetWhitespace(record.handoffStatus).toLowerCase() === "claimed";
+    const held = Number.isFinite(count) && count >= CURRENT_TITLES_QI_TARGET && !claimed;
+    if (heldView !== held) return [];
+    return [{
+      ...record,
+      coverageTargetCount: CURRENT_TITLES_QI_TARGET,
+      coverageApprovedCount: Number.isFinite(count) ? count : null,
+      coverageCountSource: Number.isFinite(count) ? "poetry_please" : (coverage?.ok ? "book_not_in_coverage_feed" : "coverage_unavailable"),
+      coverageHold: held,
+      coverageHoldReason: held ? `${count}/${CURRENT_TITLES_QI_TARGET} QI in Poetry Please; held from Current Titles` : "",
+      statusLabel: held
+        ? `Held at ${count}/${CURRENT_TITLES_QI_TARGET} QI · deliberate extra graphic`
+        : (!coverage?.ok ? `${record.statusLabel} · QI coverage unavailable; hold inactive`
+          : (!Number.isFinite(count) ? `${record.statusLabel} · QI count unverified; hold inactive` : record.statusLabel))
+    }];
+  });
+}
 const COVERAGE_NEEDS_CONTENT_TYPES = ["INT", "FPI"];
 const COVERAGE_NEEDS_CACHE_TTL_MS = 60_000;
 let poetryPleaseCoverageCache = null;
@@ -9463,22 +9530,27 @@ const server = http.createServer(async (req, res) => {
         throw new Error("contentType must be QI or FPI");
       }
       const refreshSource = ["1", "true", "yes"].includes(cleanSheetWhitespace(url.searchParams.get("refresh")).toLowerCase());
-      if (!refreshSource && normalizedFilterMode !== "coverage_needs") {
+      if ((!refreshSource || ["current_titles", "current_titles_held", "all"].includes(normalizedFilterMode)) && normalizedFilterMode !== "coverage_needs") {
         const ledgerStartedAt = performance.now();
-        const ledgerResult = await syncWeaverRuntimeDb("get_handoff_queue", {
+        const [ledgerResult, qiCoverage] = await Promise.all([syncWeaverRuntimeDb("get_handoff_queue", {
           limit,
           cursor,
-          filter: normalizedFilterMode,
+          filter: normalizedFilterMode === "current_titles_held" ? "current_titles" : normalizedFilterMode,
           contentType: contentTypeFilter
-        });
+        }), ["current_titles", "current_titles_held", "all"].includes(normalizedFilterMode)
+          ? fetchPoetryPleaseQiCoverageCounts()
+          : Promise.resolve(null)]);
         const dbElapsedMs = performance.now() - ledgerStartedAt;
-        const records = Array.isArray(ledgerResult?.records) ? ledgerResult.records : [];
+        const records = applyCurrentTitlesQiHold(
+          Array.isArray(ledgerResult?.records) ? ledgerResult.records : [], normalizedFilterMode, qiCoverage
+        );
         const result = {
           ok: Boolean(ledgerResult?.ok),
           filter: normalizedFilterMode,
           contentType: contentTypeFilter,
           source: "firestore",
           nextCursor: cleanSheetWhitespace(ledgerResult?.nextCursor),
+          qiCoverage: qiCoverage ? { ok: qiCoverage.ok, target: CURRENT_TITLES_QI_TARGET, error: qiCoverage.error || "", snapshotMeta: qiCoverage.snapshotMeta || null } : null,
           records
         };
         const serializeStartedAt = performance.now();
@@ -9633,21 +9705,26 @@ const server = http.createServer(async (req, res) => {
       const normalizedFilterMode = cleanSheetWhitespace(filterMode).toLowerCase() || "all";
       try {
       const refreshSource = ["1", "true", "yes"].includes(cleanSheetWhitespace(url.searchParams.get("refresh")).toLowerCase());
-      if (!refreshSource && normalizedFilterMode !== "coverage_needs") {
+      if ((!refreshSource || ["current_titles", "current_titles_held", "all"].includes(normalizedFilterMode)) && normalizedFilterMode !== "coverage_needs") {
         const ledgerStartedAt = performance.now();
-        const ledgerResult = await syncWeaverRuntimeDb("get_handoff_queue", {
+        const [ledgerResult, qiCoverage] = await Promise.all([syncWeaverRuntimeDb("get_handoff_queue", {
           limit: 500,
           cursor: 0,
-          filter: normalizedFilterMode
-        });
+          filter: normalizedFilterMode === "current_titles_held" ? "current_titles" : normalizedFilterMode
+        }), ["current_titles", "current_titles_held", "all"].includes(normalizedFilterMode)
+          ? fetchPoetryPleaseQiCoverageCounts()
+          : Promise.resolve(null)]);
         const dbElapsedMs = performance.now() - ledgerStartedAt;
-        const records = Array.isArray(ledgerResult?.records) ? ledgerResult.records : [];
+        const records = applyCurrentTitlesQiHold(
+          Array.isArray(ledgerResult?.records) ? ledgerResult.records : [], normalizedFilterMode, qiCoverage
+        );
         const books = summarizeGraphicsHandoffBooks(records);
         const result = {
           ok: Boolean(ledgerResult?.ok),
           filter: normalizedFilterMode,
           source: "firestore",
           poetryPleaseCoverage: null,
+          qiCoverage: qiCoverage ? { ok: qiCoverage.ok, target: CURRENT_TITLES_QI_TARGET, error: qiCoverage.error || "" } : null,
           books
         };
         const serializeStartedAt = performance.now();
