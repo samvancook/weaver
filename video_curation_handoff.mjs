@@ -315,7 +315,7 @@ export function summarizeVideoReceiverState(candidate, receipt, versions = null)
     gatheredExcerptCount: candidate.excerptRecordIds?.length || 0,
     renditions: Array.isArray(versions?.renditions) ? versions.renditions : [],
     selectedRendition: versions?.selected || null,
-    renditionSelectionStatus: versions?.selectionStatus || '', 
+    renditionSelectionStatus: versions?.selectionStatus || '',
   };
 }
 
