@@ -56,3 +56,9 @@ test('additional folders load once, preserve inventory-only sets, and never join
  const inventory=[{id:'inventory',name:'Already in inventory'}];assert.equal(await listVideoVersionSetFiles({inventoryEvent:true,inventoryFiles:inventory},()=>{throw Error('Unexpected folder scan');}),inventory);
  await assert.rejects(listVideoVersionSetFiles({id:'mn-writers-respond-loft',folderId:'vertical'},async()=>{throw Error('Folder unavailable');}),/Folder unavailable/);
 });
+
+test('performance links use stable file-ID URLs even when Drive adds sharing parameters',()=>{
+ const linked=groupVideoVersionFiles(files.map(f=>({...f,webViewLink:`https://drive.google.com/file/d/${f.id}/view?usp=drivesdk`})),f.prioritySetId)[0];
+ const context=videoPerformanceContext(linked,['excerpt']);
+ assert.ok(context.assets.every(a=>a.url===`https://drive.google.com/file/d/${a.fileId}/view`));
+});
