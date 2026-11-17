@@ -50,3 +50,10 @@ test('scheduled worker accepts only the existing runtime identity with the fixed
  await assert.rejects(verifyVideoPipelineCaller({headers:{authorization:'Bearer signed-token'}},{verifyIdToken:async()=>({getPayload:()=>({email:'other@example.com',email_verified:true})})}),/denied/);
  await assert.rejects(verifyVideoPipelineCaller({headers:{}},verify),/required/);
 });
+test('exact selected verified platform rendition confirms media but never caption or calendar readiness',()=>{
+ const selected={id:'asset',contentCollection:'videos',contentDocId:'canonical',sourceRecordId:c.videoRecordId,sourceVersionFileId:'fv',profileId:'platform-1080p-h264-aac',profileVersion:'1',status:'active',storageMode:'drive_reference',validationState:'verified_bytes',outputFileId:'output',byteCount:123,verifiedByteCount:123,sha256:'a'.repeat(64),verifiedSha256:'a'.repeat(64)};
+ const inspect=patch=>({receiver:{...received.receiver,media:{},renditions:[selected],selectedRendition:{...selected,...patch}}});
+ const valid=applyVideoPipelineReceiver(localVideoPipelineState(c,{},now),c,inspect({}),now);
+ assert.equal(valid.mediaReady,true);assert.equal(valid.stage,'awaiting_pp_readiness');assert.equal(valid.captionReady,false);assert.equal(valid.calendarReady,false);
+ for(const patch of [{sourceVersionFileId:'other'},{sourceRecordId:'other'},{contentDocId:'other'},{profileId:'other'},{profileVersion:'2'},{validationState:'source_reported'},{verifiedByteCount:0},{verifiedSha256:'b'.repeat(64)},{id:'not-listed'}])assert.equal(applyVideoPipelineReceiver(localVideoPipelineState(c,{},now),c,inspect(patch),now).mediaReady,false);
+});

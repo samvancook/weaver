@@ -13,11 +13,11 @@ import { verifyFootageHelperCaller } from "./footage_helper_auth.mjs";
 import http from "node:http";
 import { spawn } from "node:child_process";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
-import { excerptFingerprint, findExcerptAcknowledgement, verifyExcerptReadback } from "./excerpt_receipt.mjs";
+import { excerptFingerprint, findExcerptAcknowledgement, findExactExcerptAcknowledgement, verifyExcerptReadback } from "./excerpt_receipt.mjs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { videoReviewProgress, videoLibraryStatus, prepareVideoIdentityReview, assertVideoRetryPreflight, syncVideoReviewContext, buildVideoReviewEvidence, summarizeVideoReceiverState, assertVideoClaimMatchesRecord, assertVideoImportPreflight, assertVideoImportReadback, buildReviewerProgressExport, buildWeaverVideoImport, classifyDriveFolderPath, driveFileId, listKnownVideoAssets, parsePoetryPleaseVideoImport, parsePoetryPleaseVideoReceipt, poetryPleaseVideoIdForSourceFile, reconcileVideoReviews, requiresManualVideoIdentityReview, resolveCurrentVideoFileId, resolveVideoReviewSourceFileId } from "./video_curation_handoff.mjs";
+import { videoReviewProgress, videoLibraryStatus, prepareVideoIdentityReview, assertVideoRetryPreflight, syncVideoReviewContext, buildVideoReviewEvidence, summarizeVideoReceiverState, readVideoRenditions, assertVideoClaimMatchesRecord, assertVideoImportPreflight, assertVideoImportReadback, buildReviewerProgressExport, buildWeaverVideoImport, classifyDriveFolderPath, driveFileId, listKnownVideoAssets, parsePoetryPleaseVideoImport, parsePoetryPleaseVideoReceipt, poetryPleaseVideoIdForSourceFile, reconcileVideoReviews, requiresManualVideoIdentityReview, resolveCurrentVideoFileId, resolveVideoReviewSourceFileId } from "./video_curation_handoff.mjs";
 import { verifyProgressExportCaller } from "./weaver_progress_auth.mjs";
 import { findApprovedTextExcerptMatch } from "./video_excerpt_folding.mjs";
 import { poemKeyForExcerptText, POEM_KEY_SEED_SOURCE } from "./poem_key_seed.mjs";
@@ -2925,13 +2925,13 @@ async function inspectVideoReceiverState(prioritySetId, sourceFileId) {
       headers: { "x-api-key": poetryPleaseApiKey }, signal: AbortSignal.timeout(15000)
     });
     const body = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(body.error || `Poetry Please read failed (${response.status}).`);
+    if (!response.ok) throw Object.assign(new Error(body.error || `Poetry Please read failed (${response.status}).`), {status:response.status,code:body.error});
     return body;
   };
   const receipt = await read(`weaverVideoReceipt?sourceRecordId=${encodeURIComponent(candidate.videoRecordId)}`);
   const summary = summarizeVideoReceiverState(candidate, receipt);
   if (!summary.received) return { ok: true, checkedAt: new Date().toISOString(), receiver: summary };
-  const versions = await read(`videoRenditions?videoId=${encodeURIComponent(summary.canonicalVideoId)}`);
+  const versions = await readVideoRenditions(candidate,summary.canonicalVideoId,read);
   return { ok: true, checkedAt: new Date().toISOString(), receiver: summarizeVideoReceiverState(candidate, receipt, versions), readiness: receipt.readiness || null, receipt };
 }
 
@@ -2975,12 +2975,12 @@ async function inspectVideoPipelineCandidate(candidate) {
     const response = await fetch(`${poetryPleaseApiUrl.replace(/\/$/, "")}/internal/${path}`, {
       headers:{"x-api-key":poetryPleaseApiKey},signal:AbortSignal.timeout(15000)});
     const body = await response.json().catch(()=>({}));
-    if (!response.ok) throw new Error(body.error||`Receiver check failed (${response.status})`);
+    if (!response.ok) throw Object.assign(new Error(body.error||`Receiver check failed (${response.status})`), {status:response.status,code:body.error});
     return body;
   };
   const receipt = await read(`weaverVideoReceipt?sourceRecordId=${encodeURIComponent(candidate.videoRecordId)}`);
   const summary = summarizeVideoReceiverState(candidate,receipt);
-  const versions = summary.received ? await read(`videoRenditions?videoId=${encodeURIComponent(summary.canonicalVideoId)}`) : null;
+  const versions = summary.received ? await readVideoRenditions(candidate,summary.canonicalVideoId,read) : null;
   const inspection = {receiver:summarizeVideoReceiverState(candidate,receipt,versions),readiness:receipt.readiness||null,receipt};
   if (!receipt?.received || !candidate.gate) return inspection;
   const gate = candidate.gate, handoff = gate.poetryPleaseHandoff || {};
@@ -6132,8 +6132,15 @@ async function inspectExcerptHandoffReceipt(recordId, checkedBy = "", apply = fa
     if (!response.ok) throw new Error(body.error || `Receiver read failed (${response.status}).`);
     return body;
   };
-  const health = await read("internal/weaverImportHealth?limit=250", true);
-  const acknowledgement = findExcerptAcknowledgement(record, health, canonicalVideoId);
+  let acknowledgement;
+  if (expected.receiptLookup) {
+    const lookup = expected.receiptLookup;
+    const exact = await read(`internal/weaverImportHealth?sourceRecordId=${encodeURIComponent(record.sourceRecordId)}&importLedgerId=${encodeURIComponent(lookup.importLedgerId || "")}`, true);
+    acknowledgement = findExactExcerptAcknowledgement(record, lookup, exact, canonicalVideoId);
+  } else {
+    const health = await read("internal/weaverImportHealth?limit=250", true);
+    acknowledgement = findExcerptAcknowledgement(record, health, canonicalVideoId);
+  }
   const body = await read(`contentById?id=${encodeURIComponent(acknowledgement.canonicalExcerptId)}`);
   const receipt = verifyExcerptReadback(record, acknowledgement, body);
   if (!apply) return { ok: true, receipt, canReconcile: ["failed", "queued"].includes(expected.handoffStatus) };

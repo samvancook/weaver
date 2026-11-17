@@ -251,6 +251,25 @@ export async function syncVideoReviewContext(candidate, { readReceipt, postConte
     receiver: summarizeVideoReceiverState(candidate, after) };
 }
 
+export function videoRenditionLookupQuery(candidate, canonicalVideoId) {
+  const query = new URLSearchParams({videoId:canonicalVideoId,
+    profileId:'platform-1080p-h264-aac',profileVersion:'1'});
+  const sourceVersion = candidate.sourceMediaType === 'FV' ? clean(candidate.sourceFileId)
+    : driveFileId(candidate.gate?.publishableAssetUrl);
+  if (sourceVersion) query.set('sourceVersionFileId',sourceVersion);
+  return `videoRenditions?${query}`;
+}
+
+export async function readVideoRenditions(candidate, canonicalVideoId, read) {
+  try { return await read(videoRenditionLookupQuery(candidate,canonicalVideoId)); }
+  catch(error) {
+    // PP's exact selector reports a missing profile with 404. The existing
+    // parent can still have valid other formats; keep it in media_pending.
+    if (error.status !== 404 || error.code !== 'video_rendition_not_found') throw error;
+    return await read(`videoRenditions?videoId=${encodeURIComponent(canonicalVideoId)}`);
+  }
+}
+
 export function summarizeVideoReceiverState(candidate, receipt, versions = null) {
   if (receipt?.ok !== true || receipt.ambiguousVideoMatch
     || clean(receipt.sourceRecordId) !== clean(candidate.videoRecordId)) {
@@ -282,6 +301,7 @@ export function summarizeVideoReceiverState(candidate, receipt, versions = null)
       : candidate.excerptRecordIds?.length || 0,
     gatheredExcerptCount: candidate.excerptRecordIds?.length || 0,
     renditions: Array.isArray(versions?.renditions) ? versions.renditions : [],
+    selectedRendition: versions?.selected || null,
   };
 }
 

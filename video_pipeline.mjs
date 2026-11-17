@@ -42,7 +42,18 @@ export function applyVideoPipelineReceiver(state,candidate,inspection,now=Date.n
   const mediaEvidence=contract&&readiness.media?.status==='verified'&&clean(readiness.media.assetId)&&clean(readiness.media.outputFileId)
     &&['durable','drive_link'].includes(readiness.media.mode)&&Number.isFinite(Date.parse(readiness.media.verifiedAt));
   const durable=media.durableCopyStatus==='verified'&&media.storageMode==='durable'&&Number(media.durableByteCount)>0&&clean(media.durableChecksum);
-  const mediaReady=Boolean(durable||mediaEvidence);
+  const selected=receiver.selectedRendition;
+  const sourceVersion=candidate.sourceMediaType==='FV'?clean(candidate.sourceFileId):clean(candidate.gate?.publishableAssetUrl).match(/\/file\/d\/([\w-]+)/)?.[1];
+  const verifiedRendition=Boolean(selected && clean(selected.id||selected.assetId)
+    && (receiver.renditions||[]).some(r=>(r.id||r.assetId)===(selected.id||selected.assetId))
+    && selected.contentCollection==='videos' && selected.contentDocId===receiver.canonicalVideoId
+    && selected.sourceRecordId===receiver.sourceRecordId && selected.sourceVersionFileId===sourceVersion
+    && selected.profileId==='platform-1080p-h264-aac' && String(selected.profileVersion)==='1'
+    && selected.status==='active' && selected.storageMode==='drive_reference' && selected.validationState==='verified_bytes'
+    && clean(selected.outputFileId) && Number.isSafeInteger(Number(selected.verifiedByteCount)) && Number(selected.verifiedByteCount)>0
+    && Number(selected.verifiedByteCount)===Number(selected.byteCount)
+    && /^[a-f0-9]{64}$/i.test(clean(selected.verifiedSha256)) && selected.verifiedSha256===selected.sha256);
+  const mediaReady=Boolean(durable||mediaEvidence||verifiedRendition);
   const captionReady=Boolean(contract&&readiness.caption?.status==='approved'&&clean(readiness.caption.canonicalExcerptId)&&clean(readiness.caption.fingerprint)&&Number.isFinite(Date.parse(readiness.caption.approvedAt)));
   // The optional, authenticated PP contract binds the chosen output and caption.
   // Current receipts without that contract cannot claim Calendar readiness.

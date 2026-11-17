@@ -79,3 +79,29 @@ test('stored ledger content cannot substitute for a changed or withdrawn authori
   await assert.rejects(inspect('handoff','operator',true),/approved source and saved handoff require review/);assert.equal(readReceiver,false);
  }
 });
+
+test('exact legacy lookup verifies all four identities and approved content; absence and crossed ledgers never authorize recovery',async()=>{
+ const {findExactExcerptAcknowledgement}=await import('../excerpt_receipt.mjs');
+ const lookup={sourceRecordId:'source',canonicalExcerptId:'EXC-ONE',canonicalVideoId:'VIDEO',importLedgerId:'legacy-ledger'};
+ const exact={ok:true,received:true,...lookup,bindingEvidence:'current_excerpt_and_completed_import_outcome',author:record.author,poem:record.poemTitle,excerpt:record.excerpt};
+ const ack=findExactExcerptAcknowledgement(record,lookup,exact,'VIDEO');
+ assert.deepEqual(ack.importLedgerIds,['legacy-ledger']);assert.equal(verifyExcerptReadback(record,ack,body).verified,true);
+ for(const patch of [{received:false},{sourceRecordId:'crossed'},{canonicalExcerptId:'OTHER'},{canonicalVideoId:'OTHER'},{importLedgerId:'crossed'},{bindingEvidence:'unverified'},{excerpt:'Changed'},{author:'Other'},{poem:'Other'}])assert.throws(()=>findExactExcerptAcknowledgement(record,lookup,{...exact,...patch},'VIDEO'));
+ assert.throws(()=>findExactExcerptAcknowledgement({...record,poetryPleaseItemId:'OTHER'},lookup,exact,'VIDEO'));
+});
+test('ordinary reconciliation uses an exact seeded ledger handle, rereads content and saves through existing receipt transition',async()=>{
+ const {findExactExcerptAcknowledgement}=await import('../excerpt_receipt.mjs');
+ const lookup={sourceRecordId:'source',canonicalExcerptId:'EXC-ONE',canonicalVideoId:'VIDEO',importLedgerId:'legacy-ledger'};
+ const source={...record,sourceVideoFileId:'file'};const stored={...source,receiptLookup:lookup};
+ for(const received of [true,false]){
+  let saved=false;const urls=[];
+  const context={cleanSheetWhitespace:x=>String(x||'').trim(),excerptFingerprint,findExcerptAcknowledgement,findExactExcerptAcknowledgement,verifyExcerptReadback,poetryPleaseApiKey:'key',poetryPleaseApiUrl:'https://receiver.invalid/api',AbortSignal,
+   getApprovedExcerptsExportFromSheets:async()=>({ok:true,records:[source]}),buildExcerptHandoffFromApprovedExportRecord:r=>r,buildPoetryPleaseExcerptRecord:r=>r,
+   videoFamilyForFile:()=>null,poetryPleaseVideoIdForSourceFile:()=> 'VIDEO',invalidateQueueSnapshots(){},
+   syncWeaverRuntimeDb:async action=>{if(action==='reconcile_excerpt_handoff'){saved=true;return{saved:true};}if(action==='get_video_curation_gates')return{records:[]};return{records:[saved?{...stored,handoffStatus:'sent',poetryPleaseItemId:'EXC-ONE'}:stored]};},
+   fetch:async(url,options)=>{urls.push(url);assert.ok(!options.method||options.method==='GET');return{ok:true,json:async()=>url.includes('weaverImportHealth')?{ok:true,received,...lookup,bindingEvidence:'current_excerpt_and_completed_import_outcome',author:record.author,poem:record.poemTitle,excerpt:record.excerpt}:body};}};
+  const inspect=runInNewContext(`(${server.match(/async function inspectExcerptHandoffReceipt\([^]*?\n}\n/)[0]})`,context);
+  if(received)assert.equal((await inspect('handoff','worker',true)).saved,true);else{await assert.rejects(inspect('handoff','worker',true),/does not confirm/);assert.equal(saved,false);}
+  assert.ok(urls[0].includes('sourceRecordId=source&importLedgerId=legacy-ledger'));assert.ok(urls.every(u=>!u.includes('limit=250')));
+ }
+});
