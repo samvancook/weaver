@@ -206,7 +206,7 @@ export function videoPerformanceContext(file,excerpts=[]){
     sourceRecordId:'weaver:video:'+f.reviewSourceFileId,
     poem:{author:f.author,title:f.title},
     assets:(file.videoVariants||[]).map(v=>({fileId:v.id,fileName:v.name,
-      url:v.webViewLink||`https://drive.google.com/file/d/${v.id}/view`,
+      url:`https://drive.google.com/file/d/${v.id}/view`,
       relationship:'same_performance',timing:'source_specific'})),
     excerptRecordIds:[...new Set(excerpts.map(clean).filter(Boolean))].sort()};
 }
