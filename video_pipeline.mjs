@@ -1,3 +1,4 @@
+import {selectedPlatformRenditionVerified} from './video_rendition_selection.mjs';
 import {createHash} from 'node:crypto';
 export const VIDEO_AUTO_POLICY=Object.freeze({version:'2026-11-13',minScore:8.5,minReviewers:5,minExcerpts:1});
 const clean=v=>String(v??'').trim();
@@ -42,17 +43,7 @@ export function applyVideoPipelineReceiver(state,candidate,inspection,now=Date.n
   const mediaEvidence=contract&&readiness.media?.status==='verified'&&clean(readiness.media.assetId)&&clean(readiness.media.outputFileId)
     &&['durable','drive_link'].includes(readiness.media.mode)&&Number.isFinite(Date.parse(readiness.media.verifiedAt));
   const durable=media.durableCopyStatus==='verified'&&media.storageMode==='durable'&&Number(media.durableByteCount)>0&&clean(media.durableChecksum);
-  const selected=receiver.selectedRendition;
-  const sourceVersion=candidate.sourceMediaType==='FV'?clean(candidate.sourceFileId):clean(candidate.gate?.publishableAssetUrl).match(/\/file\/d\/([\w-]+)/)?.[1];
-  const verifiedRendition=Boolean(selected && clean(selected.id||selected.assetId)
-    && (receiver.renditions||[]).some(r=>(r.id||r.assetId)===(selected.id||selected.assetId))
-    && selected.contentCollection==='videos' && selected.contentDocId===receiver.canonicalVideoId
-    && selected.sourceRecordId===receiver.sourceRecordId && selected.sourceVersionFileId===sourceVersion
-    && selected.profileId==='platform-1080p-h264-aac' && String(selected.profileVersion)==='1'
-    && selected.status==='active' && selected.storageMode==='drive_reference' && selected.validationState==='verified_bytes'
-    && clean(selected.outputFileId) && Number.isSafeInteger(Number(selected.verifiedByteCount)) && Number(selected.verifiedByteCount)>0
-    && Number(selected.verifiedByteCount)===Number(selected.byteCount)
-    && /^[a-f0-9]{64}$/i.test(clean(selected.verifiedSha256)) && selected.verifiedSha256===selected.sha256);
+  const verifiedRendition=selectedPlatformRenditionVerified(candidate,receiver);
   const mediaReady=Boolean(durable||mediaEvidence||verifiedRendition);
   const captionReady=Boolean(contract&&readiness.caption?.status==='approved'&&clean(readiness.caption.canonicalExcerptId)&&clean(readiness.caption.fingerprint)&&Number.isFinite(Date.parse(readiness.caption.approvedAt)));
   // The optional, authenticated PP contract binds the chosen output and caption.
@@ -63,7 +54,8 @@ export function applyVideoPipelineReceiver(state,candidate,inspection,now=Date.n
   const out={...state,stage,message:messages[stage]||messages.receiver_check,canonicalVideoId:receiver.canonicalVideoId,receiverSourceRecordId:receiver.sourceRecordId,
     receiverCheckedAt:new Date(now).toISOString(),mediaReady,captionReady,calendarReady:stage==='calendar_ready',
     receivedReviewCount:Number(receiver.review?.reviewCount||0),receivedExcerptLinkCount:Number(receiver.review?.selectedExcerptIdCount||0),
-    mediaStatus:clean(media.durableCopyStatus||media.mediaStatus||'unknown')};
+    mediaStatus:clean(media.durableCopyStatus||media.mediaStatus||'unknown'),
+    mediaReadinessReason:mediaReady?'verified':receiver.renditionSelectionStatus||'no_verified_media'};
   if(calendarReady){out.calendarEvidence={schemaVersion:'1',canonicalVideoId:receiver.canonicalVideoId,sourceRecordId:receiver.sourceRecordId,
     mediaAssetId:readiness.media.assetId,outputFileId:readiness.media.outputFileId,captionExcerptId:readiness.caption.canonicalExcerptId,
     captionFingerprint:readiness.caption.fingerprint,checkedAt:readiness.checkedAt};}
@@ -75,6 +67,7 @@ export function publicVideoPipelineState(state,now=Date.now()){
   return{schemaVersion:'1',pipelineId:state.pipelineId,prioritySetId:state.prioritySetId,sourceFileId:state.sourceFileId,sourceRecordId:state.sourceRecordId,
     canonicalVideoId:state.canonicalVideoId||'',sourceMediaType:state.sourceMediaType||'unknown',sourceMediaTypeReason:state.sourceMediaTypeReason||'',stage:state.stage,message:state.message,score:state.score,reviewerCount:state.reviewerCount,
     excerptCount:state.excerptCount,policy:VIDEO_AUTO_POLICY,checkedAt:state.checkedAt,receiverCheckedAt:state.receiverCheckedAt||'',
+    mediaReadinessReason:state.mediaReadinessReason||'',
     mediaReady:Boolean(state.mediaReady&&fresh),captionReady:Boolean(state.captionReady&&fresh),calendarReady:Boolean(state.calendarReady&&fresh),
     readinessFresh:fresh,...(state.calendarReady&&fresh?{calendarEvidence:state.calendarEvidence}:{})};
 }

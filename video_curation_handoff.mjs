@@ -1,3 +1,4 @@
+import {preferredVerifiedPlatformRendition} from './video_rendition_selection.mjs';
 export {classifyDriveFolderPath} from './video_media_classification.mjs';
 import {VIDEO_AUTO_POLICY, videoQualitySummary} from './video_pipeline.mjs';
 import {normalizeFootageConnections,receivedFootageConnections} from './footage_provenance.mjs';
@@ -266,7 +267,19 @@ export async function readVideoRenditions(candidate, canonicalVideoId, read) {
     // PP's exact selector reports a missing profile with 404. The existing
     // parent can still have valid other formats; keep it in media_pending.
     if (error.status !== 404 || error.code !== 'video_rendition_not_found') throw error;
-    return await read(`videoRenditions?videoId=${encodeURIComponent(canonicalVideoId)}`);
+    const versions = await read(`videoRenditions?videoId=${encodeURIComponent(canonicalVideoId)}`);
+    if (versions.ok !== true || versions.schemaVersion !== '1' || !Array.isArray(versions.renditions)
+      || versions.canonicalVideoId !== canonicalVideoId || versions.sourceRecordId !== candidate.videoRecordId) {
+      // Preserve the existing strict summary validator for an unselected list.
+      if (!versions.renditions?.length) return versions;
+      throw Error('Poetry Please fallback versions belong to a different video or source.');
+    }
+    const choice = preferredVerifiedPlatformRendition(candidate,canonicalVideoId,candidate.videoRecordId,versions.renditions);
+    if (!choice.asset) return {...versions,selectionStatus:choice.status};
+    const asset = choice.asset;
+    const query = new URLSearchParams({videoId:canonicalVideoId,profileId:asset.profileId,
+      profileVersion:String(asset.profileVersion),sourceVersionFileId:asset.sourceVersionFileId});
+    return await read(`videoRenditions?${query}`);
   }
 }
 
@@ -302,6 +315,7 @@ export function summarizeVideoReceiverState(candidate, receipt, versions = null)
     gatheredExcerptCount: candidate.excerptRecordIds?.length || 0,
     renditions: Array.isArray(versions?.renditions) ? versions.renditions : [],
     selectedRendition: versions?.selected || null,
+    renditionSelectionStatus: versions?.selectionStatus || '',
   };
 }
 
