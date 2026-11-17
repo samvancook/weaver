@@ -41,3 +41,18 @@ test('the grouping contract supports horizontal, vertical, high and low resoluti
  assert.equal(context.assets.length,4);assert.deepEqual(context.excerptRecordIds,['shared']);
  assert.ok(context.assets.every(a=>a.relationship==='same_performance'&&a.timing==='source_specific'));
 });
+test('Loft horizontal and vertical folders produce twelve shared performances, keeping review source identities',()=>{
+ const families=VIDEO_VERSION_FAMILIES.filter(f=>f.prioritySetId==='mn-writers-respond-loft');assert.equal(families.length,12);
+ const files=families.flatMap(f=>f.fileIds.map((id,i)=>({id,name:`${f.author} - ${f.title}${i?' HV':' VV'}.mov`})));
+ const grouped=groupVideoVersionFiles(files,'mn-writers-respond-loft');assert.equal(grouped.length,12);
+ assert.ok(grouped.every(f=>f.videoVariants.length===2&&f.id===f.videoVersionFamily.reviewSourceFileId));
+ for(const f of grouped){const reviews=reconcileVideoReviews([f],[{sourceFileId:f.id,reviewerEmail:'person@example.com',rating:'like',excerptRecordIds:['shared']}]);
+  assert.equal(reviews.length,1);assert.equal(videoPerformanceContext(f,['shared']).assets.length,2);}
+});
+test('additional folders load once, preserve inventory-only sets, and never join events by title',async()=>{
+ const{listVideoVersionSetFiles}=await import('../video_version_families.mjs');const calls=[];
+ const files=await listVideoVersionSetFiles({id:'mn-writers-respond-loft',folderId:'vertical'},async id=>{calls.push(id);return[{id:id==='vertical'?'v':'h',name:id}];});
+ assert.equal(calls.length,2);assert.equal(files.length,2);
+ const inventory=[{id:'inventory',name:'Already in inventory'}];assert.equal(await listVideoVersionSetFiles({inventoryEvent:true,inventoryFiles:inventory},()=>{throw Error('Unexpected folder scan');}),inventory);
+ await assert.rejects(listVideoVersionSetFiles({id:'mn-writers-respond-loft',folderId:'vertical'},async()=>{throw Error('Folder unavailable');}),/Folder unavailable/);
+});
