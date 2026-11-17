@@ -1,4 +1,4 @@
-import {groupVideoVersionFiles, videoPerformanceContext, videoFamilyForFile, candidateMatchesVideoSource} from "./video_version_families.mjs";
+import {groupVideoVersionFiles, videoPerformanceContext, videoFamilyForFile, candidateMatchesVideoSource, listVideoVersionSetFiles} from "./video_version_families.mjs";
 import {runVideoExcerptDeliveries,videoExcerptDeliveryFingerprint} from './video_excerpt_delivery.mjs';
 import {createVideoResolutionService} from './video_resolution_service.mjs';
 import {assertResolvedVideoMedia,mediaResolutionPublic,normalizeVideoIdentity} from './video_resolution.mjs';
@@ -2289,7 +2289,7 @@ async function listDriveFolderVideoFiles(folderId) {
   do {
     const url = new URL("https://www.googleapis.com/drive/v3/files");
     url.searchParams.set("q", `'${folderId}' in parents and trashed=false and mimeType contains 'video/'`);
-    url.searchParams.set("fields", "nextPageToken,files(id,name,mimeType,parents,webViewLink,createdTime)");
+    url.searchParams.set("fields", "nextPageToken,files(id,name,mimeType,parents,webViewLink,createdTime,videoMediaMetadata)");
     url.searchParams.set("orderBy", "name_natural");
     url.searchParams.set("pageSize", "1000");
     url.searchParams.set("supportsAllDrives", "true");
@@ -2332,7 +2332,7 @@ function isPriorityVideoFileIncluded(file, set) {
 }
 
 async function listVideoSetFiles(set) {
-  return set.inventoryEvent ? set.inventoryFiles : listDriveFolderVideoFiles(set.folderId);
+  return set.inventoryEvent ? set.inventoryFiles : listVideoVersionSetFiles(set,listDriveFolderVideoFiles);
 }
 async function getVideoSetMediaType(set) {
   return set.inventoryEvent
@@ -2425,7 +2425,9 @@ async function loadVideoReviewLibrary(reviewerEmail = "", prioritySetId = "") {
         performanceContext:videoPerformanceContext(file,fileReviews.flatMap(r=>r.excerptRecordIds||[])),
         versionSourceFileIds:file.reviewSourceFileIds || [file.id],
         relatedVideoAssets:[...connections.filter(c=>c.sourceFileId===file.id).flatMap(c=>c.assets||[]),
-          ...(file.videoVariants || []).map(v=>({driveFileId:v.id,url:v.webViewLink||`https://drive.google.com/file/d/${v.id}/view`,fileName:v.name,role:"format_variant",mediaType:sourceMedia.sourceMediaType}))],
+          ...(file.videoVariants || []).map(v=>({driveFileId:v.id,url:v.webViewLink||`https://drive.google.com/file/d/${v.id}/view`,fileName:v.name,role:"format_variant",mediaType:sourceMedia.sourceMediaType,
+            format:v.videoMediaMetadata?.width&&v.videoMediaMetadata?.height
+              ? (v.videoMediaMetadata.width>v.videoMediaMetadata.height?"HV":v.videoMediaMetadata.height>v.videoMediaMetadata.width?"VV":"Square") : "Format not reported"}))],
         footageConnections:footageProvenanceForFile(connections,file.id),
         inventoryEventNames:[...new Set(connections.filter(c=>c.sourceFileId===file.id).map(c=>c.inventoryEventName))],
         mediaResolution:mediaResolutionPublic(mediaRecords.find(r=>r.type==='recording'&&r.prioritySetId===set.id&&r.sourceFileId===file.id)),
