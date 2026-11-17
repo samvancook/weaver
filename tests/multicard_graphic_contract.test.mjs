@@ -65,7 +65,14 @@ test("legacy request-wrapped content identity validates without accepting other 
   project.selectedRecord.contentId = "TGIT-FP-JOHN-MCPHEE";
   project.selectedRecord.imageId = "TGIT-FP-JOHN-MCPHEE";
   project.selectedRecord.quoteText = "Different source text";
-  await assert.rejects(context.validateCompletionEditableProjectIdentity(completion), /text conflicts/);
+  // Saved edits are allowed when the request identity is exact. Text must still
+  // match if no request identity can establish that this is the same project.
+  assert.equal((await context.validateCompletionEditableProjectIdentity(completion)).editableProjectAvailable, true);
+  delete project.sourceIdentity.graphicsRequestId;
+  delete project.selectedRecord.graphicsRequestId;
+  await assert.rejects(context.validateCompletionEditableProjectIdentity({
+    ...completion, contentId: "TGIT-FP-JOHN-MCPHEE", imageId: "TGIT-FP-JOHN-MCPHEE"
+  }), /text conflicts/);
   project.sourceIdentity.graphicsRequestId = "different-request";
   await assert.rejects(context.validateCompletionEditableProjectIdentity(completion), /request identity conflicts/);
 });
@@ -117,6 +124,9 @@ test("QC approval restores the saved multi-card completion before Poetry Please 
       assert.equal(query.completionId, "canary-completion");
       return { record: {
         id: "canary-completion", graphicsRequestId: "canary-request",
+        pigProjectId: "canary-project", editableProjectFileId: "canary-json",
+        editableProjectUrl: "https://example.com/canary-json",
+        editableProjectAvailable: true, editableProjectValidationStatus: "verified",
         sourcePayload: {
           contentType: "QI", assetUrl: assets[0].assetUrl,
           assetPreviewUrl: assets[0].assetPreviewUrl, assetSet: assets,
@@ -137,6 +147,38 @@ test("QC approval restores the saved multi-card completion before Poetry Please 
   assert.equal(exported.sourceRequestId, "canary-request");
   assert.equal(exported.sourceCompletionId, "canary-completion");
   assert.equal(exported.editableProjectFileId, "canary-json");
+});
+
+test("QC export withholds an unverified editable link while preserving approved cards", async () => {
+  let validations = 0;
+  const context = loadFunctions(["hydrateApprovedFirestoreGraphicRecord", "buildPoetryPleaseGraphicRecord"], {
+    syncWeaverRuntimeDb: async () => ({ record: {
+      id: "unverified-completion", graphicsRequestId: "unverified-request",
+      pigProjectId: "wrong-project", editableProjectFileId: "wrong-json",
+      editableProjectUrl: "https://example.com/wrong-json",
+      editableProjectValidationStatus: "identity_conflict", editableProjectAvailable: false,
+      sourcePayload: { contentType: "QI", assetUrl: assets[0].assetUrl,
+        assetSet: assets, sourceRecordId: "unverified-source",
+        pigProjectId: "wrong-project", editableProjectFileId: "wrong-json" }
+    } }),
+    validateEditableProjectForRework: async () => {
+      validations++;
+      throw new Error("Editable project content identity conflicts with completion.");
+    }
+  });
+  const approved = await context.hydrateApprovedFirestoreGraphicRecord({
+    pigCompletionId: "unverified-completion", graphicsRequestId: "unverified-request",
+    graphicsQcDecision: "APPROVE", assetLinkUrl: assets[0].assetUrl
+  });
+  assert.equal(validations, 1);
+  assert.equal(approved.editableProjectAvailable, false);
+  assert.equal(approved.pigProjectId, "");
+  assert.equal(approved.editableProjectFileId, "");
+  assert.equal(approved.editableProjectUrl, "");
+  assert.deepEqual(approved.assetSet, assets);
+  const exported = context.buildPoetryPleaseGraphicRecord(approved);
+  assert.deepEqual(exported.assetSet, assets);
+  assert.equal(exported.editableProjectFileId, "");
 });
 
 test("FPI outbound import retains all cards and editable identity after its payload mapping", async () => {

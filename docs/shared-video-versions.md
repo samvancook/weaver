@@ -48,3 +48,14 @@ project tests also fail on the unmodified base; they concern graphics project
 identity/QC and were left unchanged. The affected video/footage/excerpt checks
 pass. Poetry Please's production CI, authorization emulator, public health and
 anonymous bootstrap checks pass. No publication or Calendar readiness was set.
+
+## Graphics regression follow-up — 2026-11-17
+
+The two previously failing graphics checks were stale tests. The legacy project
+fixture now exercises the intentional request-identity behavior added in
+`e73260b`: saved text edits are accepted for the exact request, while mismatched
+content/request identities and uncorroborated text conflicts are still rejected.
+The QC fixture now models a saved, verified editable-project identity. A new
+negative test verifies that failed project revalidation withholds all editable
+links while preserving the approved card set. No production code or data changed.
+The complete Weaver Node suite now passes 227/227 checks, including video versions.
