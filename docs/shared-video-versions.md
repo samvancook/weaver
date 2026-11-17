@@ -110,3 +110,21 @@ All 229 Node checks pass. Release source preserves the concurrent live
 receipt-root repair, which was not yet on main when this change was prepared.
 Private snapshots, exact file metadata, before receipts and link preview:
 `.evidence/loft-20261117/`. No inventory cells, media or event closures are changed.
+
+## PP exact receipts and rendition profile reads — 2026-11-17
+
+Poetry Please's unfiltered rendition-list response has `selected=null` by design.
+It does not prove selection is missing. Weaver now requests the explicit platform
+1080p profile/version and exact finished source version. A missing-profile 404
+falls back to the parent's rendition list; authorization and other failures remain
+unresolved. Only an exact active `verified_bytes` rendition with matching source,
+parent, profile, byte count and SHA-256 establishes media readiness. It does not
+establish caption approval or Calendar readiness.
+
+For the eight legacy Under Such Conditions imports, PP returned an authenticated
+exact source+original-ledger lookup. Weaver records those independently checked
+lookup handles as metadata only, preserving attempts and delivery status. The
+ordinary worker independently compares source, canonical excerpt, canonical video,
+original ledger and approved text/author/poem, rereads current content and approval,
+and uses the existing conditional receipt transition. An absent/crossed response
+stays unresolved and cannot cause a resend. Historical PP outcomes are preserved.

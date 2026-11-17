@@ -561,3 +561,16 @@ test("receiver comparison uses gate-selected links instead of later gathered pul
   assert.equal(state.expectedExcerptCount,1);assert.equal(state.gatheredExcerptCount,2);
   assert.equal(summarizeVideoReceiverState({...candidate,gate:{selectedExcerptRecordIds:[]}},receipt).expectedExcerptCount,0);
 });
+
+test('platform rendition lookup requests explicit profile and reviewed FV version rather than relying on the unfiltered default',async()=>{
+ const {videoRenditionLookupQuery}=await import('../video_curation_handoff.mjs');
+ const q=new URLSearchParams(videoRenditionLookupQuery({sourceMediaType:'FV',sourceFileId:'representative',gate:{publishableAssetUrl:'https://drive.google.com/file/d/original/view'}},'canonical').split('?')[1]);
+ assert.equal(q.get('videoId'),'canonical');assert.equal(q.get('profileId'),'platform-1080p-h264-aac');assert.equal(q.get('profileVersion'),'1');assert.equal(q.get('sourceVersionFileId'),'representative');
+});
+test('a missing exact profile falls back to its parent list; authorization and other failures stay unresolved',async()=>{
+ const {readVideoRenditions}=await import('../video_curation_handoff.mjs');const paths=[];
+ const list={ok:true,renditions:[],selected:null};
+ assert.equal(await readVideoRenditions({sourceMediaType:'FV',sourceFileId:'fv'},'canonical',async path=>{paths.push(path);if(paths.length===1)throw Object.assign(Error('missing'),{status:404,code:'video_rendition_not_found'});return list;}),list);
+ assert.equal(paths.length,2);assert.equal(paths[1],'videoRenditions?videoId=canonical');
+ for(const error of [{status:401,code:'unauthorized'},{status:500,code:'failed'},{status:404,code:'video_not_found'}]){let n=0;await assert.rejects(readVideoRenditions({},'canonical',async()=>{n++;throw Object.assign(Error('failed'),error);}));assert.equal(n,1);}
+});

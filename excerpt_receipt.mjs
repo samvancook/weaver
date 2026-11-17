@@ -41,3 +41,24 @@ export function verifyExcerptReadback(record, acknowledgement, body) {
   return { ...acknowledgement, verified: true, excerptFingerprint: excerptFingerprint(record.excerpt),
     checkedAtMs: Date.now(), checkedAt: new Date().toISOString() };
 }
+
+// A handoff may provide an exact legacy ledger handle without changing the
+// original outcome. The receiver must independently bind all four identities.
+export function findExactExcerptAcknowledgement(record, lookup, body, canonicalVideoId) {
+  const source = clean(record.sourceRecordId), canonical = clean(lookup?.canonicalExcerptId), ledger = clean(lookup?.importLedgerId);
+  if (!source || lookup?.sourceRecordId !== source || !canonical || !ledger || !clean(canonicalVideoId)
+    || lookup.canonicalVideoId !== canonicalVideoId
+    || record.poetryPleaseItemId && record.poetryPleaseItemId !== canonical
+    || body?.ok !== true || body.received !== true || body.sourceRecordId !== source
+    || body.canonicalExcerptId !== canonical || body.canonicalVideoId !== canonicalVideoId
+    || body.importLedgerId !== ledger || body.bindingEvidence !== 'current_excerpt_and_completed_import_outcome') {
+    throw Error('Exact receiver receipt does not confirm the expected source, excerpt, video and ledger; do not resend.');
+  }
+  for (const [field, expected] of [['author',record.author],['poem',record.poemTitle],['excerpt',record.excerpt]]) {
+    if (!clean(expected) || excerptFingerprint(body[field]) !== excerptFingerprint(expected)) {
+      throw Error('Exact receiver receipt differs from the approved source content.');
+    }
+  }
+  return {sourceRecordId:source, canonicalExcerptId:canonical, canonicalVideoId,
+    importLedgerIds:[ledger], bindingEvidence:body.bindingEvidence};
+}
