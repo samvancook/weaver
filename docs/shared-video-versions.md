@@ -60,6 +60,35 @@ negative test verifies that failed project revalidation withholds all editable
 links while preserving the approved card set. No production code or data changed.
 The complete Weaver Node suite now passes 227/227 checks, including video versions.
 
+## Accepted-gate receipts and active backlog — 2026-11-17
+
+A grouped performance's representative file is a display/curation key. It is not
+necessarily the gate that holds its accepted handoff. Receipt refresh now uses the
+exact accepted gate's event and source-file key, with the original attempt, source
+record, canonical parent and strict receiver/event/context checks preserved. A
+changed attempt or concurrent write remains unresolved with its specific reason.
+There is no new parent send or editorial reapproval during a receipt refresh.
+
+The scheduled full scan now commits an active-membership snapshot only after its
+entire state batch has saved successfully. Public/event backlog reads use that
+snapshot. Retired variant rows remain in the historical collection; new review/edit
+events arriving during or after the scan remain visible until the next full scan.
+A failed scan cannot retire records. A successful empty scan can retire its previous
+membership. Private runtime reads can request `includeArchived` for an audit.
+
+Regression coverage exercises grouped representatives versus original accepted
+gates, unchanged receipts, source/canonical conflicts, concurrent-write rejection,
+retired/reintroduced sources, new-event visibility and failed/malformed scans.
+The complete suites pass 230 Node checks and 131 Python checks. The guarded release
+patch verifies all target hunks before writing any file, and a changed-target check
+confirms zero writes on rejection. The release overlays the immutable current
+production image to preserve separately deployed graphics and video work.
+
+Receiver acceptance remains separate from media selection/certification and an
+approved caption. The two existing parents must not be reimported to repair their
+readiness. Multiple resolutions/orientations stay separate physical assets of one
+performance; timestamps remain source-specific.
+
 ## Loft cross-folder format pairs — 2026-11-17
 
 The Loft set's horizontal FV folder is separate from its vertical FV folder.

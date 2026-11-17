@@ -45,6 +45,34 @@ class VideoPipelineTests(unittest.TestCase):
             db=Store();claim=claim_video_pipeline(db,{})
             with self.assertRaises(ValueError):save_video_pipeline(db,{'token':claim['token'],'states':states})
             self.assertEqual(get_video_pipeline(db,{})['records'],[])
+    def complete_scan(self, db, states):
+        claim=claim_video_pipeline(db,{})
+        return save_video_pipeline(db,{'token':claim['token'],'states':states,'summary':{'count':len(states)},'completeScan':True})
+    def test_complete_scan_hides_retired_variants_without_deleting_history(self):
+        db=Store();old=self.state();old['stage']='awaiting_reviews'
+        self.complete_scan(db,[old])
+        current={**self.state(),'sourceFileId':'finished','pipelineId':hashlib.sha256(b'event|finished').hexdigest()[:32]}
+        self.assertTrue(self.complete_scan(db,[current])['ok'])
+        self.assertEqual(get_video_pipeline(db,{})['records'],[current])
+        self.assertEqual(len(get_video_pipeline(db,{'includeArchived':True})['records']),2)
+        self.assertEqual(get_video_pipeline(db,{'prioritySetId':'other'})['records'],[])
+        self.complete_scan(db,[old,current])
+        self.assertEqual(len(get_video_pipeline(db,{})['records']),2)
+    def test_failed_scan_preserves_membership_and_new_events_remain_visible(self):
+        db=Store();self.complete_scan(db,[self.state()])
+        claim=claim_video_pipeline(db,{})
+        save_video_pipeline(db,{'token':claim['token'],'states':[],'summary':{'error':'source unavailable'}})
+        self.assertEqual(len(get_video_pipeline(db,{})['records']),1)
+        enqueue_video_pipeline(db,{'prioritySetId':'event','sourceFileId':'new','trigger':'review'})
+        key=hashlib.sha256(b'event|new').hexdigest()[:32]
+        db.docs[(FIRESTORE_VIDEO_PIPELINE_COLLECTION,key)]['requestedAt']='2999-01-01T00:00:00Z'
+        self.assertEqual(len(get_video_pipeline(db,{})['records']),2)
+        self.complete_scan(db,[])
+        self.assertEqual([r['sourceFileId'] for r in get_video_pipeline(db,{})['records']],['new'])
+    def test_invalid_completed_scan_cannot_replace_membership(self):
+        db=Store();self.complete_scan(db,[self.state()]);claim=claim_video_pipeline(db,{})
+        with self.assertRaises(ValueError):save_video_pipeline(db,{'token':claim['token'],'states':[],'summary':{'count':1},'completeScan':True})
+        self.assertEqual(len(get_video_pipeline(db,{})['records']),1)
     def gate(self):
         return {'prioritySetId':'event','sourceFileId':'source','videoRecordId':'weaver:video:root','decision':'ready_for_poetry_please','sourceEvent':'Event',
                 'publishableAssetUrl':'https://drive.google.com/file/d/final/view','reviewCount':5,'selectedExcerptRecordIds':['caption'],'decidedAt':'original-approval',

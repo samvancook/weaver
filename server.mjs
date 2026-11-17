@@ -1,3 +1,4 @@
+import {refreshAcceptedVideoReceipt} from './video_receipt_refresh.mjs';
 import {groupVideoVersionFiles, videoPerformanceContext, videoFamilyForFile, candidateMatchesVideoSource, listVideoVersionSetFiles} from "./video_version_families.mjs";
 import {runVideoExcerptDeliveries,videoExcerptDeliveryFingerprint} from './video_excerpt_delivery.mjs';
 import {createVideoResolutionService} from './video_resolution_service.mjs';
@@ -2987,12 +2988,8 @@ async function inspectVideoPipelineCandidate(candidate) {
     const result = await syncWeaverRuntimeDb("reconcile_video_pipeline_gate", {expectedGate:gate,receipt});
     if (!result?.saved) inspection.reconciliationPending = true;
   } else if (handoff.status === "sent_to_poetry_please") {
-    const parsed = parsePoetryPleaseVideoReceipt(receipt,gate);
-    if (["durableCopyStatus","durableCopyError","durableByteCount","durableChecksum","storageMode","mediaStatus","storedReviewCount","storedSelectedExcerptIdCount"].some(key=>String(parsed[key]??"")!==String(handoff[key]??""))) {
-      const saved = await syncWeaverRuntimeDb("refresh_video_curation_receipt", {prioritySetId:candidate.prioritySetId,
-        sourceFileId:candidate.sourceFileId,attemptId:handoff.attemptId||"",checkedBy:"weaver:video-pipeline",receipt:parsed});
-      if (!saved?.saved) throw new Error("Receipt changed during pipeline refresh");
-    }
+    await refreshAcceptedVideoReceipt({candidate,receipt,
+      db:syncWeaverRuntimeDb,parseReceipt:parsePoetryPleaseVideoReceipt});
   }
   return inspection;
 }
@@ -3055,7 +3052,7 @@ async function runVideoPipeline({dryRun = false, trigger = "scheduled"} = {}) {
     states = run.states;
     const summary = {policy:VIDEO_AUTO_POLICY,excerptDelivery,resolutionsChecked:resolution.checked,checked:run.checked,sends:run.sends,count:states.length,
       stages:states.reduce((out,state)=>(out[state.stage]=(out[state.stage]||0)+1,out),{})};
-    const saved = await syncWeaverRuntimeDb("save_video_pipeline", {token:claim.token,states,summary});
+    const saved = await syncWeaverRuntimeDb("save_video_pipeline", {token:claim.token,states,summary,completeScan:true});
     if (!saved?.ok) throw new Error(saved?.error||"Pipeline state save failed");
     console.log("[video-pipeline]",JSON.stringify(summary));
     return {ok:true,...summary};

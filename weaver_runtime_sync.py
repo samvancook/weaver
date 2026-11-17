@@ -1133,6 +1133,14 @@ def enqueue_video_pipeline(connection, payload):
 def get_video_pipeline(connection, payload):
     records = connection.list_raw_documents(FIRESTORE_VIDEO_PIPELINE_COLLECTION)
     event = normalize_text(payload.get("prioritySetId"))
+    control, _ = connection.get_raw_document_versioned(FIRESTORE_VIDEO_PIPELINE_CONTROL, "runner")
+    snapshot = (control or {}).get("activeSnapshot")
+    if snapshot and not payload.get("includeArchived"):
+        active = set(snapshot["pipelineIds"])
+        # Events arriving during/after the completed scan remain visible until
+        # the next scan resolves them. Historical states are retained in storage.
+        records = [r for r in records if r.get("pipelineId") in active
+                   or r.get("requestedAt", "") >= snapshot["startedAt"]]
     return {"ok": True, "records": [r for r in records if not event or r.get("prioritySetId") == event]}
 
 
@@ -1145,6 +1153,10 @@ def save_video_pipeline(connection, payload):
     records = payload.get("states") or []
     if not isinstance(records, list) or len(records) > 500:
         raise ValueError("Invalid pipeline state batch")
+    summary = payload.get("summary") or {}
+    complete_scan = payload.get("completeScan") is True
+    if complete_scan and (summary.get("error") or summary.get("count") != len(records)):
+        raise ValueError("Completed pipeline scan count does not match its states")
     keys = set()
     for state in records:
         key = hashlib.sha256(f"{state.get('prioritySetId')}|{state.get('sourceFileId')}".encode()).hexdigest()[:32]
@@ -1162,7 +1174,10 @@ def save_video_pipeline(connection, payload):
         if not saved:
             raise ValueError("Pipeline state changed during save; next scan will reconcile")
     record = {**lease, "leaseExpiresAt": 0, "finishedAt": utc_now_iso(),
-              "lastRun": payload.get("summary") or {}}
+              "lastRun": summary}
+    if complete_scan:
+        record["activeSnapshot"] = {"pipelineIds": sorted(keys), "startedAt": lease["startedAt"],
+                                    "completedAt": record["finishedAt"], "token": lease["token"]}
     saved = write_video_pipeline_record(connection, FIRESTORE_VIDEO_PIPELINE_CONTROL, "runner", record, version)
     return {"ok": bool(saved), "savedCount": len(records), "finished": bool(saved)}
 
