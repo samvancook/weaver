@@ -59,3 +59,25 @@ The QC fixture now models a saved, verified editable-project identity. A new
 negative test verifies that failed project revalidation withholds all editable
 links while preserving the approved card set. No production code or data changed.
 The complete Weaver Node suite now passes 227/227 checks, including video versions.
+
+## Loft cross-folder format pairs — 2026-11-17
+
+The Loft set's horizontal FV folder is separate from its vertical FV folder.
+Twelve exact author/title pairs have equal current Drive durations, with 1920×1080
+horizontal and vertical counterparts. Explicit families retain the existing
+vertical review-source IDs. The loader now reads additional configured folders
+once, then presents 24 files as 12 performances with shared review/excerpt context.
+Inventory-backed sets retain their existing file list and do not scan extra folders.
+
+Real-data preview preserves all twelve progress summaries exactly: seven unique
+reviewers per performance. Eleven remain below the existing delivery threshold;
+no score, release decision or priority was changed to force a send. Only Sarah
+Ghazal Ali / Under Such Conditions currently has a Poetry Please parent. Its two
+version links and six excerpt references use the existing additive context path.
+The receiver's media is verified, reviewOnly is true, and its receipt currently
+omits the caption/calendar readiness contract. This is not publication confirmation.
+
+All 229 Node checks pass. Release source preserves the concurrent live
+receipt-root repair, which was not yet on main when this change was prepared.
+Private snapshots, exact file metadata, before receipts and link preview:
+`.evidence/loft-20261117/`. No inventory cells, media or event closures are changed.
