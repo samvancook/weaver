@@ -15,6 +15,7 @@
 !weaver_progress_auth.mjs
 !video_resolution.mjs
 !video_resolution_service.mjs
+!video_receipt_refresh.mjs
 !video_excerpt_delivery.mjs
 !video_excerpt_delivery.py
 !video_media_classification.mjs
@@ -59,3 +60,4 @@ data/*
 !footage_provenance.mjs
 
 !video_version_families.mjs
+!video_rendition_selection.mjs
