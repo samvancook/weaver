@@ -61,3 +61,4 @@ data/*
 
 !video_version_families.mjs
 !video_rendition_selection.mjs
+!video_hosted_media.mjs
