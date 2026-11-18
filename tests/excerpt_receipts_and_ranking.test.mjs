@@ -1,6 +1,7 @@
 import {groupVideoVersionFiles,videoPerformanceContext} from "../video_version_families.mjs";
 import {videoFileMediaType} from '../video_media_classification.mjs';
 import {videoReviewProgress} from '../video_curation_handoff.mjs';
+import {publicVideoPipelineState,videoPipelineKey} from '../video_pipeline.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -86,8 +87,11 @@ test('excerpt collection does not change ranking or candidate eligibility', asyn
     sourceFileId: file.id, reviewerEmail: email, rating: 'like', ratingSource: 'legacy_import',
     legacyScore: 6.95, excerptRecordIds: file.id === 'with-excerpts' ? ['excerpt-'+email] : []
   })));
-  const build = runInNewContext(`(${fn('getVideoCurationCandidates')})`, {groupVideoVersionFiles,videoPerformanceContext,
-    syncWeaverRuntimeDb: async action => ({ records: action === 'get_curation_reviews' ? reviews : [] }),
+  const pipeline={pipelineId:videoPipelineKey({prioritySetId:'event',sourceFileId:'with-excerpts'}),
+    sourceRecordId:'weaver:video:with-excerpts',canonicalVideoId:'existing',receiverCheckedAt:new Date().toISOString(),
+    mediaReady:true,stage:'awaiting_pp_readiness'};
+  const build = runInNewContext(`(${fn('getVideoCurationCandidates')})`, {groupVideoVersionFiles,videoPerformanceContext,publicVideoPipelineState,videoPipelineKey,
+    syncWeaverRuntimeDb: async action => ({ records: action === 'get_curation_reviews' ? reviews : action === 'get_video_pipeline' ? [pipeline] : [] }),
     attachVideoMediaResolutions:async rows=>rows, videoFileMediaType, videoReviewProgress, PRIORITY_VIDEO_SETS: new Map([['event', { id: 'event', label: 'Event – Camera', sourceEventLabel: 'Event' }]]),
     cleanSheetWhitespace: clean, getVideoSetMediaType: async () => ({ sourceMediaType: 'FV' }),
     listVideoSetFiles: async () => files, isPriorityVideoFileIncluded: () => true,
@@ -105,6 +109,8 @@ test('excerpt collection does not change ranking or candidate eligibility', asyn
     assert.equal(c.candidateScore, 6.95); assert.equal(c.excerptBonus, 0); assert.equal(c.isEligible, false);
   }
   assert.equal(result.candidates.find(c => c.sourceFileId === 'with-excerpts').excerptRecordIds.length, 2);
+  assert.equal(result.candidates.find(c => c.sourceFileId === 'with-excerpts').pipeline.mediaReady,true);
+  assert.equal(result.candidates.find(c => c.sourceFileId === 'without-excerpts').pipeline,null);
   const app = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
   assert.doesNotMatch(app, /\+ excerpt bonus/);
   assert.match(app, /candidate\.excerptRecordIds\.length} excerpts/);
