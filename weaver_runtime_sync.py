@@ -82,6 +82,7 @@ FIRESTORE_HANDOFF_ACTIONS = {
     "get_video_media_resolutions", "save_video_media_resolution", "prepare_resolved_video_gate",
     "queue_video_excerpt_deliveries", "get_video_excerpt_delivery_queue", "claim_video_excerpt_delivery", "finish_video_excerpt_delivery", "review_video_excerpt_delivery",
     "claim_video_pipeline", "save_video_pipeline", "get_video_pipeline", "enqueue_video_pipeline", "reconcile_video_pipeline_gate",
+    "get_video_hosted_media_verification", "save_video_hosted_media_verification",
 }
 
 EXPECTED_FIRESTORE_PROJECT_ID = "button-weaver-internal"
@@ -90,6 +91,7 @@ FIRESTORE_REPAIR_REQUESTS_COLLECTION = "poetryPleaseRepairRequests"
 FIRESTORE_CURATION_REVIEWS_COLLECTION = "curationReviews"
 FIRESTORE_VIDEO_CURATION_GATES_COLLECTION = "videoCurationGates"
 FIRESTORE_EXCERPT_HANDOFFS_COLLECTION = "excerptHandoffs"
+FIRESTORE_HOSTED_MEDIA_VERIFICATIONS = "videoHostedMediaVerifications"
 PIG_REPAIR_CONTENT_TYPES = {"QI", "FPI"}
 
 
@@ -1102,6 +1104,51 @@ def reconcile_video_pipeline_gate(connection, payload):
                             "previousStatus": prior.get("status"), "canonicalVideoId": receipt["canonicalVideoId"]}])[-20:]}
     saved = connection.write_raw_document_if_unchanged(FIRESTORE_VIDEO_CURATION_GATES_COLLECTION, key, record, version)
     return {"ok": True, "saved": bool(saved), "record": saved}
+
+
+def hosted_media_verification_key(record):
+    fields = [normalize_text(record.get(k)) for k in
+              ("sourceRecordId", "canonicalVideoId", "bucket", "objectName", "generation")]
+    if (not fields[0].startswith("weaver:video:") or not fields[1]
+            or fields[2] != "poetry-please.firebasestorage.app"
+            or not fields[3].startswith("content-library/videos/" + fields[1].lower() + "/")
+            or "/../" in fields[3] or not re.fullmatch(r"[0-9]+", fields[4])):
+        raise ValueError("Exact existing hosted video identity required")
+    return hashlib.sha256(json.dumps(fields, separators=(",", ":")).encode()).hexdigest()[:32]
+
+
+def get_video_hosted_media_verification(connection, payload):
+    key = hosted_media_verification_key(payload)
+    record, _ = connection.get_raw_document_versioned(FIRESTORE_HOSTED_MEDIA_VERIFICATIONS, key)
+    if record and any(record.get(k) != payload.get(k) for k in
+                      ("sourceRecordId", "canonicalVideoId", "bucket", "objectName", "generation")):
+        raise ValueError("Hosted media verification identity conflict")
+    return {"ok": True, "record": record}
+
+
+def save_video_hosted_media_verification(connection, payload):
+    record = payload.get("record") or {}
+    key = hosted_media_verification_key(record)
+    byte_count = record.get("byteCount")
+    if (record.get("schemaVersion") != "1" or record.get("validation") != "full_bytes_md5"
+            or not isinstance(byte_count, int) or isinstance(byte_count, bool)
+            or not 0 < byte_count <= 600 * 1024 * 1024
+            or not re.fullmatch(r"[a-f0-9]{64}", record.get("sha256", ""))
+            or not re.fullmatch(r"[A-Za-z0-9+/]{22}==", record.get("md5Hash", ""))
+            or not re.fullmatch(r"\d{4}-\d\d-\d\dT.+Z", record.get("verifiedAt", ""))):
+        raise ValueError("Full hosted-media byte verification evidence required")
+    # This ledger stores evidence, never approval, send or readiness flags/tokens.
+    allowed = {"schemaVersion", "sourceRecordId", "canonicalVideoId", "bucket", "objectName",
+               "generation", "byteCount", "md5Hash", "sha256", "validation", "verifiedAt"}
+    if set(record) != allowed:
+        raise ValueError("Unexpected hosted-media verification fields")
+    old, version = connection.get_raw_document_versioned(FIRESTORE_HOSTED_MEDIA_VERIFICATIONS, key)
+    if old:
+        if any(old.get(k) != record.get(k) for k in allowed - {"verifiedAt"}):
+            raise ValueError("Immutable hosted-media byte receipt conflict")
+        return {"ok": True, "saved": False, "record": old}
+    saved = connection.create_raw_document_if_absent(FIRESTORE_HOSTED_MEDIA_VERIFICATIONS, key, record)
+    return {"ok": bool(saved), "saved": bool(saved), "record": saved}
 
 
 def claim_video_pipeline(connection, payload):
@@ -2498,6 +2545,10 @@ def main() -> int:
             result = get_video_media_classification(connection, payload)
         elif action == "get_video_pipeline":
             result = get_video_pipeline(connection, payload)
+        elif action == "get_video_hosted_media_verification":
+            result = get_video_hosted_media_verification(connection, payload)
+        elif action == "save_video_hosted_media_verification":
+            result = save_video_hosted_media_verification(connection, payload)
         elif action == "enqueue_video_pipeline":
             result = enqueue_video_pipeline(connection, payload)
         elif action == "get_video_curation_gates":
