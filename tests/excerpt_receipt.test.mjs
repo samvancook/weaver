@@ -33,8 +33,20 @@ test('next steps separate identity, editorial selection, copy state and excerpt 
  assert.match(next({publicationRestricted:true,gate:{}}),/clearance/);
  assert.match(next({sourceMediaType:'FV',requiresManualIdentityReview:true,gate:{decision:'ready_for_poetry_please'}}),/recording identity/);
  assert.match(next({sourceMediaType:'OM',gate:{decision:'ready_for_poetry_please'}}),/finished edit/);
- assert.match(next({gate:{poetryPleaseHandoff:{status:'sent_to_poetry_please',durableCopyStatus:'copying'}}}),/copying/);
- assert.match(next({gate:{poetryPleaseHandoff:{status:'sent_to_poetry_please',durableCopyStatus:'verified'}}}),/Excerpt approval.*separate/);
+ assert.match(next({gate:{poetryPleaseHandoff:{status:'sent_to_poetry_please',durableCopyStatus:'copying'}}}),/automatic media check/);
+ assert.match(next({gate:{poetryPleaseHandoff:{status:'sent_to_poetry_please',durableCopyStatus:'verified'}}}),/automatic media check/);
+});
+test('current worker evidence replaces old blank media fields without hiding holds or stale/crossed identities',()=>{
+ const c={videoRecordId:'source',existingCanonicalVideoId:'video',gate:{poetryPleaseHandoff:{status:'sent_to_poetry_please'}},
+   pipeline:{sourceRecordId:'source',canonicalVideoId:'video',readinessFresh:true,mediaReady:true,stage:'awaiting_pp_readiness'}};
+ assert.match(next(c),/media verified.*approved caption.*Owner: Poetry Please/);
+ assert.doesNotMatch(next(c),/Refresh the receipt|not yet verified/);
+ assert.match(next({...c,pipeline:{...c.pipeline,calendarReady:true,stage:'calendar_ready'}}),/Owner: Calendar/);
+ for(const patch of [{readinessFresh:false},{sourceRecordId:'other'},{canonicalVideoId:'other'}]) {
+   assert.match(next({...c,pipeline:{...c.pipeline,...patch}}),/automatic media check/);
+ }
+ assert.match(next({...c,gate:{...c.gate,decision:'hold'}}),/Editorial hold/);
+ assert.match(next({...c,publicationRestricted:true}),/clearance/);
 });
 const server=readFileSync(new URL('../server.mjs',import.meta.url),'utf8');
 test('reconciliation rereads receipt, persists and reads back without an import',async()=>{

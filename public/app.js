@@ -1865,15 +1865,25 @@ function canReviewVideoRecordingIdentity(candidate) {
 function videoPipelineNextStep(candidate) {
   const gate = candidate.gate || {};
   const handoff = gate.poetryPleaseHandoff || {};
+  if (candidate.publicationRestricted) return "Publication clearance needs review. Internal review can continue.";
+  if (gate.decision === "hold" || gate.decision === "reject") return "Editorial hold · no delivery action.";
+  const pipeline = candidate.pipeline;
+  const canonical = candidate.existingCanonicalVideoId || handoff.canonicalVideoId;
+  const current = pipeline?.readinessFresh === true && pipeline.sourceRecordId === candidate.videoRecordId
+    && canonical && pipeline.canonicalVideoId === canonical;
+  if (current && pipeline.calendarReady && pipeline.stage === "calendar_ready") {
+    return "Media and caption verified · ready for Calendar handoff. Owner: Calendar. Placement confirmation remains separate.";
+  }
+  if (current && pipeline.mediaReady) {
+    return "Existing Poetry Please media verified · waiting for Poetry Please to confirm the approved caption against this file. Owner: Poetry Please.";
+  }
   if (handoff.status === "sent_to_poetry_please") {
-    return handoff.durableCopyStatus === "verified"
-      ? "Delivered · media copy verified. Excerpt approval and scheduling remain separate."
-      : `Accepted by Poetry Please · media copy ${handoff.durableCopyStatus || "not yet verified"}. Refresh the receipt.`;
+    return current && pipeline.stage === "media_pending"
+      ? "Delivery recorded · Weaver is checking the existing Poetry Please file automatically. Owner: Weaver."
+      : "Delivery recorded · waiting for the next automatic media check. Owner: Weaver.";
   }
   if (handoff.status) return `Transfer needs attention (${handoff.status}). Check the receiver receipt before another attempt.`;
   if (candidate.existingCanonicalVideoId) return "Existing Poetry Please video · check its receipt. Register other formats under this same video.";
-  if (candidate.publicationRestricted) return "Publication clearance needs review. Internal review can continue.";
-  if (gate.decision === "hold" || gate.decision === "reject") return "Editorial hold · no delivery action.";
   if (candidate.sourceMediaType === "unknown") return `Next: verify the source as OM or FV. Classification: ${candidate.sourceMediaTypeReason || "not verified"}. No automatic editing or delivery decision will be made.`;
   if (gate.decision === "send_to_editing") return candidate.sourceMediaType === "OM" ? "Next: attach the finished edit while preserving the reviewed recording identity." : "Next: review the saved editing decision; the current source is marked FV.";
   if (candidate.mediaResolutionRequired) {

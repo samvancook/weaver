@@ -2601,6 +2601,8 @@ async function attachVideoMediaResolutions(candidates) {
 
 async function getVideoCurationCandidates(prioritySetId = "") {
   const gateResult = await syncWeaverRuntimeDb("get_video_curation_gates", {});
+  const pipelineResult = await syncWeaverRuntimeDb("get_video_pipeline", {}).catch(() => ({ok:false,records:[]}));
+  const pipelineStates = new Map((pipelineResult.records || []).map(state => [state.pipelineId,state]));
   const gatesByCandidateId = new Map(
     (Array.isArray(gateResult?.records) ? gateResult.records : [])
       .map(record => [cleanSheetWhitespace(record.candidateId), record])
@@ -2660,6 +2662,7 @@ async function getVideoCurationCandidates(prioritySetId = "") {
       const bookMeta = resolvePublishingBookMeta(firstReview.bookTitle, firstReview.bookTitle);
       const candidate = {
         candidateId,
+        pipeline: publicVideoPipelineState(pipelineStates.get(videoPipelineKey({prioritySetId:set.id,sourceFileId}))),
         videoRecordId: `weaver:video:${sourceReviewFileId || sourceFileId}`,
         prioritySetId: set.id,
         prioritySetLabel: set.label,
