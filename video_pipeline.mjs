@@ -1,4 +1,5 @@
 import {selectedPlatformRenditionVerified} from './video_rendition_selection.mjs';
+import {hostedVideoEvidenceMatches} from './video_hosted_media.mjs';
 import {createHash} from 'node:crypto';
 export const VIDEO_AUTO_POLICY=Object.freeze({version:'2026-11-13',minScore:8.5,minReviewers:5,minExcerpts:1});
 const clean=v=>String(v??'').trim();
@@ -44,7 +45,8 @@ export function applyVideoPipelineReceiver(state,candidate,inspection,now=Date.n
     &&['durable','drive_link'].includes(readiness.media.mode)&&Number.isFinite(Date.parse(readiness.media.verifiedAt));
   const durable=media.durableCopyStatus==='verified'&&media.storageMode==='durable'&&Number(media.durableByteCount)>0&&clean(media.durableChecksum);
   const verifiedRendition=selectedPlatformRenditionVerified(candidate,receiver);
-  const mediaReady=Boolean(durable||mediaEvidence||verifiedRendition);
+  const verifiedHosted=hostedVideoEvidenceMatches(candidate,inspection.receipt,inspection.hostedMedia);
+  const mediaReady=Boolean(durable||mediaEvidence||verifiedRendition||verifiedHosted);
   const captionReady=Boolean(contract&&readiness.caption?.status==='approved'&&clean(readiness.caption.canonicalExcerptId)&&clean(readiness.caption.fingerprint)&&Number.isFinite(Date.parse(readiness.caption.approvedAt)));
   // The optional, authenticated PP contract binds the chosen output and caption.
   // Current receipts without that contract cannot claim Calendar readiness.
@@ -55,7 +57,10 @@ export function applyVideoPipelineReceiver(state,candidate,inspection,now=Date.n
     receiverCheckedAt:new Date(now).toISOString(),mediaReady,captionReady,calendarReady:stage==='calendar_ready',
     receivedReviewCount:Number(receiver.review?.reviewCount||0),receivedExcerptLinkCount:Number(receiver.review?.selectedExcerptIdCount||0),
     mediaStatus:clean(media.durableCopyStatus||media.mediaStatus||'unknown'),
-    mediaReadinessReason:mediaReady?'verified':receiver.renditionSelectionStatus||'no_verified_media'};
+    mediaReadinessReason:verifiedHosted?'existing_hosted_bytes_verified':mediaReady?'verified':inspection.hostedMedia?.status||receiver.renditionSelectionStatus||'no_verified_media'};
+  if(!mediaReady && inspection.hostedMedia && inspection.hostedMedia.status!=='not_applicable') {
+    out.message='Existing Poetry Please media needs byte verification; no new file or editing request';
+  }
   if(calendarReady){out.calendarEvidence={schemaVersion:'1',canonicalVideoId:receiver.canonicalVideoId,sourceRecordId:receiver.sourceRecordId,
     mediaAssetId:readiness.media.assetId,outputFileId:readiness.media.outputFileId,captionExcerptId:readiness.caption.canonicalExcerptId,
     captionFingerprint:readiness.caption.fingerprint,checkedAt:readiness.checkedAt};}

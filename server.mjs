@@ -4,7 +4,8 @@ import {runVideoExcerptDeliveries,videoExcerptDeliveryFingerprint} from './video
 import {createVideoResolutionService} from './video_resolution_service.mjs';
 import {assertResolvedVideoMedia,mediaResolutionPublic,normalizeVideoIdentity} from './video_resolution.mjs';
 import {recordedFolderMediaType,traceVideoFolderMediaType,videoFileMediaType} from './video_media_classification.mjs';
-import {VIDEO_AUTO_POLICY, advanceVideoPipeline, localVideoPipelineState, publicVideoPipelineState, videoPipelineKey} from './video_pipeline.mjs';
+import {VIDEO_AUTO_POLICY, advanceVideoPipeline, applyVideoPipelineReceiver, localVideoPipelineState, publicVideoPipelineState, videoPipelineKey} from './video_pipeline.mjs';
+import {inspectExistingHostedVideo} from './video_hosted_media.mjs';
 import {verifyVideoPipelineCaller} from './video_pipeline_auth.mjs';
 import { resolveEventTarget } from "./footage_event_links.mjs";
 import { buildFootageProgress, footageProvenanceForFile } from "./footage_event_progress.mjs";
@@ -2970,7 +2971,7 @@ async function enqueueVideoPipeline(prioritySetId, sourceFileId, trigger) {
   }
 }
 
-async function inspectVideoPipelineCandidate(candidate) {
+async function inspectVideoPipelineCandidate(candidate, {claimHostedDownload = () => true} = {}) {
   const read = async path => {
     const response = await fetch(`${poetryPleaseApiUrl.replace(/\/$/, "")}/internal/${path}`, {
       headers:{"x-api-key":poetryPleaseApiKey},signal:AbortSignal.timeout(15000)});
@@ -2982,6 +2983,10 @@ async function inspectVideoPipelineCandidate(candidate) {
   const summary = summarizeVideoReceiverState(candidate,receipt);
   const versions = summary.received ? await readVideoRenditions(candidate,summary.canonicalVideoId,read) : null;
   const inspection = {receiver:summarizeVideoReceiverState(candidate,receipt,versions),readiness:receipt.readiness||null,receipt};
+  if (receipt.received && !applyVideoPipelineReceiver(localVideoPipelineState(candidate),candidate,inspection).mediaReady) {
+    inspection.hostedMedia = await inspectExistingHostedVideo(candidate,receipt,
+      {db:syncWeaverRuntimeDb,claimDownload:claimHostedDownload});
+  }
   if (!receipt?.received || !candidate.gate) return inspection;
   const gate = candidate.gate, handoff = gate.poetryPleaseHandoff || {};
   if (["sending","failed","needs_reconciliation"].includes(handoff.status)) {
@@ -3045,9 +3050,10 @@ async function runVideoPipeline({dryRun = false, trigger = "scheduled"} = {}) {
     const [result, previous] = await Promise.all([getVideoCurationCandidates(), syncWeaverRuntimeDb("get_video_pipeline", {})]);
     if (!previous.ok) throw new Error("Pipeline state could not be read");
     const resolution = await videoResolutionService.prepare(result.candidates);
+    let hostedDownloads = 0;
     const run = await advanceVideoPipeline({candidates:resolution.candidates,previous:previous.records,
       budgetMs:Math.max(30000,260000-(Date.now()-pipelineStartedAt)),
-      inspect:candidate=>inspectVideoPipelineCandidate(candidate),
+      inspect:candidate=>inspectVideoPipelineCandidate(candidate,{claimHostedDownload:()=>hostedDownloads++ === 0}),
       deliver:candidate=>autoAdvanceVideoCuration(candidate.prioritySetId,candidate.sourceFileId)});
     states = run.states;
     const summary = {policy:VIDEO_AUTO_POLICY,excerptDelivery,resolutionsChecked:resolution.checked,checked:run.checked,sends:run.sends,count:states.length,
