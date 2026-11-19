@@ -179,9 +179,30 @@ def sync_completions(connection, payload: dict[str, Any]) -> dict[str, Any]:
         request_id = normalize_text(completion.get("requestId") or completion.get("graphicsRequestId"))
         if not request_id:
             continue
-        content_type = resolve_content_type(completion)
+        declared_type = normalize_content_type(
+            completion.get("contentType") or completion.get("imageType")
+            or completion.get("content_type") or completion.get("image_type"),
+            "",
+        )
+        existing_handoff = get_graphics_handoff(connection, request_id)
+        existing_type = normalize_content_type(
+            (existing_handoff or {}).get("contentType") or (existing_handoff or {}).get("imageType"),
+            "",
+        )
+        if existing_type == "FP":
+            existing_type = "FPI"
+        if declared_type == "FP":
+            declared_type = "FPI"
+        if existing_type and declared_type and existing_type != declared_type:
+            raise ValueError(
+                f"graphicsRequestId already belongs to contentType {existing_type}, not {declared_type}"
+            )
+        # A replacement can omit its type. Keep the ledger request's established
+        # QI/FPI identity instead of guessing from the replacement file/record ID.
+        content_type = existing_type if existing_type and not declared_type else resolve_content_type(completion)
         if not content_type:
             raise ValueError(f"contentType is required for completion {request_id}")
+        completion = {**completion, "contentType": content_type, "imageType": content_type}
 
         request_record = {
             "id": request_id,
