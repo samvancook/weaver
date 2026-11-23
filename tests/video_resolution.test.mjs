@@ -19,6 +19,8 @@ test('known finished links are reused before scope configuration; unknown source
  assert.equal(missing.status,'needs_classification');assert.equal(missing.editingRequest,undefined);
  const wrongScope=planVideoMediaResolution(c,null,{...scope,sourceFolderId:'other'},{complete:true,files:[fv('existing')]});
  assert.equal(wrongScope.status,'needs_scope');assert.equal(wrongScope.editingRequest,undefined);
+ const partial=planVideoMediaResolution(c,null,scope,{complete:false,files:[fv('existing')]});
+ assert.equal(partial.status,'lookup_failed');assert.equal(partial.editingRequest,undefined);
 });
 test('scheduled policy checks existing finished links before a new editing request',async()=>{
  const writes=[];const candidate={...c,sourceMediaType:'unknown',mediaResolutionRequired:true,knownAssets:[{fileId:'existing',roles:['saved_final']}]};

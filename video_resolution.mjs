@@ -69,7 +69,7 @@ export function planVideoMediaResolution(candidate,prior,scope,{files=[],knownFi
  }
  const identity={author:normalizeVideoIdentity(candidate.author),title:normalizeVideoIdentity(candidate.poemTitle)};
  const scopeValid=scope?.confirmedCoverage&&scope.prioritySetId===candidate.prioritySetId&&scope.sourceFolderId===candidate.sourceFolderId;
- const matches=[...new Map([...knownFiles,...(scopeValid?files:[])].map(f=>[f.fileId,f])).values()].filter(f=>{const value=videoAssetIdentity(f.name);return f.mediaType==='FV'&&value&&value.author===identity.author&&value.title===identity.title;});
+ const matches=[...new Map([...knownFiles,...(scopeValid&&complete?files:[])].map(f=>[f.fileId,f])).values()].filter(f=>{const value=videoAssetIdentity(f.name);return f.mediaType==='FV'&&value&&value.author===identity.author&&value.title===identity.title;});
  if(!matches.length){
   if(knownFiles.length)return stop('needs_pairing','Existing finished links do not match this recording; resolve them before requesting another edit');
   if(!scopeValid)return stop('needs_scope','Confirm the event’s finished-edit search folders');
