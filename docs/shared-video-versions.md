@@ -1,5 +1,23 @@
 # Shared video versions
 
+## Inventory review to delivery
+
+Inventory registration starts review; it does not publish. At the existing 8.5
+score/five-reviewer threshold, the scheduled resolver reuses the intake's recorded
+release clearance for that exact file. The intake-only marker is not a permanent
+hold. Opt-outs, missing/restricted rights, saved holds/rejections and existing
+send attempts remain protected. No second curation approval is required.
+
+The resolver checks a verified selected output and known finished links before
+searching the event's existing finished-edit scope. Fresh Drive evidence can
+classify a previously unknown source. One unambiguous finished match proceeds
+under the standing policy, retaining other formats and existing selections.
+Only confirmed original media plus a complete negative event search can create
+one durable editing request. Unknown roles, inaccessible links, changed media or
+ambiguous matches stay explicit; they do not trigger speculative editing.
+Existing approvals/identity/selected excerpts are retained when stale intake
+bookkeeping is cleared, and the prior restriction is retained in gate history.
+
 Format variants use one performance curation assignment with all original assets,
 reviews and excerpt references retained. The initial explicit relationships in
 `video_version_families.mjs` cover BPL Charm City / Click and Waterfall, including

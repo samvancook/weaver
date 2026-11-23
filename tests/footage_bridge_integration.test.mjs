@@ -7,7 +7,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
-import {INVENTORY_ID,prepareEventIntake,footageEventAsSet,currentEventReceipt,validateEventManifest,fileId as footageFileId} from '../footage_event_intake.mjs';
+import {INVENTORY_ID,prepareEventIntake,footageEventAsSet,currentEventReceipt,validateEventManifest,videoPublicationRestriction,fileId as footageFileId} from '../footage_event_intake.mjs';
 import {resolveEventTarget} from '../footage_event_links.mjs';
 import {buildFootageProgress,footageProvenanceForFile} from '../footage_event_progress.mjs';
 import {videoReviewProgress,videoLibraryStatus,resolveVideoReviewSourceFileId,poetryPleaseVideoIdForSourceFile,requiresManualVideoIdentityReview} from '../video_curation_handoff.mjs';
@@ -25,7 +25,7 @@ test('receiver saves before acknowledgement, reloads queue after restart, and cu
   readRequestBody:async()=>JSON.stringify(manifest),
   sendJson:(_res,status,body)=>{reply={status,body};},
   cleanSheetWhitespace:x=>String(x||'').trim(),isPriorityVideoFileIncluded:()=>true,
-  getPriorityVideoReleaseStatus:()=> 'inventory_curation_only',reconcileVideoReviews:()=>[],videoReviewProgress,videoLibraryStatus,resolveVideoReviewSourceFileId,poetryPleaseVideoIdForSourceFile,requiresManualVideoIdentityReview,buildVideoCurationCandidateId:(set,id)=>set+':'+id,
+  getPriorityVideoReleaseStatus:videoPublicationRestriction,reconcileVideoReviews:()=>[],videoReviewProgress,videoLibraryStatus,resolveVideoReviewSourceFileId,poetryPleaseVideoIdForSourceFile,requiresManualVideoIdentityReview,buildVideoCurationCandidateId:(set,id)=>set+':'+id,
   parsePriorityVideoFileName:()=>{throw Error('Must not infer imported titles from filename');},
   syncWeaverRuntimeDb:async(action,payload)=>{
    if(action==='save_footage_event'){ledger.set(payload.record.eventId,payload.record);return {ok:true,record:payload.record};}
@@ -44,7 +44,7 @@ test('receiver saves before acknowledgement, reloads queue after restart, and cu
  const load=runInNewContext(`${getFunction('listVideoSetFiles')}\n${getFunction('getVideoSetMediaType')}\n${getFunction('refreshFootageEventSets')}\n${getFunction('loadVideoReviewLibrary')}\n${getFunction('loadPriorityVideoSet')}\n(async id=>{await refreshFootageEventSets();return loadPriorityVideoSet(id);})`,context);
  const playlist=await load(eventId);
  assert.equal(playlist.count,1);assert.equal(playlist.items[0].author,'Inventory poet');assert.equal(playlist.items[0].poemTitle,'Inventory title');
- assert.equal(playlist.items[0].publicationRestricted,true);assert.equal(playlist.items[0].sourceMediaType,'unknown');
+ assert.equal(playlist.items[0].publicationRestricted,false);assert.equal(playlist.items[0].sourceMediaType,'unknown');
  await api({method:'POST'},{},{pathname:'/api/footage/events'});assert.equal(ledger.size,1);
  await api({method:'GET'},{},{pathname:'/api/footage/events/'+eventId});assert.equal(reply.body.receipt.transferComplete,true);assert.equal(reply.body.receipt.readyForClosureReview,false);
  context.getDriveFileMetadata=async()=>{throw Error('403');};

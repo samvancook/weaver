@@ -1,9 +1,25 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {INVENTORY_ID,prepareEventIntake,validateEventManifest,currentEventReceipt,footageEventAsSet} from '../footage_event_intake.mjs';
+import {INVENTORY_ID,prepareEventIntake,validateEventManifest,currentEventReceipt,footageEventAsSet,videoPublicationRestriction} from '../footage_event_intake.mjs';
 const id='individual_video_12345';
 const manifest=()=>({sourceSpreadsheetId:INVENTORY_ID,eventName:'Pilot event',omFolderId:'event_folder_123456789',closed:false,titles:[{sourceRow:6000,performer:'Poet',title:'Poem',rights:'Have video release',contentLink:`https://drive.google.com/file/d/${id}/view?resourcekey=example`} ]});
 const file=async n=>({id:n,name:'Clip 1.mov',mimeType:'video/quicktime'});
+test('existing intake rights clear only the intake-only stop; real restrictions remain',async()=>{
+ const receipt=await prepareEventIntake(manifest(),file),set=footageEventAsSet(receipt);
+ assert.equal(receipt.accepted[0].publicationRestricted,true); // Registration alone never publishes.
+ assert.equal(videoPublicationRestriction('Poet - Poem.mp4',set,id),'');
+ assert.equal(videoPublicationRestriction('Poet - Poem OPT OUT.mp4',set,id),'opted_out');
+ assert.equal(videoPublicationRestriction('Poet - Poem no video release.mp4',set,id),'no_video_release');
+ const unverified={...set,inventoryTitles:{}};
+ assert.equal(videoPublicationRestriction('Poem',unverified,id),'inventory_rights_unverified');
+ const wrong={...receipt.accepted[0],sourceFileId:'other'};
+ assert.equal(videoPublicationRestriction('Poem',{...set,inventoryTitles:{[id]:wrong}},id),'inventory_rights_unverified');
+ const configured={requireUsageApprovalEvidence:true};
+ assert.equal(videoPublicationRestriction('Poem',configured,id,[receipt.accepted[0]]),'');
+ assert.equal(videoPublicationRestriction('Poem',configured,id,[{...receipt.accepted[0],rights:'No video release'}]),'usage_approval_document_unlinked');
+ assert.equal(videoPublicationRestriction('Poem',configured,id,[{...receipt.accepted[0],videoReleaseStatus:'opted_out'}]),'opted_out');
+ assert.equal(videoPublicationRestriction('Poem',configured,id,[{...receipt.accepted[0],videoReleaseStatus:'',publicationRestricted:true}]),'inventory_restriction');
+});
 test('legacy inventory intake cannot replace a configured event or its release rules',()=>{
  const legacy={eventId:'event',accepted:[],eventName:'Imported label'};
  const configured={id:'event',requireUsageApprovalEvidence:true,includeFileIds:['original']};

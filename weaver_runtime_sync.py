@@ -1309,21 +1309,27 @@ def prepare_resolved_video_gate(connection, payload):
         return {"ok": False, "reason": "gate_changed"}
     if (old or {}).get("decision") in {"hold", "reject"} or ((old or {}).get("poetryPleaseHandoff") or {}).get("status"):
         return {"ok": False, "reason": "explicit_hold_or_attempt"}
+    old_restriction = (old or {}).get("releaseStatus") or ("restricted" if (old or {}).get("publicationRestricted") else "")
+    if old_restriction and old_restriction not in {"inventory_curation_only", "usage_approval_document_unlinked"}:
+        return {"ok": False, "reason": "explicit_publication_restriction"}
     if candidate.get("publicationRestricted") or candidate.get("releaseStatus") or float(candidate.get("baseScore") or 0) < 8.5 or int(candidate.get("reviewCount") or 0) < 5 or not candidate.get("excerptRecordIds"):
         return {"ok": False, "reason": "standing_policy_not_satisfied"}
     released_file = re.match(r"^https://drive\.google\.com/file/d/([A-Za-z0-9_-]+)(?:/|$)", normalize_text((old or {}).get("publishableAssetUrl")))
-    if (old or {}).get("decision") == "ready_for_poetry_please" and released_file and released_file.group(1) == primary.get("fileId") and (candidate.get("sourceMediaType") != "FV" or (old or {}).get("sourceReviewFileId")):
+    if not old_restriction and (old or {}).get("decision") == "ready_for_poetry_please" and released_file and released_file.group(1) == primary.get("fileId") and (candidate.get("sourceMediaType") != "FV" or (old or {}).get("sourceReviewFileId")):
         return {"ok": True, "saved": False, "record": old}
     now = utc_now_iso()
     root = normalize_text((old or {}).get("sourceReviewFileId")) or normalize_text(resolution.get("reviewedSourceFileId")) or source
     record = {**candidate, **(old or {}), "gateId": key, "candidateId": f"weaver:video:{event}:{source}",
               "videoRecordId": f"weaver:video:{root}", "sourceReviewFileId": root,
               "decision": "ready_for_poetry_please", "status": "ready_for_poetry_please", "handoffStatus": "ready",
+              "publicationRestricted": False, "releaseStatus": "",
               "baseScore": candidate.get("baseScore"), "candidateScore": candidate.get("baseScore"), "excerptBonus": 0, "reviewCount": candidate.get("reviewCount"),
               "publishableAssetUrl": primary["url"], "selectedExcerptRecordIds": (old or {}).get("selectedExcerptRecordIds") or candidate["excerptRecordIds"],
-              "decidedBy": "weaver:auto", "decidedAt": now, "updatedAt": now,
-              "releaseApproval": {"kind": "standing_policy", "minScore": 8.5, "minReviewers": 5, "mediaResolutionRevision": resolution["revision"], "at": now},
-              "history": (list((old or {}).get("history") or []) + [{"event": "standing_policy_ready_after_media_resolution", "at": now, "previousDecision": (old or {}).get("decision")}])[-40:]}
+              "decidedBy": ((old or {}).get("decidedBy") if (old or {}).get("decision") == "ready_for_poetry_please" else None) or "weaver:auto",
+              "decidedAt": ((old or {}).get("decidedAt") if (old or {}).get("decision") == "ready_for_poetry_please" else None) or now, "updatedAt": now,
+              "releaseApproval": ((old or {}).get("releaseApproval") if (old or {}).get("decision") == "ready_for_poetry_please" else None)
+                  or {"kind": "standing_policy", "minScore": 8.5, "minReviewers": 5, "mediaResolutionRevision": resolution["revision"], "at": now},
+              "history": (list((old or {}).get("history") or []) + [{"event": "standing_policy_ready_after_media_resolution", "at": now, "previousDecision": (old or {}).get("decision"), "previousReleaseStatus": old_restriction}])[-40:]}
     for field in ["gate", "mediaResolution", "knownAssets", "ratings", "reviewEvidence"]:
         record.pop(field, None)
     saved = (connection.write_raw_document_if_unchanged(FIRESTORE_VIDEO_CURATION_GATES_COLLECTION, key, record, version)

@@ -41,15 +41,14 @@ export function makeVideoAssetLinks(candidate,prior,payload,actor,assets,now=new
   pairing:confirmed?{status:'verified',method:'administrator_confirmation',verifiedBy:actor,verifiedAt:now,evidence:clean(payload.evidence)}:unchangedPrimary&&prior?.pairing?.status==='verified'?prior.pairing:{status:'unconfirmed'},
   status:(confirmed||unchangedPrimary&&prior?.pairing?.status==='verified')&&['OM','FV'].includes(role)?'resolved':'needs_pairing',reason:confirmed?'confirmed_file_correspondence':'File links saved; pairing is separate',checkedAt:now};
 }
-export function planVideoMediaResolution(candidate,prior,scope,{files=[],complete=false,sourceCount=1,sourceAsset=null,selectedAsset=null,error=''}={},now=new Date().toISOString()){
+export function planVideoMediaResolution(candidate,prior,scope,{files=[],knownFiles=[],complete=false,sourceCount=1,sourceAsset=null,selectedAsset=null,error=''}={},now=new Date().toISOString()){
  const base={...prior,type:'recording',schemaVersion:'1',prioritySetId:candidate.prioritySetId,sourceFileId:candidate.sourceFileId,
   reviewedSourceFileId:candidate.sourceReviewFileId||candidate.sourceFileId,author:candidate.author,title:candidate.poemTitle,sourceEvent:candidate.sourceEvent,
-  sourceRole:prior?.sourceRole&&prior.sourceRole!=='unknown'?prior.sourceRole:candidate.sourceMediaType,assets:prior?.assets||[],checkedAt:now};
+  sourceRole:prior?.sourceRole&&prior.sourceRole!=='unknown'?prior.sourceRole:['OM','FV'].includes(candidate.sourceMediaType)?candidate.sourceMediaType:sourceAsset?.mediaType||'unknown',assets:prior?.assets||[],checkedAt:now};
  const stop=(status,reason)=>({...base,status,reason,...(['needs_pairing','needs_classification'].includes(status)&&base.pairing?{pairing:{...base.pairing,status:'unconfirmed'}}:{})});
  if(['OM','FV'].includes(candidate.observedSourceRole)&&prior?.sourceRole&&candidate.observedSourceRole!==prior.sourceRole)return stop('needs_classification','Recorded source role conflicts with current Drive evidence');
- if(!['OM','FV'].includes(base.sourceRole))return stop('needs_classification','Confirm this reviewed file as FV or OM');
  if(['hold','reject'].includes(candidate.gate?.decision))return stop('held','Explicit release hold retained');
- if(sourceAsset&&['OM','FV'].includes(sourceAsset.mediaType)&&sourceAsset.mediaType!==base.sourceRole)return stop('needs_classification','Current source file conflicts with its confirmed media role');
+ if(sourceAsset&&['OM','FV'].includes(sourceAsset.mediaType)&&['OM','FV'].includes(base.sourceRole)&&sourceAsset.mediaType!==base.sourceRole)return stop('needs_classification','Current source file conflicts with its confirmed media role');
  const sourceVersion=sourceAsset?{fileId:sourceAsset.fileId,checksum:sourceAsset.checksum,byteCount:sourceAsset.byteCount,durationMs:sourceAsset.durationMs}:null;
  if(prior?.reviewedSourceVersion&&sourceVersion&&['fileId','checksum','byteCount','durationMs'].some(k=>prior.reviewedSourceVersion[k]!==sourceVersion[k]))return stop('needs_pairing','Reviewed source media changed; confirm the recording version');
  if(sourceVersion)base.reviewedSourceVersion=sourceVersion;
@@ -68,12 +67,17 @@ export function planVideoMediaResolution(candidate,prior,scope,{files=[],complet
   if(!candidate.sourceReviewFileId&&!direct)return stop('needs_identity','Review-source lineage requires confirmation');
   return {...base,status:'resolved',reason:'Verified FV review source',primaryFileId:sourceAsset.fileId,assets:[sourceAsset],pairing:{status:'verified',method:'exact_review_file_id',verifiedAt:now,policy:RESOLUTION_POLICY}};
  }
- if(!scope?.confirmedCoverage||scope.prioritySetId!==candidate.prioritySetId||scope.sourceFolderId!==candidate.sourceFolderId)return stop('needs_scope','Confirm the event’s finished-edit search folders');
- if(!complete)return stop('lookup_failed','Finished-edit lookup was not complete; no editing request created');
  const identity={author:normalizeVideoIdentity(candidate.author),title:normalizeVideoIdentity(candidate.poemTitle)};
- const matches=files.filter(f=>{const value=videoAssetIdentity(f.name);return f.mediaType==='FV'&&value&&value.author===identity.author&&value.title===identity.title;});
- base.lookup={status:'complete',checkedAt:now,scopeRevision:scope.revision||0,folderIds:scope.finishedFolderIds||[],matchCount:matches.length,policy:RESOLUTION_POLICY};
+ const scopeValid=scope?.confirmedCoverage&&scope.prioritySetId===candidate.prioritySetId&&scope.sourceFolderId===candidate.sourceFolderId;
+ const matches=[...new Map([...knownFiles,...(scopeValid&&complete?files:[])].map(f=>[f.fileId,f])).values()].filter(f=>{const value=videoAssetIdentity(f.name);return f.mediaType==='FV'&&value&&value.author===identity.author&&value.title===identity.title;});
  if(!matches.length){
+  if(knownFiles.length)return stop('needs_pairing','Existing finished links do not match this recording; resolve them before requesting another edit');
+  if(!scopeValid)return stop('needs_scope','Confirm the event’s finished-edit search folders');
+  if(!complete)return stop('lookup_failed','Finished-edit lookup was not complete; no editing request created');
+ }
+ base.lookup={status:knownFiles.length?'known_finished_links':'complete',checkedAt:now,scopeRevision:scope?.revision||0,folderIds:scope?.finishedFolderIds||[],matchCount:matches.length,policy:RESOLUTION_POLICY};
+ if(!matches.length){
+  if(base.sourceRole!=='OM')return stop('needs_classification','No finished edit found; verify the review source as original media before requesting editing');
   if(base.assets.some(a=>a.mediaType==='FV'))return stop('needs_pairing','Previously linked FV was not verified; resolve it before requesting another edit');
   return {...base,status:'editing_requested',reason:'Confirmed OM; no matching FV in the complete approved event scope',editingRequest:base.editingRequest||{requestId:'edit-'+resolutionKey({...candidate,sourceFileId:candidate.sourceReviewFileId||candidate.sourceFileId}),status:'open',createdAt:now,sourceFileId:candidate.sourceFileId,sourceVideoUrl:candidate.sourceVideoUrl||`https://drive.google.com/file/d/${candidate.sourceFileId}/view`,sourceEvent:candidate.sourceEvent,author:candidate.author,title:candidate.poemTitle,destinationFolderIds:scope.finishedFolderIds||[],instructions:candidate.gate?.editingInstructions||'Create a finished export for this reviewed recording. Keep formats as separate files; upload to the event finished folders or link the completed output in Weaver.'}};
  }
@@ -83,7 +87,7 @@ export function planVideoMediaResolution(candidate,prior,scope,{files=[],complet
  if(!sorted[0]?.width||!sorted[0]?.height)return stop('needs_pairing','Export dimensions are not verified');
  if(sorted[1]&&sorted[0].width*sorted[0].height===sorted[1].width*sorted[1].height)return stop('needs_pairing','Multiple equally preferred exports; choose the intended version');
  return {...base,status:'resolved',reason:'Unique exact event/performer/title correspondence',primaryFileId:sorted[0].fileId,
-  pairing:{status:'verified',method:'exact_event_author_title_unique_reviewed_recording',policy:RESOLUTION_POLICY,scopeRevision:scope.revision||0,verifiedAt:now},
+  pairing:{status:'verified',method:knownFiles.length?'exact_linked_finished_asset_unique_reviewed_recording':'exact_event_author_title_unique_reviewed_recording',policy:RESOLUTION_POLICY,scopeRevision:scope?.revision||0,verifiedAt:now},
   ...(base.editingRequest?{editingRequest:{...base.editingRequest,status:'resolved',resolvedAt:now}}:{})};
 }
 export function assertResolvedVideoMedia(candidate,now=Date.now()){

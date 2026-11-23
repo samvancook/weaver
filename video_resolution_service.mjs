@@ -43,18 +43,25 @@ export function createVideoResolutionService(deps){
   return files;
  }
  async function resolve(c,allCandidates,rows,deadline){
-  const prior=recordFor(rows,c),scope=scopeFor(rows,c);let selected=null,source=null,files=[],complete=false,error='';
+  const prior=recordFor(rows,c),scope=scopeFor(rows,c);let selected=null,source=null,files=[],knownFiles=[],complete=false,error='';
   try{
    if(prior?.primaryFileId&&prior.pairing?.status==='verified'){selected=await liveAsset(prior.primaryFileId);const saved=prior.assets?.find(a=>a.fileId===prior.primaryFileId);selected={...saved,...selected,pairingVerified:saved?.pairingVerified,classificationEvidence:saved?.classificationEvidence};if(selected.mediaType==='unknown'&&['administrator_confirmed_finished_output','authorized_drive_ancestry','verified_event_finished_folder','current_drive_metadata','verified_review_source'].includes(saved?.mediaTypeEvidence)){selected.mediaType='FV';selected.mediaTypeEvidence=saved.mediaTypeEvidence;}}
    source=await liveAsset(c.sourceFileId);
    if(source.mediaType==='unknown'&&['OM','FV'].includes(c.sourceMediaType))source={...source,mediaType:c.sourceMediaType,mediaTypeEvidence:'verified_review_source'};
    if(source.mediaType==='unknown'&&selected?.fileId===source.fileId&&selected.mediaType==='FV')source={...source,mediaType:'FV'};
    if(source.mediaType==='unknown'&&prior?.sourceRoleReview?.method==='administrator_confirmation')source={...source,mediaType:prior.sourceRole};
-   if(!selected&&c.sourceMediaType==='OM'&&scope?.confirmedCoverage){files=await lookup(scope,deadline);complete=true;}
+   if(!selected&&source.mediaType!=='FV'){
+    // Reuse known finished links before a folder search or editing request.
+    const ids=[...new Set([...(c.knownAssets||[]).filter(a=>(a.roles||[]).some(r=>['saved_final','finished_version'].includes(r))).map(a=>a.fileId),
+      ...(c.footageConnections||[]).filter(r=>r.curationFileId===c.sourceFileId).map(r=>r.finishedVideoFileId)].filter(Boolean))];
+    if(ids.length>12)throw Error('Too many existing finished links; no editing request created');
+    for(const id of ids){const existing=await liveAsset(id);if(existing.mediaType!=='FV')throw Error('Existing finished link needs media-role evidence; no editing request created');knownFiles.push(existing);}
+    if(!knownFiles.length&&scope?.confirmedCoverage){files=await lookup(scope,deadline);complete=true;}
+   }
   }catch(e){error=String(e.message).slice(0,400);}
   const identity=v=>normalizeVideoIdentity(v.author)+'|'+normalizeVideoIdentity(v.poemTitle);
   const sourceCount=new Set(allCandidates.filter(v=>v.prioritySetId===c.prioritySetId&&identity(v)===identity(c)).map(v=>v.sourceReviewFileId||v.sourceFileId)).size;
-  const planned=planVideoMediaResolution(c,prior,scope,{files,complete,sourceCount,sourceAsset:source,selectedAsset:selected,error});
+  const planned=planVideoMediaResolution(c,prior,scope,{files,knownFiles,complete,sourceCount,sourceAsset:source,selectedAsset:selected,error});
   const saved=await persist(planned,prior,'weaver:scheduled-resolution','media_resolution_checked');
   const index=rows.findIndex(r=>r.type==='recording'&&r.prioritySetId===c.prioritySetId&&r.sourceFileId===c.sourceFileId);if(index>=0)rows[index]=saved;else rows.push(saved);
   let updated=withMediaResolution(c,saved);

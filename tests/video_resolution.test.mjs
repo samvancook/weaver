@@ -4,6 +4,36 @@ import {createVideoResolutionService} from '../video_resolution_service.mjs';
 const c={prioritySetId:'event',sourceFileId:'source',sourceFolderId:'folder',sourceMediaType:'OM',author:'Poet',poemTitle:'Poem',sourceEvent:'Event',reviewCount:5,baseScore:8.5,excerptRecordIds:['e'],gate:{decision:'send_to_editing',publishableAssetUrl:'',selectedExcerptRecordIds:['selected']}};
 const fv=(id,w=2160,h=3840)=>({fileId:id,name:'[Vertical Version] Poet - Poem.mov',url:`https://drive.google.com/file/d/${id}/view`,mediaType:'FV',width:w,height:h,byteCount:100,durationMs:10000,checksum:'one'});
 const scope={type:'event_scope',prioritySetId:'event',sourceFolderId:'folder',confirmedCoverage:true,finishedFolderIds:['finished'],revision:1};
+test('fresh Drive role evidence resolves an intake-unknown FV without another approval',()=>{
+ const candidate={...c,sourceMediaType:'unknown',reviewEvidence:[{mapping:'direct_file_id',sourceFileId:'source'}]};
+ const result=planVideoMediaResolution(candidate,null,null,{sourceAsset:fv('source')});
+ assert.equal(result.status,'resolved');assert.equal(result.sourceRole,'FV');assert.equal(result.primaryFileId,'source');
+});
+test('known finished links are reused before scope configuration; unknown sources never produce speculative editing requests',()=>{
+ const candidate={...c,sourceMediaType:'unknown'};
+ const found=planVideoMediaResolution(candidate,null,null,{knownFiles:[fv('existing')]});
+ assert.equal(found.status,'resolved');assert.equal(found.primaryFileId,'existing');assert.equal(found.editingRequest,undefined);
+ const conflict=planVideoMediaResolution(candidate,null,scope,{knownFiles:[{...fv('other'),name:'Other Poet - Other Poem.mov'}],complete:true});
+ assert.equal(conflict.status,'needs_pairing');assert.equal(conflict.editingRequest,undefined);
+ const missing=planVideoMediaResolution(candidate,null,scope,{complete:true,files:[]});
+ assert.equal(missing.status,'needs_classification');assert.equal(missing.editingRequest,undefined);
+ const wrongScope=planVideoMediaResolution(c,null,{...scope,sourceFolderId:'other'},{complete:true,files:[fv('existing')]});
+ assert.equal(wrongScope.status,'needs_scope');assert.equal(wrongScope.editingRequest,undefined);
+ const partial=planVideoMediaResolution(c,null,scope,{complete:false,files:[fv('existing')]});
+ assert.equal(partial.status,'lookup_failed');assert.equal(partial.editingRequest,undefined);
+});
+test('scheduled policy checks existing finished links before a new editing request',async()=>{
+ const writes=[];const candidate={...c,sourceMediaType:'unknown',mediaResolutionRequired:true,knownAssets:[{fileId:'existing',roles:['saved_final']}]};
+ const service=createVideoResolutionService({
+  db:async(action,p)=>{if(action==='get_video_media_resolutions')return{ok:true,records:[]};if(action==='save_video_media_resolution'){writes.push(p.record);return{ok:true,record:{...p.record,revision:1}};}if(action==='prepare_resolved_video_gate')return{ok:true,record:{decision:'ready_for_poetry_please',sourceReviewFileId:'source',videoRecordId:'weaver:video:source'}};throw Error(action);},
+  getFile:async id=>({id,name:'Poet - Poem.mov',mimeType:'video/mp4',size:100,videoMediaMetadata:{width:2160,height:3840,durationMillis:10000}}),
+  fileRole:async url=>url.includes('/existing/')?'FV':'unknown',getSet:()=>({folderId:'folder'}),listEntries:async()=>{throw Error('Existing FV makes a folder search unnecessary');}
+ });
+ for(const patch of [{reviewCount:4},{baseScore:8.49},{publicationRestricted:true},{gate:{decision:'hold'}}]){
+  const before=writes.length;assert.equal((await service.prepare([{...candidate,...patch}])).checked,0);assert.equal(writes.length,before);
+ }
+ const run=await service.prepare([candidate]);assert.equal(run.checked,1);assert.equal(run.candidates[0].gate.decision,'ready_for_poetry_please');assert.equal(writes[0].primaryFileId,'existing');assert.equal(writes[0].editingRequest,undefined);
+});
 test('linking and pairing do not mutate release decisions or selected excerpts',()=>{
  const before=structuredClone(c);const r=makeVideoAssetLinks(c,null,{primaryFileId:'a',sourceRole:'OM',confirmPairing:false},'admin@example.com',[fv('a')]);
  assert.equal(r.status,'needs_pairing');assert.deepEqual(c,before);assert.equal(r.decision,undefined);assert.equal(r.selectedExcerptRecordIds,undefined);
