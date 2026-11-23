@@ -16,6 +16,7 @@ COPY book_intake_readiness.mjs ./book_intake_readiness.mjs
 COPY weaver_progress_auth.mjs ./weaver_progress_auth.mjs
 COPY video_resolution.mjs video_resolution_service.mjs video_receipt_refresh.mjs ./
 COPY video_excerpt_delivery.mjs video_excerpt_delivery.py ./
+COPY video_event_milestone.mjs ./
 COPY video_hosted_media.mjs ./
 COPY video_media_classification.mjs video_curation_handoff.mjs video_pipeline.mjs video_pipeline_auth.mjs ./
 COPY footage_provenance.mjs video_version_families.mjs video_rendition_selection.mjs ./

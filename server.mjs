@@ -1,3 +1,4 @@
+import {videoEventCurationMilestone} from "./video_event_milestone.mjs";
 import {refreshAcceptedVideoReceipt} from './video_receipt_refresh.mjs';
 import {groupVideoVersionFiles, videoPerformanceContext, videoFamilyForFile, candidateMatchesVideoSource, listVideoVersionSetFiles} from "./video_version_families.mjs";
 import {runVideoExcerptDeliveries,videoExcerptDeliveryFingerprint} from './video_excerpt_delivery.mjs';
@@ -2441,9 +2442,10 @@ async function loadVideoReviewLibrary(reviewerEmail = "", prioritySetId = "") {
       };
     });
   }));
-  const items = results.flat();
+  const milestones = results.map(items => videoEventCurationMilestone(items));
+  const items = results.flatMap((group,i) => group.map(item => ({...item,eventCurationComplete:milestones[i].curationComplete})));
   return {ok:true,policy:VIDEO_AUTO_POLICY,prioritySetId:selected,items,count:items.length,
-    sets:sets.map((set,i)=>({id:set.id,label:set.label,totalCount:results[i].length,
+    sets:sets.map((set,i)=>({id:set.id,label:set.label,totalCount:results[i].length,...milestones[i],
       remainingCount:results[i].filter(item=>item.needsPriorityReview&&!item.review?.rating).length,
       reviewedCount:results[i].filter(item=>item.review?.rating).length}))};
 }

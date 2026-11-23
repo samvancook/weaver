@@ -1565,8 +1565,8 @@ function updateGatheringVideoPlaylistUi() {
   if (hasPlaylist || isComplete) {
     const reviewedCount = Math.max(0, Number(playlist.reviewedCount) || 0);
     if(playlist?.allItems){
-      const view=playlist.view==='todo'?'My review queue':playlist.view==='reviewed'?'My reviewed videos':'Video library';
-      const message=playlist.requestedVideoReviewed?'Your review of this video is already saved. Switch to My reviewed videos to see it.':playlist.requestedVideoUnavailable?'The requested video is not available in this view. No other video was opened.':!playlist.reviewerEmail&&playlist.view!=='library'?'Enter your email to see your review queue and saved reviews.':isComplete?'No videos in this view. Open Video library or My reviewed videos to revisit saved work.':`${view}: ${playlist.index+1} of ${playlist.items.length} · ${currentItem?.author||''} — ${currentItem?.poemTitle||''}`;
+      const view=playlist.view==='todo'?'My review queue':playlist.view==='reviewed'?'My reviewed videos':playlist.view==='complete'?'Curation complete':'Video library';
+      const message=playlist.requestedVideoReviewed?'Your review of this video is already saved. Switch to My reviewed videos to see it.':playlist.requestedVideoUnavailable?'The requested video is not available in this view. No other video was opened.':!playlist.reviewerEmail&&(playlist.view==='todo'||playlist.view==='reviewed')?'Enter your email to see your review queue and saved reviews.':isComplete?'No videos in this view. Open Video library or My reviewed videos to revisit saved work.':`${view}: ${playlist.index+1} of ${playlist.items.length} · ${currentItem?.author||''} — ${currentItem?.poemTitle||''}`;
       setGatheringVideoPlaylistStatus(message);return;
     }
     const label = playlist?.requestedVideoReviewed ? 'Your review of this video is already saved.' : playlist?.requestedVideoUnavailable ? 'The requested video is not available in this task. No other video was opened.' : isComplete
@@ -1662,6 +1662,7 @@ function normalizeVideoPlaylistItem(rawItem, eventName) {
     reviewProgress: rawItem?.reviewProgress || null,
     pipeline: rawItem?.pipeline || null,
     needsPriorityReview: rawItem?.needsPriorityReview !== false,
+    eventCurationComplete: rawItem?.eventCurationComplete === true,
     libraryStatus: rawItem?.libraryStatus || 'needs_review',
     review: rawItem?.review && typeof rawItem.review === "object" ? rawItem.review : null
   };
@@ -1678,9 +1679,11 @@ async function refreshPriorityVideoSetVisibility() {
     if(!option){option=new Option(set.label||set.id,set.id);select.add(option);}
     const count=view==='todo'?set.remainingCount:view==='reviewed'?set.reviewedCount:set.totalCount;
     const countLabel=view==='todo'?(email?`${Number(count)||0} awaiting your review`:'enter your email to see your queue'):view==='reviewed'?(email?`${Number(count)||0} reviewed by you`:'enter your email to see your reviews'):`${Number(count)||0} videos total`;
-    option.textContent=`${set.label} — ${countLabel}`;
+    option.textContent=`${set.label} — ${set.curationComplete?'Curation complete · ':''}${countLabel}`;
     // Keep every event discoverable in the library/history and by exact task link.
-    option.hidden=Boolean(email)&&view!=='library'&&Number(count)===0&&set.id!==getRequestedVideoSetId();
+    option.hidden=(view==='complete'&&!set.curationComplete)
+      || (view==='todo'&&set.curationComplete&&set.id!==getRequestedVideoSetId())
+      || (Boolean(email)&&(view==='todo'||view==='reviewed')&&Number(count)===0&&set.id!==getRequestedVideoSetId());
     option.disabled=option.hidden;
   }
 }
@@ -1694,9 +1697,11 @@ function filterVideoReviewItems(items,view,email,search='',status='') {
   const query=search.trim().toLowerCase();
   return items.filter(item=>{
     if(view==='todo'&&email&&(item.review?.rating||item.needsPriorityReview===false))return false;
+    if(view==='todo'&&item.eventCurationComplete)return false;
+    if(view==='complete'&&!item.eventCurationComplete)return false;
     if(view==='todo'&&!email)return false;
     if(view==='reviewed'&&(!email||!item.review?.rating))return false;
-    if(view==='library'&&status&&item.libraryStatus!==status)return false;
+    if((view==='library'||view==='complete')&&status&&item.libraryStatus!==status)return false;
     return !query||[item.author,item.poemTitle,item.eventName,item.sourceFileName].join(' ').toLowerCase().includes(query);
   });
 }
@@ -1721,7 +1726,7 @@ function filterGatheringVideoPlaylist({advance=false}={}) {
   playlist.index=Math.min(Math.max(0,index),Math.max(0,playlist.items.length-1));
   playlist.completed=playlist.items.length===0;
   playlist.reviewedCount=playlist.allItems.filter(item=>item.review?.rating).length;
-  if(elements.gatheringVideoStatusField)elements.gatheringVideoStatusField.hidden=playlist.view!=='library';
+  if(elements.gatheringVideoStatusField)elements.gatheringVideoStatusField.hidden=playlist.view!=='library'&&playlist.view!=='complete';
   if(playlist.items.length)applyGatheringVideoPlaylistItem(playlist.items[playlist.index]);
   else clearGatheringVideoPlaylistItemFields();
   renderVideoLibraryResults();updateGatheringVideoPlaylistUi();
@@ -7768,7 +7773,13 @@ elements.videoCurationRefresh?.addEventListener("click", loadVideoCurationCandid
 elements.videoCurationEvent?.addEventListener("change", () => { renderVideoCurationCandidates(); renderVideoExcerptDelivery(); });
 elements.videoCurationHandoffFilter?.addEventListener("change", renderVideoCurationCandidates);
 elements.gatheringVideoView?.addEventListener('change',()=>{
-  if(currentGatheringVideoPlaylist?.allItems)filterGatheringVideoPlaylist();
+  if(elements.gatheringVideoStatusFilter)elements.gatheringVideoStatusFilter.value='';
+  if(videoReviewView()==='complete'){
+    // Enter the event-completion view across all events, not a hidden prior selection.
+    if(elements.gatheringVideoPrioritySet)elements.gatheringVideoPrioritySet.value='';
+    if(elements.gatheringVideoPlaylistUrl)elements.gatheringVideoPlaylistUrl.value='';
+    loadGatheringVideoPlaylist();
+  }else if(currentGatheringVideoPlaylist?.allItems)filterGatheringVideoPlaylist();
   else loadGatheringVideoPlaylist();
   refreshPriorityVideoSetVisibility().catch(()=>{});
 });
