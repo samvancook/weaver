@@ -1,3 +1,4 @@
+import {videoEventCurationMilestone} from "../video_event_milestone.mjs";
 import {groupVideoVersionFiles,videoPerformanceContext} from "../video_version_families.mjs";
 import {mediaResolutionPublic} from '../video_resolution.mjs';
 import {videoFileMediaType} from '../video_media_classification.mjs';
@@ -42,7 +43,7 @@ function serverHarness(){
  const calls=[],data=[...reviews('ready'),...reviews('pending',1).map(r=>({...r,reviewerEmail:'me@example.com'})),...reviews('raw')];
  const gateRecords=[];
  const sets=new Map([['event',{id:'event',label:'Finals',folderId:'folder'}]]),files=['ready','pending','raw','unseen'].map(id=>({id,name:id}));
- const s={groupVideoVersionFiles,videoPerformanceContext,mediaResolutionPublic,videoFileMediaType,VIDEO_AUTO_POLICY,publicVideoPipelineState,videoPipelineKey,PRIORITY_VIDEO_SETS:sets,cleanSheetWhitespace:x=>String(x||'').trim(),videoReviewProgress,videoLibraryStatus,reconcileVideoReviews,resolveVideoReviewSourceFileId,poetryPleaseVideoIdForSourceFile,requiresManualVideoIdentityReview,
+ const s={videoEventCurationMilestone,groupVideoVersionFiles,videoPerformanceContext,mediaResolutionPublic,videoFileMediaType,VIDEO_AUTO_POLICY,publicVideoPipelineState,videoPipelineKey,PRIORITY_VIDEO_SETS:sets,cleanSheetWhitespace:x=>String(x||'').trim(),videoReviewProgress,videoLibraryStatus,reconcileVideoReviews,resolveVideoReviewSourceFileId,poetryPleaseVideoIdForSourceFile,requiresManualVideoIdentityReview,
  syncWeaverRuntimeDb:async(action)=>{calls.push(action);if(action==='get_curation_reviews')return{ok:true,records:data};if(action==='get_video_curation_gates')return{ok:true,records:gateRecords};if((action==='get_video_pipeline'||action==='get_video_media_resolutions'))return{ok:true,records:[]};throw Error('Unexpected writer');},
  getVideoSetMediaType:async()=>({sourceMediaType:'FV'}),listVideoSetFiles:async()=>files,getFootageAssetConnections:async()=>[],isPriorityVideoFileIncluded:()=>true,
  getPriorityVideoReleaseStatus:name=>name==='raw'?'unverified':'',parsePriorityVideoFileName:name=>({author:'Poet',poemTitle:name}),footageProvenanceForFile:()=>[],buildVideoCurationCandidateId:(set,id)=>set+':'+id,encodeURIComponent};
