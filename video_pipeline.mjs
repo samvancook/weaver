@@ -18,6 +18,7 @@ export function videoHoldMessage(candidate){
   const status=clean(candidate.releaseStatus).toLowerCase(),decision=clean(candidate.gate?.decision);
   if(status==='opted_out')return 'Author opted out; keep this video out of publication';
   if(status==='no_video_release')return 'Source is marked no video release; keep publication blocked';
+  if(['inventory_rights_unverified','inventory_restriction'].includes(status))return 'Existing inventory release evidence is missing or restricted';
   if(status==='usage_approval_document_unlinked')return 'Link the existing written usage approval; do not request a new book release';
   if(decision==='reject')return 'Rejected by curation; no automatic delivery';
   if(decision==='hold')return 'Curation hold; an administrator must review the saved decision';

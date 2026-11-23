@@ -26,6 +26,25 @@ class VideoResolutionTests(unittest.TestCase):
     def test_only_verified_media_and_standing_policy_create_ready_gate(self):
         db=ResolutionStore();self.saved(db);c=self.candidate();r=prepare_resolved_video_gate(db,{'candidate':c,'expectedGate':None});self.assertTrue(r['saved']);g=r['record'];self.assertEqual(g['decision'],'ready_for_poetry_please');self.assertEqual(g['sourceReviewFileId'],'source');self.assertEqual(g['releaseApproval']['kind'],'standing_policy')
         self.assertEqual(g['selectedExcerptRecordIds'],['collected'])
+    def test_qualified_intake_metadata_is_cleared_without_erasing_real_holds(self):
+        for reason in ['inventory_curation_only', 'usage_approval_document_unlinked']:
+            db=ResolutionStore();self.saved(db);key=video_resolution_key('event','source')
+            old={'publicationRestricted':True,'releaseStatus':reason,'selectedExcerptRecordIds':['chosen'],'note':'Keep original context'}
+            db.write_raw_document_if_unchanged(FIRESTORE_VIDEO_CURATION_GATES_COLLECTION,key,old,None)
+            result=prepare_resolved_video_gate(db,{'candidate':self.candidate(),'expectedGate':old})
+            self.assertTrue(result['ok']);new=result['record'];self.assertFalse(new['publicationRestricted']);self.assertEqual(new['releaseStatus'],'')
+            self.assertEqual(new['selectedExcerptRecordIds'],['chosen']);self.assertEqual(new['note'],old['note'])
+        for reason in ['opted_out','no_video_release','']:
+            db=ResolutionStore();self.saved(db);key=video_resolution_key('event','source');old={'publicationRestricted':True,'releaseStatus':reason}
+            db.write_raw_document_if_unchanged(FIRESTORE_VIDEO_CURATION_GATES_COLLECTION,key,old,None)
+            self.assertEqual(prepare_resolved_video_gate(db,{'candidate':self.candidate(),'expectedGate':old})['reason'],'explicit_publication_restriction')
+        db=ResolutionStore();self.saved(db);key=video_resolution_key('event','source')
+        old={'decision':'ready_for_poetry_please','publicationRestricted':True,'releaseStatus':'inventory_curation_only',
+             'decidedBy':'owner@example.com','decidedAt':'2026-11-01T12:00:00Z','releaseApproval':{'kind':'administrator'}}
+        db.write_raw_document_if_unchanged(FIRESTORE_VIDEO_CURATION_GATES_COLLECTION,key,old,None)
+        result=prepare_resolved_video_gate(db,{'candidate':self.candidate(),'expectedGate':old})['record']
+        for field in ['decidedBy','decidedAt','releaseApproval']: self.assertEqual(result[field],old[field])
+        self.assertEqual(result['history'][-1]['previousReleaseStatus'],'inventory_curation_only')
     def test_quality_restrictions_and_missing_media_do_not_make_ready(self):
         for patch in [{'baseScore':8.49},{'reviewCount':4},{'excerptRecordIds':[]},{'publicationRestricted':True}]:
             db=ResolutionStore();self.saved(db);r=prepare_resolved_video_gate(db,{'candidate':{**self.candidate(),**patch},'expectedGate':None});self.assertFalse(r['ok']);self.assertIsNone(db.get_raw_document(FIRESTORE_VIDEO_CURATION_GATES_COLLECTION,video_resolution_key('event','source')))

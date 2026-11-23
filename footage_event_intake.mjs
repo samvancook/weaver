@@ -5,6 +5,24 @@ const text = value => String(value ?? '').trim();
 const key = value => text(value).replace(/\s+/g, ' ').toLowerCase();
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const AUTHOR_CONTRACT = 'all button authors, all features, all workshop instructors - contract is not stored with video releases';
+// Intake registration is review-only, but its already-validated rights evidence
+// can satisfy clearance when the standing curation/media policy later qualifies.
+export function videoPublicationRestriction(fileName,set={},fileId='',connections=[]){
+  const name=text(fileName);
+  if(/\bopt\s*out\b/i.test(name))return 'opted_out';
+  const rows=[...(set.inventoryEvent&&set.inventoryTitles?.[fileId]?[set.inventoryTitles[fileId]]:[]),
+    ...connections.filter(r=>r.sourceFileId===fileId)];
+  const restricted=rows.find(r=>(r.videoReleaseStatus&&r.videoReleaseStatus!=='inventory_curation_only')
+    ||(r.publicationRestricted&&r.videoReleaseStatus!=='inventory_curation_only'));
+  if(restricted)return restricted.videoReleaseStatus||'inventory_restriction';
+  if(Array.isArray(set.releaseConfirmedFileIds)&&set.releaseConfirmedFileIds.includes(fileId))return '';
+  if(/\bno\s+video\s+release\b/i.test(name))return 'no_video_release';
+  const cleared=rows.length>0&&rows.every(r=>r.sourceFileId===fileId&&Number.isSafeInteger(r.sourceRow)&&r.sourceRow>=2
+    &&['have video release',AUTHOR_CONTRACT].includes(key(r.rights)));
+  if(set.inventoryEvent)return cleared?'':'inventory_rights_unverified';
+  if(set.requireUsageApprovalEvidence&&!cleared)return 'usage_approval_document_unlinked';
+  return '';
+}
 export function fileId(url) {
   try {
     const u = new URL(url);

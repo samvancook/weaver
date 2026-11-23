@@ -10,7 +10,7 @@ import {inspectExistingHostedVideo} from './video_hosted_media.mjs';
 import {verifyVideoPipelineCaller} from './video_pipeline_auth.mjs';
 import { resolveEventTarget } from "./footage_event_links.mjs";
 import { buildFootageProgress, footageProvenanceForFile } from "./footage_event_progress.mjs";
-import { prepareEventIntake, footageEventAsSet, currentEventReceipt, validateEventManifest, fileId as footageFileId } from "./footage_event_intake.mjs";
+import { prepareEventIntake, footageEventAsSet, currentEventReceipt, validateEventManifest, videoPublicationRestriction, fileId as footageFileId } from "./footage_event_intake.mjs";
 import { verifyFootageHelperCaller } from "./footage_helper_auth.mjs";
 import http from "node:http";
 import { spawn } from "node:child_process";
@@ -143,16 +143,8 @@ const VIDEO_CURATION_SCORE_BY_RATING = Object.freeze({
 });
 const VIDEO_CURATION_CANDIDATE_THRESHOLD = 7;
 
-function getPriorityVideoReleaseStatus(fileName, set = null, fileId = "") {
-  if (set?.inventoryEvent) return "inventory_curation_only";
-  if (Array.isArray(set?.releaseConfirmedFileIds) && set.releaseConfirmedFileIds.includes(cleanSheetWhitespace(fileId))) {
-    return "";
-  }
-  const name = cleanSheetWhitespace(fileName);
-  if (/\bno\s+video\s+release\b/i.test(name)) return "no_video_release";
-  if (/\bopt\s*out\b/i.test(name)) return "opted_out";
-  if (set?.requireUsageApprovalEvidence) return "usage_approval_document_unlinked";
-  return "";
+function getPriorityVideoReleaseStatus(fileName, set = null, fileId = "", connections = []) {
+  return videoPublicationRestriction(fileName, set || {}, cleanSheetWhitespace(fileId), connections);
 }
 
 const contentTypes = {
@@ -2406,7 +2398,7 @@ async function loadVideoReviewLibrary(reviewerEmail = "", prioritySetId = "") {
       const fileReviews = reviews.filter(r => r.sourceFileId === file.id);
       const own = email ? fileReviews.find(r => cleanSheetWhitespace(r.reviewerEmail).toLowerCase() === email) : null;
       const progress = videoReviewProgress(fileReviews);
-      const videoReleaseStatus = getPriorityVideoReleaseStatus(file.name, set, file.id);
+      const videoReleaseStatus = getPriorityVideoReleaseStatus(file.name, set, file.id, connections);
       const currentGate = gates.get(buildVideoCurationCandidateId(set.id, file.id));
       const historicalIds=[...new Set(fileReviews.flatMap(r=>r.originalSourceFileIds||[]).filter(id=>id!==file.id))];
       const reviewRoot=file.videoVersionFamily?.reviewSourceFileId || resolveVideoReviewSourceFileId(file.id,historicalIds,gateResult.records,{...(currentGate||{}),prioritySetId:set.id});
@@ -2647,7 +2639,7 @@ async function getVideoCurationCandidates(prioritySetId = "") {
       // Excerpt collection is context, not a separate quality endorsement.
       const excerptBonus = 0; // Retained for API compatibility.
       const candidateScore = Number(baseScore.toFixed(2));
-      const releaseStatus = getPriorityVideoReleaseStatus(file.name, set, sourceFileId);
+      const releaseStatus = getPriorityVideoReleaseStatus(file.name, set, sourceFileId, footageConnections);
       const firstReview = reviews[0] || {};
       const historicalSourceIds = [...new Set(reviews
         .flatMap(review => review.originalSourceFileIds || [])
