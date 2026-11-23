@@ -14,6 +14,21 @@ export function videoQualitySummary(reviews=[]){
     reviewComplete:valid.length>=VIDEO_AUTO_POLICY.minReviewers&&excerpts.size>=VIDEO_AUTO_POLICY.minExcerpts};
 }
 export const videoPipelineKey=c=>createHash('sha256').update(`${c.prioritySetId}|${c.sourceFileId}`).digest('hex').slice(0,32);
+export function videoHoldMessage(candidate){
+  const status=clean(candidate.releaseStatus).toLowerCase(),decision=clean(candidate.gate?.decision);
+  if(status==='opted_out')return 'Author opted out; keep this video out of publication';
+  if(status==='no_video_release')return 'Source is marked no video release; keep publication blocked';
+  if(status==='usage_approval_document_unlinked')return 'Link the existing written usage approval; do not request a new book release';
+  if(decision==='reject')return 'Rejected by curation; no automatic delivery';
+  if(decision==='hold')return 'Curation hold; an administrator must review the saved decision';
+  if(decision==='send_to_editing')return 'Editing requested; retain the existing decision until a finished version is confirmed';
+  if(status==='inventory_curation_only'){
+    const remaining=Math.max(0,VIDEO_AUTO_POLICY.minReviewers-Number(candidate.reviewCount||0));
+    return 'Review-only intake; publication approval is separate'
+      +(remaining?`; ${remaining} more independent review${remaining===1?'':'s'} needed`:'');
+  }
+  return 'Publication restriction requires review; no automatic delivery';
+}
 const messages={awaiting_reviews:'Waiting for five independent reviews',below_threshold:'Below the 8.5 automatic-delivery threshold',needs_excerpt:'Waiting for one collected excerpt',held:'Held for an explicit decision or clearance',needs_media_resolution:'Resolving the reviewed media and existing edits',needs_pairing:'Confirm the recording and finished version',needs_scope:'Confirm the event’s finished-edit search folders',lookup_failed:'Finished-edit lookup needs attention; no editing request created',needs_release_check:'Waiting for the release-policy check',needs_classification:'Confirm reviewed media as FV or OM',needs_editing:'Original media: waiting for a finished edit',needs_media_classification:'Check the source media role: OM or FV is not verified',needs_editing_decision:'Finished source conflicts with a saved editing decision; review that decision',needs_identity:'Waiting for a canonical identity check',ready:'Qualified for automatic Poetry Please delivery',receiver_check:'Checking the existing receiver record',needs_reconciliation:'Receiver outcome needs reconciliation; no blind resend',received:'Poetry Please receipt confirmed',media_pending:'Waiting for verified media',media_failed:'Receiver media verification needs attention',awaiting_pp_readiness:'Media verified; waiting for approved-caption readiness from Poetry Please',calendar_ready:'Ready for the Calendar consumer',needs_attention:'Pipeline check needs attention'};
 export function localVideoPipelineState(candidate,prior={},now=Date.now()){
   const c=candidate,g=c.gate||{},handoff=g.poetryPleaseHandoff||{};
@@ -32,7 +47,7 @@ export function localVideoPipelineState(candidate,prior={},now=Date.now()){
   return{...prior,schemaVersion:'1',pipelineId:videoPipelineKey(c),prioritySetId:c.prioritySetId,sourceFileId:c.sourceFileId,
     sourceRecordId:c.videoRecordId,sourceEvent:c.sourceEvent,sourceMediaType:c.sourceMediaType,sourceMediaTypeReason:c.sourceMediaTypeReason||'',canonicalVideoId:c.existingCanonicalVideoId||handoff.canonicalVideoId||'',
     author:c.author,title:c.poemTitle,policy:VIDEO_AUTO_POLICY,score:c.baseScore,reviewerCount:c.reviewCount,
-    excerptCount:(c.excerptRecordIds||[]).length,stage,message:messages[stage]||messages.receiver_check,calendarReady:Boolean(stage==='calendar_ready'&&prior.calendarReady&&prior.sourceRecordId===c.videoRecordId),checkedAt:new Date(now).toISOString()};
+    excerptCount:(c.excerptRecordIds||[]).length,stage,message:stage==='held'?videoHoldMessage(c):messages[stage]||messages.receiver_check,calendarReady:Boolean(stage==='calendar_ready'&&prior.calendarReady&&prior.sourceRecordId===c.videoRecordId),checkedAt:new Date(now).toISOString()};
 }
 export function applyVideoPipelineReceiver(state,candidate,inspection,now=Date.now()){
   const receiver=inspection.receiver;
@@ -53,12 +68,12 @@ export function applyVideoPipelineReceiver(state,candidate,inspection,now=Date.n
   const calendarReady=Boolean(mediaEvidence&&captionReady&&Number.isFinite(Date.parse(readiness.checkedAt))&&now-Date.parse(readiness.checkedAt)>=0&&now-Date.parse(readiness.checkedAt)<=15*60000);
   let stage=calendarReady?'calendar_ready':mediaReady?'awaiting_pp_readiness':media.durableCopyStatus==='failed'?'media_failed':'media_pending';
   if(candidate.publicationRestricted||candidate.releaseStatus||['hold','reject','send_to_editing'].includes(candidate.gate?.decision)){stage='held';}
-  const out={...state,stage,message:messages[stage]||messages.receiver_check,canonicalVideoId:receiver.canonicalVideoId,receiverSourceRecordId:receiver.sourceRecordId,
+  const out={...state,stage,message:stage==='held'?videoHoldMessage(candidate):messages[stage]||messages.receiver_check,canonicalVideoId:receiver.canonicalVideoId,receiverSourceRecordId:receiver.sourceRecordId,
     receiverCheckedAt:new Date(now).toISOString(),mediaReady,captionReady,calendarReady:stage==='calendar_ready',
     receivedReviewCount:Number(receiver.review?.reviewCount||0),receivedExcerptLinkCount:Number(receiver.review?.selectedExcerptIdCount||0),
     mediaStatus:clean(media.durableCopyStatus||media.mediaStatus||'unknown'),
     mediaReadinessReason:verifiedHosted?'existing_hosted_bytes_verified':mediaReady?'verified':inspection.hostedMedia?.status||receiver.renditionSelectionStatus||'no_verified_media'};
-  if(!mediaReady && inspection.hostedMedia && inspection.hostedMedia.status!=='not_applicable') {
+  if(stage!=='held' && !mediaReady && inspection.hostedMedia && inspection.hostedMedia.status!=='not_applicable') {
     out.message='Existing Poetry Please media needs byte verification; no new file or editing request';
   }
   if(calendarReady){out.calendarEvidence={schemaVersion:'1',canonicalVideoId:receiver.canonicalVideoId,sourceRecordId:receiver.sourceRecordId,

@@ -2,6 +2,13 @@ import test from 'node:test';import assert from 'node:assert/strict';
 import {VIDEO_AUTO_POLICY,videoQualitySummary,localVideoPipelineState,applyVideoPipelineReceiver,publicVideoPipelineState,advanceVideoPipeline,videoPipelineKey} from '../video_pipeline.mjs';
 import {verifyVideoPipelineCaller,VIDEO_PIPELINE_AUDIENCE,VIDEO_PIPELINE_SERVICE_ACCOUNT} from '../video_pipeline_auth.mjs';
 const now=Date.parse('2026-11-13T16:00:00Z');
+test('held states distinguish opt-out, review-only intake and saved curation decisions without clearing holds',()=>{
+ const base={prioritySetId:'event',sourceFileId:'file',videoRecordId:'weaver:video:file',reviewCount:3,baseScore:10,excerptRecordIds:['one'],sourceMediaType:'FV'};
+ for(const [patch,pattern]of [[{releaseStatus:'opted_out'},/opted out/],[{releaseStatus:'inventory_curation_only'},/2 more independent reviews/],[{gate:{decision:'hold'}},/Curation hold/],[{gate:{decision:'reject'}},/Rejected/]]){
+  const state=localVideoPipelineState({...base,...patch},{},now);
+  assert.equal(state.stage,'held');assert.equal(state.calendarReady,false);assert.match(state.message,pattern);
+ }
+});
 const c={prioritySetId:'event',sourceFileId:'fv',videoRecordId:'weaver:video:root',sourceEvent:'Event',author:'Poet',poemTitle:'Poem',baseScore:8.5,reviewCount:5,excerptRecordIds:['caption-source'],sourceMediaType:'FV',requiresManualIdentityReview:false};
 const received={receiver:{received:true,sourceRecordId:c.videoRecordId,canonicalVideoId:'canonical',media:{durableCopyStatus:'verified',storageMode:'durable',durableByteCount:100,durableChecksum:'hash'},review:{reviewCount:5,selectedExcerptIdCount:1}}};
 const ready={schemaVersion:'1',canonicalVideoId:'canonical',sourceRecordId:c.videoRecordId,checkedAt:new Date(now).toISOString(),media:{status:'verified',assetId:'asset',outputFileId:'output',mode:'durable',verifiedAt:new Date(now).toISOString()},caption:{status:'approved',canonicalExcerptId:'EXC',fingerprint:'text-fingerprint',approvedAt:new Date(now).toISOString()}};

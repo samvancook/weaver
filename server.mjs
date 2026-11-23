@@ -2350,7 +2350,7 @@ async function refreshFootageEventSets() {
     if (set.inventoryEvent) PRIORITY_VIDEO_SETS.delete(id);
   }
   for (const record of result.records || []) {
-    const set = footageEventAsSet(record);
+    const set = footageEventAsSet(record, PRIORITY_VIDEO_SETS.get(record.eventId));
     if (record.acceptedCount > 0 && set) PRIORITY_VIDEO_SETS.set(record.eventId, set);
   }
 }

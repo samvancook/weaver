@@ -100,9 +100,10 @@ export async function prepareEventIntake(input, getFile, target = {mode:'new_eve
     canonicalTextLinkStatus:'not_linked',checkedAt:new Date().toISOString(),playbackVerified:false,closedAutomatically:false};
 }
 
-export function footageEventAsSet(record) {
+export function footageEventAsSet(record,existingSet=null) {
   // Linking never shadows a live queue or changes its review source identities.
-  if(record.mode==='existing_event') return null;
+  // Older intake records predate mode. The configured event is still authoritative.
+  if(record.mode==='existing_event'||(existingSet&&!existingSet.inventoryEvent)) return null;
   const types=new Set((record.accepted||[]).map(t=>t.assets?.find(a=>a.driveFileId===t.sourceFileId)?.mediaType || 'unknown'));
   const mediaType=types.size===1 && ['OM','FV'].includes([...types][0])?[...types][0]:'unknown';
   return {id:record.eventId,label:record.eventName,eventName:record.eventName,folderId:record.sourceFolderId,
