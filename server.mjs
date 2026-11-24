@@ -9710,20 +9710,38 @@ const server = http.createServer(async (req, res) => {
       const refreshSource = ["1", "true", "yes"].includes(cleanSheetWhitespace(url.searchParams.get("refresh")).toLowerCase());
       if ((!refreshSource || ["current_titles", "current_titles_held", "all"].includes(normalizedFilterMode)) && normalizedFilterMode !== "coverage_needs") {
         const ledgerStartedAt = performance.now();
-        const [ledgerResult, qiCoverage] = await Promise.all([syncWeaverRuntimeDb("get_handoff_queue", {
+        const [firstPage, qiCoverage] = await Promise.all([syncWeaverRuntimeDb("get_handoff_queue", {
           limit: 500,
           cursor: 0,
           filter: normalizedFilterMode === "current_titles_held" ? "current_titles" : normalizedFilterMode
         }), ["current_titles", "current_titles_held", "all"].includes(normalizedFilterMode)
           ? fetchPoetryPleaseQiCoverageCounts()
           : Promise.resolve(null)]);
+        const ledgerRecords = Array.isArray(firstPage?.records) ? [...firstPage.records] : [];
+        let nextCursor = cleanSheetWhitespace(firstPage?.nextCursor);
+        while (nextCursor) {
+          const page = await syncWeaverRuntimeDb("get_handoff_queue", {
+            limit: 500,
+            cursor: Number(nextCursor),
+            filter: normalizedFilterMode === "current_titles_held" ? "current_titles" : normalizedFilterMode
+          });
+          if (!page?.ok || !Array.isArray(page.records)) {
+            throw new Error(page?.error || "Graphics handoff book list page failed");
+          }
+          ledgerRecords.push(...page.records);
+          const followingCursor = cleanSheetWhitespace(page.nextCursor);
+          if (followingCursor && Number(followingCursor) <= Number(nextCursor)) {
+            throw new Error("Graphics handoff book list cursor did not advance");
+          }
+          nextCursor = followingCursor;
+        }
         const dbElapsedMs = performance.now() - ledgerStartedAt;
         const records = applyCurrentTitlesQiHold(
-          Array.isArray(ledgerResult?.records) ? ledgerResult.records : [], normalizedFilterMode, qiCoverage
+          ledgerRecords, normalizedFilterMode, qiCoverage
         );
         const books = summarizeGraphicsHandoffBooks(records);
         const result = {
-          ok: Boolean(ledgerResult?.ok),
+          ok: Boolean(firstPage?.ok),
           filter: normalizedFilterMode,
           source: "firestore",
           poetryPleaseCoverage: null,
