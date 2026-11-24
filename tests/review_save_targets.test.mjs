@@ -73,6 +73,14 @@ test('caption-only decisions clear both graphic aliases on the server before led
   assert.equal(h.calls.filter(c=>c[0]==='write').length,1);
 });
 
+test('review updates retain the current source intake lane and collector rather than client defaults',async()=>{
+  const h=harness();h.rows.get(2)[1]='collector@buttonpoetry.com';h.rows.get(2)[2]='Add a quote from a video';
+  await h.context.saveReviewsToSheets([{...update(),mode:'book',intakeMode:'book',email:'changed@elsewhere.test'}]);
+  const saved=h.calls.find(c=>c[0]==='ledger')[1][0];
+  assert.equal(saved.mode,'video');assert.equal(saved.intakeMode,'video');
+  assert.equal(saved.email,'collector@buttonpoetry.com');assert.equal(saved.submittedBy,'collector@buttonpoetry.com');
+});
+
 test('a same-ID content change rejects the loaded decision rather than approving unseen text',async()=>{
   const h=harness();const expectedSource={author:'Poet',title:'Poem',bookTitle:'Book',excerptText:'Old displayed text'};
   await assert.rejects(h.context.saveReviewsToSheets([{...update(),expectedSource}]),/displayed review source changed/);

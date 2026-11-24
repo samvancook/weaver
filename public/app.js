@@ -665,29 +665,38 @@ function buildPendingRecordFromSheetRow(row, index) {
 
 function buildExcerptPayloadFromSheetRow(row, index) {
   const config = SHEET_SOURCE_CONFIG.columnMap;
-  const rawExcerptText = (row[config.excerpt - 1] || "").toString();
+  const isVideoIntake = cleanSheetWhitespace(row[2]).toLowerCase() === "add a quote from a video";
+  const rawExcerptText = (row[config.excerpt - 1] || (isVideoIntake ? row[12] : "") || "").toString();
   const correctedExcerptText = (row[config.correctedExcerpt - 1] || "").toString();
   const excerptText = correctedExcerptText || rawExcerptText;
   const cleanedExcerptText = cleanSheetWhitespace(excerptText);
   const approved = (row[config.approved - 1] || "").toString();
   const reviewDecision = getSheetExcerptReviewDecision(row);
-  const rawAuthor = (row[config.author - 1] || "").toString();
-  const rawTitle = (row[config.title - 1] || "").toString();
-  const rawBookTitle = cleanSheetWhitespace(row[config.bookTitle - 1]);
+  const rawAuthor = (row[config.author - 1] || (isVideoIntake ? row[9] : "") || "").toString();
+  const rawTitle = (row[config.title - 1] || (isVideoIntake ? row[11] : "") || "").toString();
+  const rawBookTitle = cleanSheetWhitespace(row[config.bookTitle - 1] || (isVideoIntake ? row[13] : ""));
   const correctedAuthor = (row[config.correctedAuthor - 1] || "").toString();
   const correctedTitle = (row[config.correctedTitle - 1] || "").toString();
   const correctedBookTitle = (row[config.correctedBookTitle - 1] || "").toString();
 
-  if (!cleanedExcerptText || !rawBookTitle) {
+  const bookTitle = cleanSheetWhitespace(correctedBookTitle || rawBookTitle);
+  if (!cleanedExcerptText || (!bookTitle && !isVideoIntake)) {
     return null;
   }
 
+  const noteMeta = parseIntakeMetadataFromNotes(row[8] || "");
   return {
     sourceRow: SHEET_SOURCE_CONFIG.startRow + index,
-    recordId: (row[config.recordId - 1] || "").toString(),
+    recordId: cleanSheetWhitespace(row[config.recordId - 1]) || `weaver:row-${SHEET_SOURCE_CONFIG.startRow + index}`,
+    intakeMode: isVideoIntake ? "video" : "book",
+    intakeLabel: cleanSheetWhitespace(row[2]),
+    poemKey: cleanSheetWhitespace(row[config.poemKey - 1]),
+    sourceEvent: isVideoIntake ? (cleanSheetWhitespace(row[17]) || noteMeta.sourceEvent || "") : "",
+    sourceVideoUrl: isVideoIntake ? (noteMeta.sourceVideoUrl || "") : "",
+    sourceVideoFileId: isVideoIntake ? extractGoogleDriveFileId(noteMeta.sourceVideoUrl) : "",
     author: correctedAuthor || rawAuthor,
     title: correctedTitle || rawTitle,
-    bookTitle: cleanSheetWhitespace(correctedBookTitle || rawBookTitle),
+    bookTitle,
     excerptText,
     wordCount: countWordsFromText(cleanedExcerptText),
     approved,
@@ -734,6 +743,26 @@ function summarizeSimpleBooks(records) {
     .sort((left, right) => left.title.localeCompare(right.title));
 }
 
+function summarizeCorrectionSelections(records) {
+  const books = summarizeSimpleBooks(records);
+  const events = new Map();
+  for (const record of records) {
+    if (record.intakeMode !== "video") continue;
+    const event = record.sourceEvent || "Unassigned event";
+    if (!events.has(event)) events.set(event, { title: `Video excerpts — ${event}`, value: `${REVIEW_VIDEO_EVENT_KEY}${encodeURIComponent(event)}`, count: 0 });
+    events.get(event).count++;
+  }
+  return [...books, ...Array.from(events.values()).sort((a, b) => a.title.localeCompare(b.title))];
+}
+
+function matchesCorrectionSelection(record, selection) {
+  if (String(selection).startsWith(REVIEW_VIDEO_EVENT_KEY)) {
+    const event = decodeURIComponent(String(selection).slice(REVIEW_VIDEO_EVENT_KEY.length));
+    return record.intakeMode === "video" && (record.sourceEvent || "Unassigned event") === event;
+  }
+  return normalizeBookKey(record.bookTitle) === normalizeBookKey(selection);
+}
+
 async function loadCorrectionBooksFromSheetsFallback() {
   const sheetName = runtimeConfig.sourceSheetName || SHEET_SOURCE_CONFIG.sourceRange;
   const range = `'${sheetName.replace(/'/g, "''")}'!${SHEET_SOURCE_CONFIG.sourceRange}`;
@@ -752,7 +781,7 @@ async function loadCorrectionBooksFromSheetsFallback() {
   return {
     ok: true,
     version: `${runtimeConfig.appVersion || "unknown"}-sheets-fallback`,
-    books: summarizeSimpleBooks(records)
+    books: summarizeCorrectionSelections(records)
   };
 }
 
@@ -766,14 +795,15 @@ async function loadCorrectionsFromSheetsFallback(bookTitle) {
   const range = `'${sheetName.replace(/'/g, "''")}'!${SHEET_SOURCE_CONFIG.sourceRange}`;
   const values = await fetchSheetValues(range);
   const excerpts = [];
-  let preferredBookTitle = cleanSheetWhitespace(bookTitle);
+  const isEventSelection = bookTitle.startsWith(REVIEW_VIDEO_EVENT_KEY);
+  let preferredBookTitle = isEventSelection ? decodeURIComponent(bookTitle.slice(REVIEW_VIDEO_EVENT_KEY.length)) : cleanSheetWhitespace(bookTitle);
 
   values.forEach((row, index) => {
     const record = buildExcerptPayloadFromSheetRow(row, index);
     if (!record) return;
-    if (record.excerptReviewDecision !== "NEEDS_CORRECTION") return;
-    if (normalizeBookKey(record.bookTitle) !== bookKey) return;
-    preferredBookTitle = choosePreferredBookTitle(preferredBookTitle, record.bookTitle);
+    if (record.excerptReviewDecision !== "NEEDS_CORRECTION" || isSheetYes(record.excludeRaw)) return;
+    if (!matchesCorrectionSelection(record, bookTitle)) return;
+    if (!isEventSelection) preferredBookTitle = choosePreferredBookTitle(preferredBookTitle, record.bookTitle);
     excerpts.push(record);
   });
 
@@ -5014,7 +5044,7 @@ async function loadCorrectionBooks() {
   const previousSelection = elements.correctionBookSelect?.value || "";
 
   try {
-    setStatus("Loading correction books...");
+    setStatus("Loading correction choices...");
     let data;
     try {
       data = await requestReviewApi("/api/review/correction-books");
@@ -5022,7 +5052,7 @@ async function loadCorrectionBooks() {
       if (!runtimeConfig.sheetReadFallbackEnabled) {
         throw primaryError;
       }
-      setStatus("Primary corrections backend is unavailable. Loading correction books directly from Google Sheets...", {
+      setStatus("Primary corrections backend is unavailable. Loading correction choices directly from Google Sheets...", {
         error: primaryError.message
       });
       data = await loadCorrectionBooksFromSheetsFallback();
@@ -5031,39 +5061,40 @@ async function loadCorrectionBooks() {
     elements.correctionBookSelect.innerHTML = "";
     const placeholder = document.createElement("option");
     placeholder.value = "";
-    placeholder.textContent = "Choose a correction book";
+    placeholder.textContent = "Choose a book or video event";
     elements.correctionBookSelect.appendChild(placeholder);
 
     data.books.forEach(book => {
       const option = document.createElement("option");
-      option.value = book.title;
+      option.value = book.value || book.title;
       option.textContent = `${book.title} (${book.count})`;
       elements.correctionBookSelect.appendChild(option);
     });
 
     if (previousSelection) {
-      const hasPreviousSelection = data.books.some(book => book.title === previousSelection);
+      const hasPreviousSelection = data.books.some(book => (book.value || book.title) === previousSelection);
       if (hasPreviousSelection) {
         elements.correctionBookSelect.value = previousSelection;
       }
     }
 
-    elements.correctionBookCountBadge.textContent = `${data.books.length} Books`;
-    setStatus(`Loaded ${data.books.length} correction books. Backend ${data.version || "unknown"}.`, data.books.slice(0, 10));
+    elements.correctionBookCountBadge.textContent = `${data.books.length} Selections`;
+    setStatus(`Loaded ${data.books.length} correction choices. Backend ${data.version || "unknown"}.`, data.books.slice(0, 10));
   } catch (error) {
-    setStatus(`Correction book load failed: ${error.message}`);
+    setStatus(`Correction choices load failed: ${error.message}`);
   }
 }
 
 async function loadCorrections() {
   const bookTitle = elements.correctionBookSelect?.value;
   if (!bookTitle) {
-    setStatus("Choose a correction book title first.");
+    setStatus("Choose a book or video event first.");
     return;
   }
 
+  const selectionLabel = elements.correctionBookSelect.selectedOptions?.[0]?.textContent?.replace(/\s*\(\d+\)$/, "") || bookTitle;
   try {
-    setStatus(`Loading corrections for "${bookTitle}"...`);
+    setStatus(`Loading corrections for "${selectionLabel}"...`);
     let data;
     try {
       data = await requestReviewApi("/api/review/corrections", { bookTitle });
@@ -5078,9 +5109,9 @@ async function loadCorrections() {
     }
 
     currentCorrectionExcerpts = data.excerpts;
-    await loadCatalogValidation(data.excerpts);
+    await loadCatalogValidation(data.excerpts.filter(record => record.intakeMode !== "video" || record.bookTitle));
     renderCorrectionExcerpts(data.excerpts);
-    setStatus(`Loaded ${data.excerpts.length} correction records for "${bookTitle}". Backend ${data.version || "unknown"}.`);
+    setStatus(`Loaded ${data.excerpts.length} correction records for "${selectionLabel}". Backend ${data.version || "unknown"}.`);
   } catch (error) {
     setStatus(`Correction load failed: ${error.message}`);
   }

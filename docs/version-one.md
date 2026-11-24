@@ -89,6 +89,14 @@ or poem key. Normal protected review updates retain their existing write path.
 The targeted replay regression tests are implementation evidence, not a new
 editorial submission or evidence that a historical record was damaged.
 
+Video corrections without book metadata use the existing video-event selection
+namespace in Needs Correction, in both the primary API and Sheets fallback.
+An event selection must not be saved as the excerpt's book title. Read through
+the poem-key column and retain the authoritative source intake lane/collector
+when saving a review. QC reviewer attribution comes from the verified server
+principal; caller-provided reviewer names cannot replace it. The original blank
+reviewer event remains historical evidence, rather than a backfilled human claim.
+
 Four current pending sources used legacy row-based IDs in the November 24
 read-only audit. The guarded save supports them with an exact loaded-content
 snapshot; no mass ID or poem-key rewrite is part of this release. Spring 2027
