@@ -3906,27 +3906,35 @@ function buildApprovedExcerptExportRecordFromSheetRow(row, index, canonicalBookA
 
 function buildCorrectionRecordFromSheetRow(row, index, canonicalBookAuthorMap = null) {
   const config = SHEET_SOURCE_CONFIG.columnMap;
-  const rawExcerptText = (row[config.excerpt - 1] || "").toString();
+  const isVideoIntake = cleanSheetWhitespace(row[2]).toLowerCase() === "add a quote from a video";
+  const rawExcerptText = (row[config.excerpt - 1] || (isVideoIntake ? row[12] : "") || "").toString();
   const correctedExcerptText = (row[config.correctedExcerpt - 1] || "").toString();
   const excerptText = correctedExcerptText || rawExcerptText;
   const cleanedExcerptText = cleanSheetWhitespace(excerptText);
   const reviewDecision = getSheetExcerptReviewDecision(row);
-  const rawBookTitle = cleanSheetWhitespace(row[config.bookTitle - 1]);
+  const rawBookTitle = cleanSheetWhitespace(row[config.bookTitle - 1] || (isVideoIntake ? row[13] : ""));
   const correctedBookTitle = (row[config.correctedBookTitle - 1] || "").toString();
   const bookTitle = cleanSheetWhitespace(correctedBookTitle || rawBookTitle);
 
-  if (!bookTitle || !cleanedExcerptText || reviewDecision !== "NEEDS_CORRECTION" || isSheetYes(row[config.exclude - 1])) {
+  if ((!bookTitle && !isVideoIntake) || !cleanedExcerptText || reviewDecision !== "NEEDS_CORRECTION" || isSheetYes(row[config.exclude - 1])) {
     return null;
   }
 
-  const rawAuthor = resolveGraphicsAuthor(row[config.author - 1] || "", rawBookTitle, canonicalBookAuthorMap);
-  const rawTitle = (row[config.title - 1] || "").toString();
+  const rawAuthor = resolveGraphicsAuthor(row[config.author - 1] || (isVideoIntake ? row[9] : "") || "", rawBookTitle, canonicalBookAuthorMap);
+  const rawTitle = (row[config.title - 1] || (isVideoIntake ? row[11] : "") || "").toString();
   const correctedAuthor = (row[config.correctedAuthor - 1] || "").toString();
   const correctedTitle = (row[config.correctedTitle - 1] || "").toString();
 
+  const noteMeta = parseIntakeMetadataFromNotes(row[8] || "");
   return {
     sourceRow: SHEET_SOURCE_CONFIG.startRow + index,
-    recordId: (row[config.recordId - 1] || "").toString(),
+    recordId: cleanSheetWhitespace(row[config.recordId - 1]) || `weaver:row-${SHEET_SOURCE_CONFIG.startRow + index}`,
+    intakeMode: isVideoIntake ? "video" : "book",
+    intakeLabel: cleanSheetWhitespace(row[2]),
+    poemKey: cleanSheetWhitespace(row[config.poemKey - 1]),
+    sourceEvent: isVideoIntake ? (cleanSheetWhitespace(row[17]) || noteMeta.sourceEvent || "") : "",
+    sourceVideoUrl: isVideoIntake ? (noteMeta.sourceVideoUrl || "") : "",
+    sourceVideoFileId: isVideoIntake ? extractGoogleDriveFileId(noteMeta.sourceVideoUrl) : "",
     author: correctedAuthor || rawAuthor,
     title: correctedTitle || rawTitle,
     bookTitle,
@@ -4829,20 +4837,20 @@ async function getCorrectionBooksFromSheets() {
   return {
     ok: true,
     version: `${appVersion}-service-account`,
-    books: summarizeBooks(records)
+    books: summarizeCorrectionSelections(records)
   };
 }
 
 async function getCorrectionsForBookFromSheets(bookTitle) {
-  const requestedKey = normalizeBookKey(bookTitle);
-  const range = `'${sourceSheetName.replace(/'/g, "''")}'!A2:BK`;
+  const range = `'${sourceSheetName.replace(/'/g, "''")}'!A2:BM`;
   const values = await fetchSheetValuesServer(range);
   const canonicalBookAuthorMap = await getCanonicalGraphicsBookAuthorMap().catch(() => new Map());
   const excerpts = values
     .map((row, index) => buildCorrectionRecordFromSheetRow(row, index, canonicalBookAuthorMap))
-    .filter(record => record && normalizeBookKey(record.bookTitle) === requestedKey);
+    .filter(record => record && matchesCorrectionSelection(record, bookTitle));
 
-  const preferredBookTitle = excerpts.reduce(
+  const preferredBookTitle = String(bookTitle).startsWith("__video_event__:")
+    ? excerpts[0]?.sourceEvent || "Unassigned event" : excerpts.reduce(
     (current, record) => choosePreferredBookTitle(current, record.bookTitle),
     cleanSheetWhitespace(bookTitle)
   );
@@ -4853,6 +4861,26 @@ async function getCorrectionsForBookFromSheets(bookTitle) {
     bookTitle: preferredBookTitle,
     excerpts
   };
+}
+
+function summarizeCorrectionSelections(records) {
+  const books = summarizeBooks(records);
+  const events = new Map();
+  for (const record of records) {
+    if (record.intakeMode !== "video") continue;
+    const event = record.sourceEvent || "Unassigned event";
+    if (!events.has(event)) events.set(event, { title: `Video excerpts — ${event}`, value: `__video_event__:${encodeURIComponent(event)}`, count: 0 });
+    events.get(event).count++;
+  }
+  return [...books, ...Array.from(events.values()).sort((a, b) => a.title.localeCompare(b.title))];
+}
+
+function matchesCorrectionSelection(record, selection) {
+  if (String(selection).startsWith("__video_event__:")) {
+    const event = decodeURIComponent(String(selection).slice("__video_event__:".length));
+    return record.intakeMode === "video" && (record.sourceEvent || "Unassigned event") === event;
+  }
+  return normalizeBookKey(record.bookTitle) === normalizeBookKey(selection);
 }
 
 function getGraphicsSheetName(mode) {
@@ -7991,6 +8019,9 @@ async function enrichAcceptedExcerptUpdate(update) {
   }
 
   normalized.recordId = cleanSheetWhitespace(normalized.recordId) || record.recordId || "";
+  normalized.intakeMode = cleanSheetWhitespace(row[2]).toLowerCase() === "add a quote from a video" ? "video" : "book";
+  normalized.mode = normalized.intakeMode;
+  normalized.email = normalized.submittedBy = cleanSheetWhitespace(row[1]);
   normalized.author = record.author || "";
   normalized.title = record.title || "";
   normalized.poemTitle = record.title || "";
@@ -8666,6 +8697,12 @@ function validateGraphicsQcBatch(updates) {
     completions.add(completion);
     return { ...update, storageTarget };
   });
+}
+
+function attributeGraphicsQcUpdates(updates, principal) {
+  const reviewedBy = cleanSheetWhitespace(principal?.email).toLowerCase();
+  if (!reviewedBy) throw adminAuthError("administrator_authentication_required");
+  return updates.map(update => ({ ...update, reviewedBy }));
 }
 
 async function saveGraphicsQcToSheets(updates) {
@@ -10375,7 +10412,7 @@ const server = http.createServer(async (req, res) => {
     try {
       const body = await readRequestBody(req);
       const parsed = JSON.parse(body || "{}");
-      const updates = Array.isArray(parsed.updates) ? parsed.updates : [];
+      const updates = attributeGraphicsQcUpdates(Array.isArray(parsed.updates) ? parsed.updates : [], req.weaverAdmin);
 
       const result = await saveGraphicsQcToSheets(updates);
       if (result?.ok) invalidateQueueSnapshots();
