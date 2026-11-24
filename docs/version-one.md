@@ -51,16 +51,36 @@ release and acceptance receipts rather than marking this checklist from a plan.
 PR113's deployed exact-source save was exercised through the normal signed-in
 UI. Three existing authorized caption-only approvals were read back from the
 source ledger; their duplicate peer remained pending. The ordinary worker
-acknowledged each once. Exact receiver receipt verification is still open with
-the PP owner, so this is not end-to-end delivery acceptance.
+acknowledged each once. The November 24 ledger readback subsequently verified
+all three exact receiver IDs and parent-video bindings, with one attempt each.
+The historical `not_found` checks remain in their audit history; the positive
+receipt and `received` state govern current delivery. PP still owns selected
+output caption certification; these imports need no resend or reapproval.
 
-The next repair covers stale-target validation, written-value readback,
+PR114 is deployed and covers stale-target validation, written-value readback,
 caption-only server enforcement, separate ledger-failure reporting, correction
 return/override reads and sign-in startup. Its focused regression tests exercise
 successful and failed source writes, current exclusions, conflicting decisions,
 legacy IDs and a correction returning to review without approval or delivery.
 A test result is not a production acceptance receipt. Keep the exact release
 and live workflow evidence in the shared current-state register.
+
+PR115 is deployed with anonymous machine-readable event work at
+`/api/intake/video-work` and direct event assignments. Production links were
+checked signed out; a separate Cloud Build machine verified current counts and
+links without browser credentials. Rating submissions use the reviewer's work
+email. Protected excerpt and administrator saves still require sign-in.
+The release also corrected observed memory-limit failures by retaining 1 GiB
+memory and concurrency two. This is workload-discovery acceptance, not proof
+that every editorial or downstream workflow has passed acceptance.
+
+The next Graphics QC repair validates batch targets/count acknowledgments,
+preflights Firestore completion/request pairs before writing decisions, blocks
+overlapping UI submissions, and distinguishes saved decisions from failed
+refreshes or sheet synchronization. Its regression tests do not authorize new
+editorial decisions or establish a live deployment. These checks do not make
+Firestore and Sheets one atomic transaction: transport failures and concurrent
+changes still require exact-record readback before retrying.
 
 Four current pending sources used legacy row-based IDs in the November 24
 read-only audit. The guarded save supports them with an exact loaded-content

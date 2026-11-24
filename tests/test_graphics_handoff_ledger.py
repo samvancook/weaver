@@ -741,6 +741,47 @@ class GraphicsHandoffLedgerTest(unittest.TestCase):
         self.assertEqual(connection.handoffs[request_id]["handoffStatus"], "approved")
         self.assertEqual(connection.handoffs[request_id]["qcStatus"], "approved")
 
+    def test_qc_batch_validates_all_completion_pairs_before_writing(self):
+        for invalid in ("missing", "wrong_request", "duplicate", "missing_request", "invalid_decision"):
+            with self.subTest(invalid=invalid):
+                connection = MemoryFirestoreLedger()
+                connection.handoffs["request-one"] = {"graphicsRequestId": "request-one"}
+                connection.documents[("graphicsCompletions", "completion-one")] = {
+                    "id": "completion-one", "graphicsRequestId": "request-one",
+                }
+                first = {"storageTarget": "firestore", "graphicsRequestId": "request-one",
+                         "pigCompletionId": "completion-one", "contentType": "QI", "qcDecision": "approve"}
+                second = {**first, "pigCompletionId": "missing-completion"}
+                if invalid == "wrong_request":
+                    second = {**first, "graphicsRequestId": "wrong-request"}
+                elif invalid == "duplicate":
+                    second = dict(first)
+                elif invalid == "missing_request":
+                    second = {**second, "graphicsRequestId": ""}
+                elif invalid == "invalid_decision":
+                    second = {**second, "qcDecision": "unknown"}
+                before = dict(connection.documents)
+                with self.assertRaises(ValueError):
+                    sync_qc_reviews(connection, {"reviews": [first, second]})
+                self.assertEqual(connection.documents, before)
+                self.assertEqual(connection.handoff_update_calls, [])
+                self.assertNotIn("qcStatus", connection.handoffs["request-one"])
+
+    def test_qc_batch_preserves_each_validated_request(self):
+        connection = MemoryFirestoreLedger()
+        reviews = []
+        for name in ("one", "two"):
+            request_id, completion_id = f"request-{name}", f"completion-{name}"
+            connection.handoffs[request_id] = {"graphicsRequestId": request_id}
+            connection.documents[("graphicsCompletions", completion_id)] = {
+                "id": completion_id, "graphicsRequestId": request_id,
+            }
+            reviews.append({"storageTarget": "firestore", "graphicsRequestId": request_id,
+                            "pigCompletionId": completion_id, "contentType": "QI", "qcDecision": "approve"})
+        result = sync_qc_reviews(connection, {"reviews": reviews})
+        self.assertEqual(result["written"], 2)
+        self.assertEqual(connection.handoff_update_calls, ["request-one", "request-two"])
+
     def test_qc_card_preserves_structured_drive_validation_error(self):
         error = {
             "failingService": "google_drive",

@@ -369,8 +369,11 @@ def sync_completions(connection, payload: dict[str, Any]) -> dict[str, Any]:
 def sync_qc_reviews(connection, payload: dict[str, Any]) -> dict[str, Any]:
     reviews = payload.get("reviews") or []
     written = 0
-    skipped: list[dict[str, Any]] = []
+    prepared = []
+    completion_ids = set()
 
+    # Resolve every submitted completion before writing any decision. A later
+    # missing or mispaired completion must not leave earlier reviews approved.
     for review in reviews:
         storage_target = normalize_text(review.get("storageTarget")).lower()
         completion_id = normalize_text(review.get("pigCompletionId") or review.get("graphicsCompletionId"))
@@ -378,21 +381,15 @@ def sync_qc_reviews(connection, payload: dict[str, Any]) -> dict[str, Any]:
         if storage_target == "cleanup_sheet" and not completion_id and request_id:
             completion_id = f"cleanup:{request_id}"
         if storage_target not in {"firestore", "pig_sheet", "cleanup_sheet"} or not completion_id:
-            skipped.append({
-                "reason": "not_qc_queue_backed",
-                "recordId": normalize_text(review.get("recordId")),
-                "sheetRow": review.get("sheetRow"),
-            })
-            continue
+            raise ValueError("Every QC review must identify its queue and completion")
 
         if not request_id:
-            skipped.append({
-                "reason": "missing_request_id",
-                "recordId": normalize_text(review.get("recordId")),
-                "sheetRow": review.get("sheetRow"),
-                "completionId": completion_id,
-            })
-            continue
+            raise ValueError(f"graphicsRequestId is required for QC completion {completion_id}")
+        if completion_id in completion_ids:
+            raise ValueError(f"QC completion {completion_id} was submitted more than once")
+        completion_ids.add(completion_id)
+        if normalize_text(review.get("qcDecision")).lower() not in {"approve", "reject", "replace"}:
+            raise ValueError(f"A valid QC decision is required for completion {completion_id}")
         content_type = resolve_content_type(review)
         if not content_type:
             raise ValueError(f"contentType is required for QC review {request_id}")
@@ -458,6 +455,9 @@ def sync_qc_reviews(connection, payload: dict[str, Any]) -> dict[str, Any]:
                 "textHash": text_hash,
             }
 
+        prepared.append((review, storage_target, completion_id, request_id, content_type))
+
+    for review, storage_target, completion_id, request_id, content_type in prepared:
         if storage_target != "firestore":
             upsert_graphics_request(connection, {
                 "id": request_id,
@@ -504,7 +504,7 @@ def sync_qc_reviews(connection, payload: dict[str, Any]) -> dict[str, Any]:
         if request_id:
             revision_reject = decision == "reject" and is_revision_reject(review)
             if storage_target == "firestore":
-                ledger_request_id = completion_request_id
+                ledger_request_id = request_id
             else:
                 handoff = upsert_graphics_handoff_request(connection, {
                     "graphicsRequestId": request_id,
@@ -543,7 +543,7 @@ def sync_qc_reviews(connection, payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "ok": True,
         "written": written,
-        "skipped": skipped,
+        "skipped": [],
     }
 
 

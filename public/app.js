@@ -6699,6 +6699,7 @@ function filterChangedGraphicsQcUpdates(updates) {
 }
 
 async function submitGraphicsQc() {
+  if (isSaving) return;
   if (!["qc", "cleanup"].includes(getSelectedGraphicsMode())) {
     setStatus("Graphics QC decisions only apply in Graphics QC or Oddities mode.");
     return;
@@ -6743,6 +6744,8 @@ async function submitGraphicsQc() {
     return;
   }
 
+  let saveConfirmed = false;
+  let savedMessage = "";
   try {
     setSubmitState(true, `Saving ${updates.length}...`);
     setStatus(`Saving ${updates.length} QC decisions...`);
@@ -6762,6 +6765,19 @@ async function submitGraphicsQc() {
     if (!response.ok || !result.ok) {
       throw new Error(result.error || `/api/save-graphics-qc returned ${response.status}`);
     }
+    if (Number(result.savedCount) !== updates.length || !result.runtimeDb?.ok || Number(result.runtimeDb.written) !== updates.length) {
+      throw new Error("The server did not confirm every requested QC decision. Some may have saved; refresh and check their status before submitting again.");
+    }
+    saveConfirmed = true;
+    const handoff = result.poetryPlease || {};
+    const handoffCount = Number(handoff.createdCount || 0) + Number(handoff.updatedCount || 0);
+    const handoffMessage = handoff.ok && !handoff.skipped
+      ? ` Sent ${handoffCount} approved graphic${handoffCount === 1 ? "" : "s"} to Poetry Please.`
+      : (!handoff.ok && handoff.error ? ` Poetry Please handoff needs attention: ${handoff.error}` : "");
+    const sheetMessage = result.sheetSync?.ok === false
+      ? ` Sheet synchronization needs attention: ${result.sheetSync.error || "not confirmed"}. Do not resubmit the saved decisions.`
+      : "";
+    savedMessage = `Saved ${updates.length} QC decisions.${sheetMessage}${handoffMessage}`;
 
     const qcSweepMode = isGraphicsQcSweepSelection();
     currentGraphicsRecords = currentGraphicsRecords.filter(record => !savedRecordIds.has(record.recordId));
@@ -6782,14 +6798,12 @@ async function submitGraphicsQc() {
       currentGraphicsAssetMatches = new Map();
       renderGraphicsRecords([]);
     }
-    const handoff = result.poetryPlease || {};
-    const handoffMessage = handoff.ok && !handoff.skipped
-      ? ` Sent ${Number(handoff.createdCount || 0) + Number(handoff.updatedCount || 0)} approved graphic${(Number(handoff.createdCount || 0) + Number(handoff.updatedCount || 0)) === 1 ? "" : "s"} to Poetry Please.`
-      : (!handoff.ok && handoff.error ? ` Poetry Please handoff needs attention: ${handoff.error}` : "");
     const sweepMessage = qcSweepMode ? " Loaded the next QC sweep item." : "";
-    setStatus(`Saved ${updates.length} QC decisions.${handoffMessage}${sweepMessage}`);
+    setStatus(`${savedMessage}${sweepMessage}`);
   } catch (error) {
-    setStatus(`Graphics QC save failed: ${error.message}`);
+    setStatus(saveConfirmed
+      ? `${savedMessage} Refresh failed: ${error.message}. Do not resubmit the saved decisions; refresh the queue.`
+      : `Graphics QC save not confirmed: ${error.message}`);
   } finally {
     setSubmitState(false, "Submit Decisions");
   }

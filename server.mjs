@@ -8642,10 +8642,37 @@ async function hydrateApprovedFirestoreGraphicRecord(update) {
   };
 }
 
+function validateGraphicsQcBatch(updates) {
+  const targets = new Set();
+  const completions = new Set();
+  return updates.map(update => {
+    const storageTarget = cleanSheetWhitespace(update?.storageTarget).toLowerCase().replace(/^sheet_cleanup$/, "cleanup_sheet");
+    const completionId = cleanSheetWhitespace(update?.pigCompletionId);
+    const requestId = cleanSheetWhitespace(update?.graphicsRequestId);
+    const rowNumber = Number(update?.sheetRow);
+    if (!["firestore", "pig_sheet", "cleanup_sheet"].includes(storageTarget) || !requestId || !normalizeGraphicsQcDecision(update?.qcDecision)) {
+      throw new Error("Every QC decision needs a valid queue, request identity and decision. Refresh the queue before retrying.");
+    }
+    if ((storageTarget !== "cleanup_sheet" && !completionId) ||
+        (storageTarget !== "firestore" && (!Number.isInteger(rowNumber) || rowNumber < 2))) {
+      throw new Error("Every QC decision needs its exact completion or sheet row. Refresh the queue before retrying.");
+    }
+    const target = `${storageTarget}:${storageTarget === "firestore" ? completionId : rowNumber}`;
+    const completion = completionId || `cleanup:${requestId}`;
+    if (targets.has(target) || completions.has(completion)) {
+      throw new Error("The same graphics QC target was submitted more than once. No decisions were saved.");
+    }
+    targets.add(target);
+    completions.add(completion);
+    return { ...update, storageTarget };
+  });
+}
+
 async function saveGraphicsQcToSheets(updates) {
   if (!Array.isArray(updates) || !updates.length) {
     return { ok: false, error: "No graphics QC updates provided." };
   }
+  updates = validateGraphicsQcBatch(updates);
 
   const storageTargets = new Set(
     updates.map(update => cleanSheetWhitespace(update?.storageTarget).toLowerCase())
@@ -8663,7 +8690,6 @@ async function saveGraphicsQcToSheets(updates) {
   const approvedFirestoreRecords = [];
   const replacementCompletions = [];
   const matchedUpdates = [];
-  let firestoreMatchedCount = 0;
   let savedCount = 0;
 
   for (const update of updates) {
@@ -8678,6 +8704,7 @@ async function saveGraphicsQcToSheets(updates) {
       if (!completionId || !decision) continue;
       let normalizedUpdate = {
         ...update,
+        qcDecision: decision.toLowerCase(),
         graphicsQcDecision: decision,
         graphicsQcNote: note,
         graphicsQcUpdatedAt: updatedAt
@@ -8686,7 +8713,6 @@ async function saveGraphicsQcToSheets(updates) {
         normalizedUpdate = await validateEditableProjectForRework(normalizedUpdate);
       }
       matchedUpdates.push(normalizedUpdate);
-      firestoreMatchedCount++;
       if (decision === "APPROVE") {
         approvedFirestoreRecords.push(await hydrateApprovedFirestoreGraphicRecord(normalizedUpdate));
       }
@@ -8741,7 +8767,7 @@ async function saveGraphicsQcToSheets(updates) {
         }
       );
     }
-    matchedUpdates.push(update);
+    matchedUpdates.push({ ...update, qcDecision: decision.toLowerCase() });
     savedCount++;
   }
 
@@ -8763,8 +8789,8 @@ async function saveGraphicsQcToSheets(updates) {
     if (!runtimeDb?.ok) {
       throw new Error(runtimeDb?.error || "Runtime DB QC ledger write failed.");
     }
-    if (firestoreMatchedCount && Number(runtimeDb?.written || 0) < firestoreMatchedCount) {
-      throw new Error("Firestore QC ledger did not save every submitted review.");
+    if (Number(runtimeDb?.written) !== matchedUpdates.length) {
+      throw new Error("QC ledger did not confirm every submitted review. Some may have saved; refresh and check their status before retrying.");
     }
   }
   const sheetSync = { ok: true, cleanupWrites: cleanupRequests.length, pigWrites: pigRequests.length };
