@@ -5124,6 +5124,8 @@ async function loadCatalogValidation(excerpts) {
   const recordsNeedingLiveValidation = [];
 
   excerpts.forEach(excerpt => {
+    // Video-only sources have no book to validate, including after a saved correction refreshes.
+    if (excerpt.intakeMode === "video" && !cleanSheetWhitespace(excerpt.bookTitle)) return;
     const key = excerpt.recordId || String(excerpt.sourceRow);
     if (excerpt.catalogValidation && excerpt.catalogValidation.status) {
       currentValidationByRecordId.set(key, excerpt.catalogValidation);
@@ -5214,7 +5216,7 @@ function renderCorrectionExcerpts(excerpts) {
     excerpts,
     elements.correctionList,
     elements.correctionExcerptCountBadge,
-    "No correction records remain for this book."
+    "No correction records remain for this selection."
   );
 }
 
@@ -6904,6 +6906,9 @@ async function exportGraphicsSheet() {
 }
 
 function buildValidationMarkup(validation, excerpt) {
+  if (excerpt?.intakeMode === "video" && !cleanSheetWhitespace(excerpt.bookTitle)) {
+    return `<p class="validation">Video excerpt: no book catalog check is needed.</p>`;
+  }
   if (!validation) {
     return `<p class="validation validation--pending">Catalog validation unavailable for this excerpt.</p>`;
   }
