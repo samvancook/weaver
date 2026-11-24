@@ -2326,10 +2326,14 @@ async function openRequestedVideoReviewTask() {
   if(!/^[a-z0-9][a-z0-9-]{0,99}$/.test(setId))return;
   setActiveModule('gathering');setGatheringMode('video');
   try{
-    await refreshPriorityVideoSetVisibility();
-    if(!Array.from(elements.gatheringVideoPrioritySet.options).some(option=>option.value===setId))throw new Error('This video set is not available.');
+    // Resolve the exact linked event directly. An unrelated all-event read must
+    // not prevent a newly registered event from opening on another machine.
+    if(!Array.from(elements.gatheringVideoPrioritySet.options).some(option=>option.value===setId)) {
+      elements.gatheringVideoPrioritySet.add(new Option(setId,setId));
+    }
     elements.gatheringVideoPrioritySet.value=setId;
     elements.gatheringVideoPlaylistUrl.value='';
+    elements.gatheringVideoView.value=elements.gatheringEmail?.value.trim()?'todo':'library';
     await loadGatheringVideoPlaylist({auto:true});
   }catch(error){setVideoReviewSaveStatus('Video task could not open: '+error.message);}
 }
@@ -2369,6 +2373,11 @@ async function loadGatheringVideoPlaylist({ auto = false } = {}) {
     });
     if(generation!==videoPlaylistGeneration)return;
     if(prioritySetId && result.prioritySetId!==prioritySetId)throw new Error("Weaver returned a different curation task; no videos were loaded.");
+    const linkedSet=result.sets?.find(set=>set.id===prioritySetId);
+    if(linkedSet) {
+      const option=Array.from(elements.gatheringVideoPrioritySet.options).find(option=>option.value===prioritySetId);
+      if(option)option.textContent=linkedSet.label;
+    }
     if (reviewerEmail !== (elements.gatheringEmail?.value.trim() || "")) {
       throw new Error("Reviewer email changed; load the playlist again.");
     }
@@ -2378,7 +2387,7 @@ async function loadGatheringVideoPlaylist({ auto = false } = {}) {
     if (!allItems.length && formUrl) throw new Error("No playlist items were found in that form.");
     const items=allItems;
     currentGatheringVideoPlaylist={formUrl,prioritySetId:cleanSheetWhitespace(result.prioritySetId||prioritySetId),
-      eventName:cleanSheetWhitespace(result.eventName)||(prioritySetId?elements.gatheringVideoPrioritySet?.selectedOptions?.[0]?.textContent:'All events'),
+      eventName:cleanSheetWhitespace(result.eventName||linkedSet?.label)||(prioritySetId?elements.gatheringVideoPrioritySet?.selectedOptions?.[0]?.textContent:'All events'),
       formTitle:cleanSheetWhitespace(result.formTitle),items,totalCount:allItems.length,reviewedCount:0,index:0,
       reviewerEmail, ...(formUrl?{}:{allItems}),completed:false};
     if(formUrl){applyGatheringVideoPlaylistItem(items[0]);}

@@ -29,7 +29,7 @@ test('an excerpt failure after a confirmed rating does not falsely report that t
  const submit=vm.runInNewContext(fn('submitGathering')+';submitGathering',s);await submit();assert.match(messages.at(-1),/^Rating saved\./);assert.match(messages.at(-1),/Excerpt unavailable/);
 });
 test('a direct main-site task link opens the selected Weaver set without loading an old form',async()=>{
- const calls=[],s={contributorShellParams:new URLSearchParams({videoSet:'mpmu-2026-finals',video:'tilt'}),elements:{gatheringVideoPrioritySet:{options:[{value:'mpmu-2026-finals'}]},gatheringVideoPlaylistUrl:{value:'old-form'}},setActiveModule:()=>{},setGatheringMode:()=>{},refreshPriorityVideoSetVisibility:async()=>{},loadGatheringVideoPlaylist:async()=>calls.push('loaded'),setVideoReviewSaveStatus:m=>calls.push(m)};
+ const calls=[],s={contributorShellParams:new URLSearchParams({videoSet:'mpmu-2026-finals',video:'tilt'}),elements:{gatheringVideoView:{value:'todo'},gatheringVideoPrioritySet:{options:[{value:'mpmu-2026-finals'}]},gatheringVideoPlaylistUrl:{value:'old-form'}},setActiveModule:()=>{},setGatheringMode:()=>{},refreshPriorityVideoSetVisibility:async()=>{},loadGatheringVideoPlaylist:async()=>calls.push('loaded'),setVideoReviewSaveStatus:m=>calls.push(m)};
  const open=vm.runInNewContext(fn('openRequestedVideoReviewTask')+';openRequestedVideoReviewTask',s);await open();assert.equal(s.elements.gatheringVideoPrioritySet.value,'mpmu-2026-finals');assert.equal(s.elements.gatheringVideoPlaylistUrl.value,'');assert.deepEqual(calls,['loaded']);
 });
 test('a direct video task never falls through to another video when its own review is saved or missing',async()=>{
