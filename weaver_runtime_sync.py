@@ -792,6 +792,12 @@ def upsert_excerpt_records(connection, payload: dict[str, Any]) -> dict[str, Any
             FIRESTORE_EXCERPT_RECORDS_COLLECTION,
             record["sourceRecordId"],
         ) or {}
+        if payload.get("intakeOnly") and existing:
+            # An intake replay confirms the original save; it is not a review
+            # edit. Do not rewrite even unchanged fields: a concurrent approval
+            # or correction may have advanced since the intake was submitted.
+            written.append(existing)
+            continue
         merged = {
             **existing,
             **record,

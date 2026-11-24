@@ -74,13 +74,20 @@ The release also corrected observed memory-limit failures by retaining 1 GiB
 memory and concurrency two. This is workload-discovery acceptance, not proof
 that every editorial or downstream workflow has passed acceptance.
 
-The next Graphics QC repair validates batch targets/count acknowledgments,
+PR116 is deployed and validates Graphics QC batch targets/count acknowledgments,
 preflights Firestore completion/request pairs before writing decisions, blocks
 overlapping UI submissions, and distinguishes saved decisions from failed
-refreshes or sheet synchronization. Its regression tests do not authorize new
-editorial decisions or establish a live deployment. These checks do not make
+refreshes or sheet synchronization. Source-image readback, authenticated canary
+and protected-record checks passed; a genuine new protected QC save remains
+separate live acceptance. These checks do not make
 Firestore and Sheets one atomic transaction: transport failures and concurrent
 changes still require exact-record readback before retrying.
+
+Book-intake replays must confirm an existing ledger record without rewriting it.
+The original intake defaults cannot clear a later approval, correction, exclusion
+or poem key. Normal protected review updates retain their existing write path.
+The targeted replay regression tests are implementation evidence, not a new
+editorial submission or evidence that a historical record was damaged.
 
 Four current pending sources used legacy row-based IDs in the November 24
 read-only audit. The guarded save supports them with an exact loaded-content
