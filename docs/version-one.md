@@ -78,8 +78,11 @@ PR116 is deployed and validates Graphics QC batch targets/count acknowledgments,
 preflights Firestore completion/request pairs before writing decisions, blocks
 overlapping UI submissions, and distinguishes saved decisions from failed
 refreshes or sheet synchronization. Source-image readback, authenticated canary
-and protected-record checks passed; a genuine new protected QC save remains
-separate live acceptance. These checks do not make
+and protected-record checks passed. A genuine wrong-render rejection was then
+saved once through the signed-in QC screen and read back from the exact review;
+the unrelated completion stayed pending and no PP handoff was created. The
+subsequent actor-attribution repair still needs observation on a legitimate new
+QC decision; the earlier blank actor is preserved. These checks do not make
 Firestore and Sheets one atomic transaction: transport failures and concurrent
 changes still require exact-record readback before retrying.
 
@@ -103,3 +106,22 @@ snapshot; no mass ID or poem-key rewrite is part of this release. Spring 2027
 BBFR/WG keyed choices and previews pass. The other three season books remain
 metadata-only upstream dependencies with Catalog ownership. Do not relabel
 those manuscripts missing or reopen their completed source searches.
+
+## November 24 acceptance reconciliation
+
+The shared-drive START HERE and linked current receipt contain private exact
+record IDs, timestamps and release proofs. They govern status when the workload
+changes; do not copy historical counts into a claim of current completion.
+
+| Existing workflow | Observed acceptance | Still open |
+| --- | --- | --- |
+| Exact excerpt saves | Three caption-only source approvals received once each; duplicate peer unchanged. The existing staff correction returned to review through the signed-in UI after PR120, retaining raw text, entered override and video association; no approval, graphics or handoff. | No new save implementation work identified. |
+| Book intake | BBFR keyed intake and replay, unchanged later metadata and readable preview; BBFR/WG keyed options checked. | Catalog owns the three documented metadata-only titles. |
+| Graphics QC | One legitimate mismatch rejection persisted for the exact completion, unrelated pending completion preserved. | Observe actor attribution on the next legitimate QC save. PIG owns the replacement render/project identity. |
+| Video | Existing policy, grouped identity, exact receiver receipts and authenticated dry run checked. | PP owns output certificates/association exceptions. Calendar owns the selected exact-tuple consumption receipt. Readiness is not proof of Calendar staging. |
+| Staff recovery | Existing-account sign-in, protected reads, assignment scope across reload and signed-in correction save observed. Regression coverage checks failed/expired sign-in and uncertain-save draft retention. | Other staff identities and deliberately forced expiry were not exercised in production. |
+| Release/recovery | PR119/120 exact source/image, canary, main/aliases, protected data, temporary-job removal and released claim read back. Runbook states the actual release and reconciliation paths. | Shared claim adoption is not an IAM guarantee for every historical caller; retain the documented enforcement boundary. |
+
+This is evidence reconciliation, not a blanket 1.0 completion claim. Keep the
+remaining product acceptance and owner exceptions explicit. No new dashboard,
+role, delivery mode or historical backfill is required to finish this list.
