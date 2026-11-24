@@ -7545,6 +7545,7 @@ async function submitExcerptSet({
     return;
   }
 
+  let savedMessage = "";
   try {
     setSubmitState(true, `Saving ${changedUpdates.length}...`);
     setStatus(`${progressLabel} ${changedUpdates.length} changed records...`);
@@ -7559,6 +7560,7 @@ async function submitExcerptSet({
 
     const deliveryNote = saveResult?.excerptHandoffs?.ok === false ? " Approvals saved; delivery needs attention: " + (saveResult.excerptHandoffs.error || "check the delivery queue")
       : saveResult?.excerptHandoffs?.queuedVideoCount ? ` Poetry Please delivery queued for ${saveResult.excerptHandoffs.queuedVideoCount} video excerpts; the scheduled worker will verify delivery.` : "";
+    savedMessage = `Saved ${changedUpdates.length} changed decisions.${deliveryNote}`;
     if (typeof afterSaveOptimistic === "function") {
       afterSaveOptimistic(changedUpdates);
     }
@@ -7590,7 +7592,9 @@ async function submitExcerptSet({
       );
     }
   } catch (error) {
-    setStatus(`Submit failed: ${error.message}`);
+    setStatus(savedMessage
+      ? `${savedMessage} Queue refresh failed: ${error.message}. Do not resubmit the saved decisions; refresh the queue.`
+      : `Submit not confirmed: ${error.message}`);
   } finally {
     setSubmitState(false, idleLabel);
   }
