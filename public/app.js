@@ -2324,7 +2324,7 @@ async function openVideoReviewFromWorkspace() {
 async function openRequestedVideoReviewTask() {
   const setId=contributorShellParams.get('videoSet')||'';
   if(!/^[a-z0-9][a-z0-9-]{0,99}$/.test(setId))return;
-  setActiveModule('gathering');setGatheringMode('video');
+  setActiveModule('gathering');setGatheringMode('video',{refreshVideoSets:false});
   try{
     // Resolve the exact linked event directly. An unrelated all-event read must
     // not prevent a newly registered event from opening on another machine.
