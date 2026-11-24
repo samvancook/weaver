@@ -5102,13 +5102,13 @@ async function loadCatalogValidation(excerpts) {
 }
 
 function renderExcerpts(excerpts) {
-  const orderedExcerpts = collapseExactQueueDuplicates(orderReviewExcerptsForRender(excerpts), { includeTitle: true });
+  const orderedExcerpts = annotateExactQueueDuplicates(orderReviewExcerptsForRender(excerpts), { includeTitle: true });
   const { candidates, additionalPulls } = splitReviewCandidatesByPoem(orderedExcerpts);
   const reviewPool = reviewShowAdditionalPulls ? orderedExcerpts : candidates;
   const totalMatching = reviewPool.length;
   const visibleExcerpts = reviewPool.slice(0, reviewVisibleCount);
   renderExcerptCollection(visibleExcerpts, elements.excerptList, elements.excerptCountBadge, getEmptyStateMessage(), {
-    duplicatesCollapsed: true,
+    duplicatesAnnotated: true,
     totalMatching,
     visibleCount: visibleExcerpts.length,
     batchSize: getReviewBatchSize(),
@@ -5775,7 +5775,7 @@ function renderExcerptCollection(excerpts, container, countBadge, emptyMessage, 
     `;
     section.appendChild(header);
 
-    const cards = options.duplicatesCollapsed ? group.excerpts : collapseExactQueueDuplicates(group.excerpts);
+    const cards = options.duplicatesAnnotated ? group.excerpts : annotateExactQueueDuplicates(group.excerpts);
     cards.forEach((excerpt, index) => {
       section.appendChild(buildExcerptCard(excerpt, `${slugify(group.title)}-${index}`));
     });
@@ -6181,41 +6181,29 @@ function normalizeExactQueueDuplicateText(text) {
   return (text || "").toString().replace(/\r\n/g, "\n").trim();
 }
 
-function collapseExactQueueDuplicates(excerpts, { includeTitle = false } = {}) {
-  const byText = new Map();
-  const collapsed = [];
-
+// Identical text is a warning, not permission to change another source record.
+function annotateExactQueueDuplicates(excerpts, { includeTitle = false } = {}) {
+  const groups = new Map();
   excerpts.forEach(excerpt => {
     delete excerpt.queueDuplicateRows;
+    const text = normalizeExactQueueDuplicateText(excerpt.excerptText || excerpt.rawExcerptText || "");
+    if (!text) return;
+    const identity = [excerpt.bookTitle, excerpt.author, includeTitle ? excerpt.title : ""]
+      .map(value => String(value || "").trim().toLowerCase().replace(/\s+/g, " ")).join("\u0000");
+    const key = `${identity}\u0000${text}`;
+    const group = groups.get(key) || [];
+    group.push(excerpt);
+    groups.set(key, group);
   });
-
-  excerpts.forEach(excerpt => {
-    const textKey = normalizeExactQueueDuplicateText(excerpt.excerptText || excerpt.rawExcerptText || "");
-    if (!textKey) {
-      collapsed.push(excerpt);
-      return;
-    }
-    const titleKey = includeTitle
-      ? (excerpt.title || "Untitled poem").trim().toLowerCase().replace(/\s+/g, " ").trim()
-      : "";
-    const key = `${titleKey}\u0000${textKey}`;
-    if (!byText.has(key)) {
-      byText.set(key, excerpt);
-      collapsed.push(excerpt);
-      return;
-    }
-    const canonical = byText.get(key);
-    canonical.queueDuplicateRows = [
-      ...(Array.isArray(canonical.queueDuplicateRows) ? canonical.queueDuplicateRows : []),
-      {
-        sourceRow: Number(excerpt.sourceRow),
-        recordId: excerpt.recordId || "",
-        note: `Auto-rejected by Weaver as exact queue duplicate of row ${canonical.sourceRow}.`
-      }
-    ];
+  groups.forEach(group => {
+    if (group.length < 2) return;
+    group.forEach(excerpt => {
+      excerpt.queueDuplicateRows = group.filter(peer => peer !== excerpt).map(peer => ({
+        sourceRow: Number(peer.sourceRow), recordId: peer.recordId || ""
+      }));
+    });
   });
-
-  return collapsed;
+  return excerpts;
 }
 
 function buildExcerptCard(excerpt, uniqueKey) {
@@ -6298,8 +6286,7 @@ function buildExcerptCard(excerpt, uniqueKey) {
       <span class="excerpt-card__author">${escapeHtml(displayAuthor || "Unknown author")}</span>
     </div>
     ${validationMarkup}
-    ${queueDuplicateBadge ? `<p class="hint">This card represents ${escapeHtml(String(excerpt.queueDuplicateRows.length + 1))} exact queue duplicates. Accepting it will keep row ${escapeHtml(String(excerpt.sourceRow))} and auto-reject the duplicate row${excerpt.queueDuplicateRows.length === 1 ? "" : "s"} with an explicit Weaver duplicate note.</p>` : ""}
-    ${queueDuplicateBadge ? `<button type="button" class="button button--secondary exclude-exact-duplicates">Exclude ${escapeHtml(String(excerpt.queueDuplicateRows.length))} exact duplicate${excerpt.queueDuplicateRows.length === 1 ? "" : "s"}</button>` : ""}
+    ${queueDuplicateBadge ? `<p class="hint">Identical text also appears in row${excerpt.queueDuplicateRows.length === 1 ? "" : "s"} ${escapeHtml(excerpt.queueDuplicateRows.map(peer => peer.sourceRow).join(", "))}. This decision saves only row ${escapeHtml(String(excerpt.sourceRow))}; other records stay unchanged.</p>` : ""}
     <blockquote class="excerpt-card__quote">${escapeHtml(excerpt.excerptText)}</blockquote>
     <p class="hint excerpt-card__hint">Accept sends this to the quote-image queue. Accept excerpt, skip graphic approves the excerpt for Poetry Please without sending it to P.I.G.</p>
     <div class="decision-group">
@@ -6355,35 +6342,6 @@ function buildExcerptCard(excerpt, uniqueKey) {
         block.classList.toggle("correction-block--active", isCorrection);
       }
     });
-  });
-
-  card.querySelector(".exclude-exact-duplicates")?.addEventListener("click", async () => {
-    const duplicates = Array.isArray(excerpt.queueDuplicateRows) ? excerpt.queueDuplicateRows : [];
-    if (!duplicates.length) return;
-    const button = card.querySelector(".exclude-exact-duplicates");
-    button.disabled = true;
-    try {
-      const updates = duplicates.map(duplicate => ({
-        sourceRow: Number(duplicate.sourceRow),
-        recordId: duplicate.recordId || "",
-        reviewDecision: "reject",
-        correctionNote: duplicate.note || `Excluded by Weaver as exact queue duplicate of row ${excerpt.sourceRow}.`,
-        duplicateGroupId: `queue-exact:${excerpt.sourceRow}`,
-        useForQi: false,
-        useForInt: false,
-        excluded: true
-      }));
-      const result = await requestBatchSave(updates);
-      const excludedRows = new Set(updates.map(update => update.sourceRow));
-      currentPendingRecords = currentPendingRecords.filter(item => !excludedRows.has(Number(item.sourceRow)));
-      currentExcerpts = currentExcerpts.filter(item => !excludedRows.has(Number(item.sourceRow)));
-      applyPendingBookData(currentPendingRecords, { preserveSelection: true });
-      renderCurrentExcerpts();
-      setStatus(`Excluded ${result.savedCount || updates.length} exact duplicate row${updates.length === 1 ? "" : "s"}.`);
-    } catch (error) {
-      button.disabled = false;
-      setStatus(`Exact duplicate exclusion failed: ${error.message}`);
-    }
   });
 
   if (wordCount === 0) {
@@ -7226,30 +7184,10 @@ function collectUpdatesFromContainer(container) {
       correctedExcerpt: card.querySelector(".corrected-excerpt")?.value || "",
       duplicateGroupId,
       useForQi: reviewDecision === "accept",
-      useForInt: card.dataset.currentUseForInt === "1"
+      useForInt: reviewDecision === "accept_skip_graphic" ? false : card.dataset.currentUseForInt === "1"
     };
 
-    const updates = [update];
-    const duplicateRows = JSON.parse(card.dataset.queueDuplicateRows || "[]");
-    if (reviewDecision === "accept" || reviewDecision === "accept_skip_graphic") {
-      duplicateRows.forEach(duplicate => {
-        updates.push({
-          sourceRow: Number(duplicate.sourceRow),
-          recordId: duplicate.recordId || "",
-          reviewDecision: "reject",
-          correctionNote: duplicate.note || `Auto-rejected by Weaver as exact queue duplicate of row ${sourceRow}.`,
-          correctedAuthor: "",
-          correctedTitle: "",
-          correctedBookTitle: "",
-          correctedExcerpt: "",
-          duplicateGroupId: `queue-exact:${sourceRow}`,
-          useForQi: false,
-          useForInt: false
-        });
-      });
-    }
-
-    return updates;
+    return [update];
   });
 }
 
