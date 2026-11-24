@@ -1,4 +1,4 @@
-import {validateEventManifest} from "./footage_event_intake.mjs";
+import {validateEventManifest,inventoryCurationRights} from "./footage_event_intake.mjs";
 // Reviewed event correspondence. These are asset relationships, not file aliases:
 // never replace a review's sourceFileId or infer a canonical text ID from a title.
 export const REVIEWED_EVENT_LINKS = [{
@@ -103,7 +103,8 @@ export async function resolveEventTarget(manifest, sets, listFiles, parseFileId,
       pairs, available};
   }
   // Exact file IDs can safely discover an existing queue without fuzzy title joins.
-  const ids = manifest.titles.map(t => parseFileId(t.contentLink)).filter(Boolean);
+  const includedTitles = manifest.titles.filter(t => inventoryCurationRights(t.rights)!=='exclude');
+  const ids = includedTitles.map(t => parseFileId(t.contentLink)).filter(Boolean);
   const ownId = validateEventManifest(manifest).eventId;
   const candidates = [...sets.values()].filter(set => !(set.inventoryEvent && set.id === ownId));
   const matches = await Promise.all(candidates.map(async set => ({set,
@@ -111,7 +112,7 @@ export async function resolveEventTarget(manifest, sets, listFiles, parseFileId,
   const touched = matches.filter(x => ids.some(id => x.ids.has(id)));
   if (!touched.length) return {mode:'new_event'};
   if (touched.some(x => x.set.inventoryEvent)) throw new Error('These files already belong to another inventory event. Existing work was preserved; connect the events explicitly.');
-  const complete = touched.filter(x => ids.length === manifest.titles.length && ids.every(id => x.ids.has(id)));
+  const complete = touched.filter(x => ids.length === includedTitles.length && ids.every(id => x.ids.has(id)));
   if (touched.length !== 1 || complete.length !== 1) {
     throw new Error('Some videos already belong to another Weaver queue, or match multiple queues. Existing work was preserved; preview needs an event connection.');
   }

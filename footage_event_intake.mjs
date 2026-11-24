@@ -5,6 +5,14 @@ const text = value => String(value ?? '').trim();
 const key = value => text(value).replace(/\s+/g, ' ').toLowerCase();
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const AUTHOR_CONTRACT = 'all button authors, all features, all workshop instructors - contract is not stored with video releases';
+// Inventory curation eligibility is distinct from publication clearance.
+export function inventoryCurationRights(rights) {
+  const value = key(rights);
+  if (['no video release','performance opt out'].includes(value)) return 'exclude';
+  if (['have video release',AUTHOR_CONTRACT,'title not included on video release'].includes(value)) return 'include';
+  return 'review';
+}
+
 // Intake registration is review-only, but its already-validated rights evidence
 // can satisfy clearance when the standing curation/media policy later qualifies.
 export function videoPublicationRestriction(fileName,set={},fileId='',connections=[]){
@@ -62,12 +70,17 @@ function resultStatus(record, complete) {
 export async function prepareEventIntake(input, getFile, target = {mode:'new_event'}) {
   const {manifest,eventId,digest} = validateEventManifest(input);
   if (manifest.closed && target.mode !== 'existing_event') throw new Error('Closed inventory events can only link to an existing Weaver event. No event was reopened or created.');
-  const accepted=[],blocked=[],seen=new Set();
+  const accepted=[],blocked=[],excluded=[],seen=new Set();
   for (const title of manifest.titles) {
+    const rightsDecision=inventoryCurationRights(title.rights);
+    if (rightsDecision==='exclude') {
+      excluded.push({...title,reason:'excluded_from_curation_by_inventory_rights'});
+      continue; // Excluded rows need no readable media and never enter the queue.
+    }
     const id=fileId(title.contentLink);
     const targetId=target.mode==='existing_event' ? target.pairs?.get(id) : id;
     let reason = !title.performer || !title.title ? 'missing_performer_or_title'
-      : !['have video release',AUTHOR_CONTRACT].includes(key(title.rights)) ? 'rights_need_review'
+      : rightsDecision!=='include' ? 'rights_need_review'
       : !id ? 'individual_drive_video_required'
       : seen.has(id) ? 'duplicate_video_in_event'
       : !targetId ? 'existing_event_asset_connection_missing'
@@ -107,8 +120,9 @@ export async function prepareEventIntake(input, getFile, target = {mode:'new_eve
   return {schemaVersion:2,eventId,prioritySetId,digest,manifest,eventName:manifest.eventName,
     mode,targetEventName:target.label||manifest.eventName,
     routingDigest:hash([mode,prioritySetId,manifest.titles.map(t=>[fileId(t.contentLink),target.mode==='existing_event'?target.pairs?.get(fileId(t.contentLink))||'':fileId(t.contentLink)])]),
-    sourceFolderId:manifest.omFolderId,sourceMediaType:target.inventoryMediaType||'unknown',accepted,blocked,
-    submittedCount:manifest.titles.length,acceptedCount:accepted.length,blockedCount:blocked.length,
+    sourceFolderId:manifest.omFolderId,sourceMediaType:target.inventoryMediaType||'unknown',accepted,blocked,excluded,
+    submittedCount:manifest.titles.length,eligibleCount:manifest.titles.length-excluded.length,
+    excludedCount:excluded.length,acceptedCount:accepted.length,blockedCount:blocked.length,
     linkedExistingCount:mode==='existing_event'?accepted.length:0,
     inventoryAssetCount:new Set(accepted.map(t=>t.inventorySourceFileId)).size,
     curationAssetCount:new Set(accepted.map(t=>t.sourceFileId)).size,
