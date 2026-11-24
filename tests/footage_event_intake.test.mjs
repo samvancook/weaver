@@ -39,9 +39,9 @@ test('retries have stable identity and digest; changed metadata is distinguishab
  const a=validateEventManifest(manifest()),b=validateEventManifest({...manifest(),eventName:' Pilot   event '});assert.equal(a.eventId,b.eventId);assert.equal(a.digest,b.digest);
  const m=manifest();m.titles[0].title='Other';assert.equal(a.eventId,validateEventManifest(m).eventId);assert.notEqual(a.digest,validateEventManifest(m).digest);
 });
-test('partial batches expose blocked records and cannot report closure readiness',async()=>{
+test('excluded titles are accounted for without blocking eligible curation or claiming closure readiness',async()=>{
  const m=manifest();m.titles.push({...m.titles[0],sourceRow:6001,rights:'No video release'});
- const r=await prepareEventIntake(m,file);assert.equal(r.acceptedCount,1);assert.equal(r.blockedCount,1);assert.equal(r.readyForClosureReview,false);
+ const r=await prepareEventIntake(m,file);assert.equal(r.acceptedCount,1);assert.equal(r.blockedCount,0);assert.equal(r.excludedCount,1);assert.equal(r.eligibleCount,1);assert.equal(r.transferComplete,true);assert.equal(r.readyForClosureReview,false);
 });
 test('folders, arbitrary URLs, unreadable media, non-video files, and duplicate files do not count as accepted',async()=>{
  for(const link of ['https://drive.google.com/drive/folders/event_folder_123456789','https://evil.example/file/d/'+id]){
