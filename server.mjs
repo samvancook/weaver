@@ -1325,6 +1325,7 @@ function normalizeDecision(value) {
   if (normalized === "accept_skip_graphic" || normalized === "accept_skip_graphics") return "accept_skip_graphic";
   if (normalized === "reject") return "reject";
   if (normalized === "needs_correction") return "needs_correction";
+  if (normalized === "return_to_review") return "return_to_review";
   return "";
 }
 
@@ -1334,6 +1335,7 @@ function normalizeReviewDecisionValue(value) {
   if (normalized === "accept_skip_graphic") return "ACCEPT_SKIP_GRAPHIC";
   if (normalized === "reject") return "REJECT";
   if (normalized === "needs_correction") return "NEEDS_CORRECTION";
+  if (normalized === "return_to_review") return "RETURN_TO_REVIEW";
   return "";
 }
 
@@ -3638,11 +3640,13 @@ function buildPendingRecordFromSheetRow(row, index, canonicalBookAuthorMap = nul
   const rawVideoTitle = isVideoIntake ? (row[11] || "").toString() : "";
   const rawVideoExcerpt = isVideoIntake ? (row[12] || "").toString() : "";
   const rawVideoBookTitle = isVideoIntake ? cleanSheetWhitespace(row[13] || "") : "";
-  const excerptText = (row[config.excerpt - 1] || rawVideoExcerpt).toString();
+  const rawExcerptText = (row[config.excerpt - 1] || rawVideoExcerpt).toString();
+  const excerptText = (row[config.correctedExcerpt - 1] || rawExcerptText).toString();
   const cleanedExcerptText = cleanSheetWhitespace(excerptText);
   const excluded = isSheetYes(row[config.exclude - 1]);
   const reviewDecision = getSheetExcerptReviewDecision(row);
-  const bookTitle = cleanSheetWhitespace(row[config.bookTitle - 1]) || rawVideoBookTitle;
+  const rawBookTitle = cleanSheetWhitespace(row[config.bookTitle - 1]) || rawVideoBookTitle;
+  const bookTitle = cleanSheetWhitespace(row[config.correctedBookTitle - 1]) || rawBookTitle;
   const noteMeta = parseIntakeMetadataFromNotes(row[8] || "");
   const bookMeta = resolvePublishingBookMeta(bookTitle, bookTitle);
 
@@ -3655,8 +3659,16 @@ function buildPendingRecordFromSheetRow(row, index, canonicalBookAuthorMap = nul
     recordId: cleanSheetWhitespace(row[config.recordId - 1]) || `weaver:row-${SHEET_SOURCE_CONFIG.startRow + index}`,
     intakeMode: isVideoIntake ? "video" : "book",
     intakeLabel: cleanSheetWhitespace(row[2]),
-    author: resolveGraphicsAuthor(row[config.author - 1] || rawVideoAuthor, bookTitle, canonicalBookAuthorMap),
-    title: (row[config.title - 1] || rawVideoTitle).toString(),
+    author: resolveGraphicsAuthor(row[config.correctedAuthor - 1] || row[config.author - 1] || rawVideoAuthor, bookTitle, canonicalBookAuthorMap),
+    title: (row[config.correctedTitle - 1] || row[config.title - 1] || rawVideoTitle).toString(),
+    rawAuthor: resolveGraphicsAuthor(row[config.author - 1] || rawVideoAuthor, rawBookTitle, canonicalBookAuthorMap),
+    rawTitle: (row[config.title - 1] || rawVideoTitle).toString(),
+    rawBookTitle,
+    rawExcerptText,
+    correctedAuthor: (row[config.correctedAuthor - 1] || "").toString(),
+    correctedTitle: (row[config.correctedTitle - 1] || "").toString(),
+    correctedBookTitle: (row[config.correctedBookTitle - 1] || "").toString(),
+    correctedExcerpt: (row[config.correctedExcerpt - 1] || "").toString(),
     poemKey: cleanSheetWhitespace(row[config.poemKey - 1]),
     bookTitle,
     excerptText,
@@ -3688,14 +3700,14 @@ function buildApprovedExcerptExportRecordFromSheetRow(row, index, canonicalBookA
   const rawVideoTitle = isVideoIntake ? (row[11] || "").toString() : "";
   const rawVideoExcerpt = isVideoIntake ? (row[12] || "").toString() : "";
   const rawVideoBookTitle = isVideoIntake ? cleanSheetWhitespace(row[13] || "") : "";
-  const excerptText = (isVideoIntake ? rawVideoExcerpt : row[config.excerpt - 1] || "").toString();
+  const excerptText = (row[config.correctedExcerpt - 1] || (isVideoIntake ? rawVideoExcerpt : row[config.excerpt - 1]) || "").toString();
   const cleanedExcerptText = cleanSheetWhitespace(excerptText);
   const excluded = isSheetYes(row[config.exclude - 1]);
   const reviewDecision = getSheetExcerptReviewDecision(row);
   const explicitDecision = cleanSheetWhitespace(row[config.excerptReviewDecision - 1]).toUpperCase();
-  const bookTitle = isVideoIntake
+  const bookTitle = cleanSheetWhitespace(row[config.correctedBookTitle - 1]) || (isVideoIntake
     ? rawVideoBookTitle
-    : cleanSheetWhitespace(row[config.bookTitle - 1]);
+    : cleanSheetWhitespace(row[config.bookTitle - 1]));
   const approvedForUse = (row[config.approved - 1] || "").toString().trim().toUpperCase() === "Y";
   const approvedForExcerpt = isAcceptedExcerptReviewDecision(explicitDecision) || approvedForUse;
   const noteMeta = parseIntakeMetadataFromNotes(row[8] || "");
@@ -3710,11 +3722,11 @@ function buildApprovedExcerptExportRecordFromSheetRow(row, index, canonicalBookA
   const sourceRow = SHEET_SOURCE_CONFIG.startRow + index;
   const sourceRecordId = cleanSheetWhitespace(row[config.recordId - 1]) || `weaver:row-${sourceRow}`;
   const author = resolveGraphicsAuthor(
-    isVideoIntake ? rawVideoAuthor : row[config.author - 1] || "",
+    row[config.correctedAuthor - 1] || (isVideoIntake ? rawVideoAuthor : row[config.author - 1]) || "",
     bookTitle,
     canonicalBookAuthorMap
   );
-  const poemTitle = (isVideoIntake ? rawVideoTitle : row[config.title - 1] || "").toString();
+  const poemTitle = (row[config.correctedTitle - 1] || (isVideoIntake ? rawVideoTitle : row[config.title - 1]) || "").toString();
   const sourceEvent = cleanSheetWhitespace(row[17]) || noteMeta.sourceEvent || null;
   const curationRating = isVideoIntake ? (noteMeta.curationRating || null) : null;
   const curationLegacyScore = isVideoIntake ? noteMeta.curationLegacyScore : null;
@@ -4377,7 +4389,8 @@ function buildExcerptRuntimeRecord(payload = {}, { sourceRow = 0, createdAt = ""
     releaseCatalog: cleanSheetWhitespace(payload.releaseCatalog),
     bookShortener: cleanSheetWhitespace(payload.bookShortener),
     socialMediaHandle: cleanSheetWhitespace(payload.socialMediaHandle || payload.instagramHandle || payload.igHandle),
-    reviewDecision: normalizeReviewDecisionValue(payload.reviewDecision || payload.approval),
+    reviewDecision: normalizeReviewDecisionValue(payload.reviewDecision || payload.approval) === "RETURN_TO_REVIEW"
+      ? "" : normalizeReviewDecisionValue(payload.reviewDecision || payload.approval),
     approvedForUse: isAcceptedExcerptReviewDecision(payload.reviewDecision || payload.approval),
     approvedForQuoteImage: isTruthyParam(payload.useForQi || payload.graphicsQi),
     approvedForGraphics: isTruthyParam(payload.useForQi || payload.graphicsQi),
@@ -7716,7 +7729,7 @@ function buildReviewWriteRanges(update) {
     { column: SHEET_SOURCE_CONFIG.columnMap.approved, value: useForQi ? "Y" : "N" },
     { column: SHEET_SOURCE_CONFIG.columnMap.statusIndicator, value: needsCorrection ? "NEEDS_CORRECTION" : "" },
     { column: SHEET_SOURCE_CONFIG.columnMap.correctionNote, value: correctionNote },
-    { column: SHEET_SOURCE_CONFIG.columnMap.excerptReviewDecision, value: reviewDecision },
+    { column: SHEET_SOURCE_CONFIG.columnMap.excerptReviewDecision, value: reviewDecision === "RETURN_TO_REVIEW" ? "" : reviewDecision },
     { column: SHEET_SOURCE_CONFIG.columnMap.useForInt, value: useForInt ? "Y" : "" },
     { column: SHEET_SOURCE_CONFIG.columnMap.correctedAuthor, value: correctedAuthor },
     { column: SHEET_SOURCE_CONFIG.columnMap.correctedTitle, value: correctedTitle },
@@ -7744,17 +7757,20 @@ function buildReviewWriteRanges(update) {
 }
 
 async function saveReviewsToSheets(updates) {
-  const validUpdates = (Array.isArray(updates) ? updates : []).filter(update => buildReviewWriteRanges(update).length);
-  const requests = validUpdates.flatMap(buildReviewWriteRanges);
-  if (!requests.length) {
+  const validUpdates = Array.isArray(updates) ? updates : [];
+  if (!validUpdates.length) {
     return { ok: false, error: "No updates provided." };
   }
-
+  validateReviewBatchTargets(validUpdates);
   const enrichedUpdates = await Promise.all(validUpdates.map(enrichAcceptedExcerptUpdate));
+  const requests = enrichedUpdates.flatMap(buildReviewWriteRanges);
   const runtimeRecords = enrichedUpdates.map(update => buildExcerptRuntimeRecord(update, { sourceRow: update.sourceRow }));
   await batchUpdateSheetValuesServer(requests);
+  await verifySavedReviewUpdates(enrichedUpdates);
   const runtimeDb = await shadowExcerptRecordsToRuntime(runtimeRecords);
-  const excerptHandoffs = await syncAcceptedExcerptHandoffs(enrichedUpdates, {alreadyEnriched:true});
+  const excerptHandoffs = runtimeDb?.ok
+    ? await syncAcceptedExcerptHandoffs(enrichedUpdates, {alreadyEnriched:true})
+    : { ok: false, error: "Source-sheet decisions saved, but the source ledger did not synchronize. Delivery was not queued; reconcile the saved sources before retrying." };
   return {
     ok: true,
     version: `${appVersion}-service-account`,
@@ -7765,16 +7781,16 @@ async function saveReviewsToSheets(updates) {
 }
 
 async function saveSingleReviewToSheets(update) {
-  const requests = buildReviewWriteRanges(update);
-  if (!requests.length) {
-    return { ok: false, error: "Missing source row target." };
-  }
-
+  validateReviewBatchTargets([update]);
   const enrichedUpdate = await enrichAcceptedExcerptUpdate(update);
+  const requests = buildReviewWriteRanges(enrichedUpdate);
   const runtimeRecord = buildExcerptRuntimeRecord(enrichedUpdate, { sourceRow: enrichedUpdate.sourceRow });
   await batchUpdateSheetValuesServer(requests);
+  await verifySavedReviewUpdates([enrichedUpdate]);
   const runtimeDb = await shadowExcerptRecordsToRuntime([runtimeRecord]);
-  const excerptHandoffs = await syncAcceptedExcerptHandoffs([enrichedUpdate], {alreadyEnriched:true});
+  const excerptHandoffs = runtimeDb?.ok
+    ? await syncAcceptedExcerptHandoffs([enrichedUpdate], {alreadyEnriched:true})
+    : { ok: false, error: "Source-sheet decision saved, but the source ledger did not synchronize. Delivery was not queued; reconcile the saved source before retrying." };
   return {
     ok: true,
     version: `${appVersion}-service-account`,
@@ -7785,30 +7801,94 @@ async function saveSingleReviewToSheets(update) {
   };
 }
 
+async function verifySavedReviewUpdates(updates) {
+  await Promise.all(updates.map(async update => {
+    const values = await fetchSheetValuesServer(
+      `'${sourceSheetName.replace(/'/g, "''")}'!A${update.sourceRow}:BK${update.sourceRow}`
+    );
+    const row = values?.[0];
+    const identity = row && [24, 25, 26, 27, 28].map(index => String(row[index] || ""));
+    if (!row || JSON.stringify(identity) !== JSON.stringify(update.sourceIdentityBeforeSave)) {
+      throw new Error("The source identity changed during save. Some decisions may already be saved; delivery was not queued. Refresh and reconcile before submitting again.");
+    }
+    for (const write of buildReviewWriteRanges(update)) {
+      const letters = write.range.match(/!([A-Z]+)\d+$/)?.[1];
+      const column = Array.from(letters || "").reduce((n, letter) => n * 26 + letter.charCodeAt(0) - 64, 0);
+      if (!column || String(row[column - 1] ?? "") !== String(write.values[0][0] ?? "")) {
+        throw new Error("The saved review values could not be verified. Some decisions may already be saved; delivery was not queued. Refresh and reconcile before submitting again.");
+      }
+    }
+  }));
+}
+
+function validateReviewBatchTargets(updates) {
+  const rows = new Set(), ids = new Set();
+  for (const update of updates) {
+    const row = Number(update?.sourceRow);
+    const id = cleanSheetWhitespace(update?.recordId);
+    if (!Number.isSafeInteger(row) || row < SHEET_SOURCE_CONFIG.startRow
+        || !normalizeReviewDecisionValue(update?.reviewDecision || update?.approval)) {
+      throw new Error("Invalid review target or decision. Refresh the queue before submitting; no decisions were written.");
+    }
+    if (rows.has(row) || id && ids.has(id)) {
+      throw new Error("A review source occurs more than once in this batch; no decisions were written.");
+    }
+    rows.add(row);
+    if (id) ids.add(id);
+  }
+}
+
+function verifyReviewSourceIdentity(update, row, record) {
+  if (isTruthyParam(row[SHEET_SOURCE_CONFIG.columnMap.exclude - 1])) {
+    throw new Error("This source is excluded from review. Refresh the queue; no decisions were written.");
+  }
+  const expectedId = cleanSheetWhitespace(update.recordId);
+  const actualId = cleanSheetWhitespace(row[SHEET_SOURCE_CONFIG.columnMap.recordId - 1]);
+  if (actualId) {
+    if (!expectedId || expectedId !== actualId) {
+      throw new Error("The review row now belongs to a different source. Refresh the queue; no decisions were written.");
+    }
+  }
+  // Older rows have no durable ID. Their displayed source content must still
+  // match; a row number alone cannot identify the excerpt after a sheet sort.
+  const snapshot = update.expectedSource;
+  const currentDecision = normalizeReviewDecisionValue(getSheetExcerptReviewDecision(row));
+  if (normalizeReviewDecisionValue(update.reviewDecision || update.approval) === "RETURN_TO_REVIEW"
+      && currentDecision !== "NEEDS_CORRECTION") {
+    throw new Error("Only a current correction record can return to review. Refresh the queue; no decisions were written.");
+  }
+  if (snapshot && Object.prototype.hasOwnProperty.call(snapshot, "reviewDecision")
+      && currentDecision !== normalizeReviewDecisionValue(snapshot.reviewDecision)
+      && currentDecision !== normalizeReviewDecisionValue(update.reviewDecision || update.approval)) {
+    throw new Error("Another decision was saved for this source. Refresh the queue; no decisions were written.");
+  }
+  const normalized = value => String(value || "").replace(/\r\n/g, "\n").trim();
+  if (!actualId && (expectedId && expectedId !== `weaver:row-${update.sourceRow}` || !snapshot)
+      || snapshot && (!normalized(snapshot.excerptText)
+      || ["author", "title", "bookTitle", "excerptText"].some(key =>
+        !Object.prototype.hasOwnProperty.call(snapshot, key)
+        || normalized(snapshot[key]) !== normalized(record[key])))) {
+    throw new Error("The displayed review source changed or needs a fresh load. Refresh the queue; no decisions were written.");
+  }
+}
+
 async function enrichAcceptedExcerptUpdate(update) {
   const normalized = update && typeof update === "object" ? { ...update } : {};
   const sourceRow = parseInt(normalized?.sourceRow, 10);
   if (!sourceRow || sourceRow < SHEET_SOURCE_CONFIG.startRow) {
     return normalized;
   }
-  if (
-    cleanSheetWhitespace(normalized.excerptText) &&
-    cleanSheetWhitespace(normalized.bookTitle) &&
-    cleanSheetWhitespace(normalized.bookShortener) &&
-    cleanSheetWhitespace(normalized.releaseCatalog)
-  ) {
-    return normalized;
-  }
-
   const range = `'${sourceSheetName.replace(/'/g, "''")}'!A${sourceRow}:BK${sourceRow}`;
   const values = await fetchSheetValuesServer(range);
   const row = Array.isArray(values) ? values[0] : null;
   if (!row) {
-    return normalized;
+    throw new Error("The review source is no longer available. Refresh the queue; no decisions were written.");
   }
   const noteMeta = parseIntakeMetadataFromNotes(row[8] || "");
   const canonicalBookAuthorMap = await getCanonicalGraphicsBookAuthorMap().catch(() => new Map());
-  const record = buildPendingRecordFromSheetRow(row, sourceRow - SHEET_SOURCE_CONFIG.startRow, canonicalBookAuthorMap) || {
+  const index = sourceRow - SHEET_SOURCE_CONFIG.startRow;
+  const record = buildPendingRecordFromSheetRow(row, index, canonicalBookAuthorMap)
+    || buildCorrectionRecordFromSheetRow(row, index, canonicalBookAuthorMap) || {
     sourceRow,
     recordId: (row[SHEET_SOURCE_CONFIG.columnMap.recordId - 1] || "").toString(),
     author: resolveGraphicsAuthor(row[SHEET_SOURCE_CONFIG.columnMap.author - 1] || "", cleanSheetWhitespace(row[SHEET_SOURCE_CONFIG.columnMap.bookTitle - 1] || ""), canonicalBookAuthorMap),
@@ -7817,12 +7897,23 @@ async function enrichAcceptedExcerptUpdate(update) {
     excerptText: (row[SHEET_SOURCE_CONFIG.columnMap.excerpt - 1] || "").toString()
   };
 
+  verifyReviewSourceIdentity(normalized, row, record);
+  // Used only for the immediate readback, never stored in the source payload.
+  Object.defineProperty(normalized, "sourceIdentityBeforeSave", {
+    value: [24, 25, 26, 27, 28].map(index => String(row[index] || "")), enumerable: false
+  });
+  if (["ACCEPT_SKIP_GRAPHIC", "RETURN_TO_REVIEW"].includes(normalizeReviewDecisionValue(normalized.reviewDecision || normalized.approval))) {
+    normalized.useForQi = normalized.graphicsQi = false;
+    normalized.useForInt = normalized.photos = false;
+  }
+
   normalized.recordId = cleanSheetWhitespace(normalized.recordId) || record.recordId || "";
-  normalized.author = cleanSheetWhitespace(normalized.author) || record.author || "";
-  normalized.title = cleanSheetWhitespace(normalized.title) || record.title || "";
-  normalized.poemTitle = cleanSheetWhitespace(normalized.poemTitle) || record.title || "";
-  normalized.bookTitle = cleanSheetWhitespace(normalized.bookTitle) || record.bookTitle || "";
-  normalized.excerptText = normalized.excerptText || record.excerptText || "";
+  normalized.author = record.author || "";
+  normalized.title = record.title || "";
+  normalized.poemTitle = record.title || "";
+  normalized.bookTitle = record.bookTitle || "";
+  normalized.excerptText = record.excerptText || "";
+  normalized.poemKey = cleanSheetWhitespace(row[SHEET_SOURCE_CONFIG.columnMap.poemKey - 1]);
   normalized.contentType = normalizeExcerptContentType(normalized.contentType || noteMeta.contentType || record.contentType || "EXC");
   const bookMeta = resolvePublishingBookMeta(normalized.bookTitle, normalized.bookTitle);
   normalized.bookShortener = cleanSheetWhitespace(normalized.bookShortener) || noteMeta.bookShortener || cleanSheetWhitespace(record.bookShortener) || cleanSheetWhitespace(bookMeta?.bookShortener);

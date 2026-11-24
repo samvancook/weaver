@@ -86,3 +86,63 @@ Book-intake acceptance: `node scripts/check-book-intake-release.mjs --season`
 checks the configured season together, reports all missing books, and verifies
 distinct keyed choices plus one readable keyed preview per available book.
 It makes no submissions and never treats publishing metadata as readable text.
+
+## Save and delivery recovery
+
+A review save validates the entire batch's targets before writing. Stable source
+IDs must match their current rows; the current UI also supplies the displayed
+content and decision. Legacy row-only sources require that content snapshot.
+Caption-only saves disable QI and INT on the server. After the sheet write, the
+server reads back source identity and all requested values before updating the
+ledger or queuing delivery. A failed ledger sync is reported separately from a
+saved sheet decision and cannot queue downstream delivery.
+
+Sheets values writes do not provide a compare-and-swap transaction. The checks
+catch observed row movement and mismatched readback; they do not guarantee that
+an independent sheet reorder cannot race the write. An uncertain result remains
+unresolved. Do not claim that the wrong-row race is mathematically eliminated.
+
+For an uncertain save, first read the exact source ID, current source row,
+decision, graphic flags, corrections and source ledger. Check the delivery
+ledger separately. Do not infer receipt from a disappearing queue row or repeat
+a whole batch because a response was lost. Reconcile only the failed stage,
+retaining canonical IDs and any existing attempt/receipt. A received or
+acknowledged delivery is not eligible for an automatic resend.
+
+In Needs correction, Return to review saves the explicit overrides and clears
+correction/approval state. It does not approve the excerpt or queue graphics or
+PP delivery. It is accepted only for a source currently in correction. Pending
+and approved reads use the saved overrides while retaining original source
+cells. Normal review's No decision continues to leave a record unchanged.
+
+Sign-in becomes available after bootstrap loads its settings. Expired or failed
+sign-in does not refresh queues, erase draft inputs or replay a mutation. Sign
+in again, inspect the exact saved state if the earlier outcome was uncertain,
+and submit only the changes that remain necessary.
+
+## Recovery during a release
+
+Keep the serving revision, immutable image, operational aliases and protected
+record snapshot from immediately before the release. Before promotion, a
+failed build or canary leaves main on that verified base. Remove only the
+release's temporary job/tag when appropriate; preserve operational aliases.
+Once no build remains active and the exact original base/aliases still serve,
+`abort --receipt PATH` can close the owned claim. Never delete a stale claim to
+make another release proceed.
+
+If verification fails after promotion, keep the release claim held and inspect
+the actual source/image/traffic and record differences. Do not use `finish`
+with fabricated successful checks. The pre-promotion `check` intentionally
+rejects changed main traffic; it is not an automatic rollback command. An
+operator must reconcile the owned claim and current resource version before
+restoring its captured, verified base revision and matching operational aliases
+through the existing Cloud Run route. Verify the restored main/aliases and
+protected records, confirm no build remains active, and then abort the claim
+only if its exact original base has been restored. Otherwise leave it held for
+explicit reconciliation. Never roll back approval or receiver data along with
+application traffic.
+
+After a claim has already finished, prepare a normal tested revert commit on
+current main and release it through a new claim. Do not mislabel an older image
+as having the current source manifest. Release rollback does not authorize
+resending content, clearing holds or deleting receiver history.

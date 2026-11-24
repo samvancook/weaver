@@ -621,23 +621,33 @@ function buildPendingRecordFromSheetRow(row, index) {
   const rawVideoTitle = isVideoIntake ? (row[11] || "").toString() : "";
   const rawVideoExcerpt = isVideoIntake ? (row[12] || "").toString() : "";
   const rawVideoBookTitle = isVideoIntake ? cleanSheetWhitespace(row[13] || "") : "";
-  const excerptText = (row[config.excerpt - 1] || rawVideoExcerpt).toString();
+  const rawExcerptText = (row[config.excerpt - 1] || rawVideoExcerpt).toString();
+  const excerptText = (row[config.correctedExcerpt - 1] || rawExcerptText).toString();
   const cleanedExcerptText = cleanSheetWhitespace(excerptText);
   const excluded = isSheetYes(row[config.exclude - 1]);
   const reviewDecision = getSheetExcerptReviewDecision(row);
-  const bookTitle = cleanSheetWhitespace(row[config.bookTitle - 1]) || rawVideoBookTitle;
+  const rawBookTitle = cleanSheetWhitespace(row[config.bookTitle - 1]) || rawVideoBookTitle;
+  const bookTitle = cleanSheetWhitespace(row[config.correctedBookTitle - 1]) || rawBookTitle;
 
-  if (!bookTitle || !cleanedExcerptText || excluded || !isPendingSheetReview(reviewDecision)) {
+  if ((!bookTitle && !isVideoIntake) || !cleanedExcerptText || excluded || !isPendingSheetReview(reviewDecision)) {
     return null;
   }
 
   return {
     sourceRow: SHEET_SOURCE_CONFIG.startRow + index,
-    recordId: (row[config.recordId - 1] || "").toString(),
+    recordId: cleanSheetWhitespace(row[config.recordId - 1]) || `weaver:row-${SHEET_SOURCE_CONFIG.startRow + index}`,
     intakeMode: isVideoIntake ? "video" : "book",
     intakeLabel: cleanSheetWhitespace(row[2]),
-    author: (row[config.author - 1] || rawVideoAuthor).toString(),
-    title: (row[config.title - 1] || rawVideoTitle).toString(),
+    author: (row[config.correctedAuthor - 1] || row[config.author - 1] || rawVideoAuthor).toString(),
+    title: (row[config.correctedTitle - 1] || row[config.title - 1] || rawVideoTitle).toString(),
+    rawAuthor: (row[config.author - 1] || rawVideoAuthor).toString(),
+    rawTitle: (row[config.title - 1] || rawVideoTitle).toString(),
+    rawBookTitle,
+    rawExcerptText,
+    correctedAuthor: (row[config.correctedAuthor - 1] || "").toString(),
+    correctedTitle: (row[config.correctedTitle - 1] || "").toString(),
+    correctedBookTitle: (row[config.correctedBookTitle - 1] || "").toString(),
+    correctedExcerpt: (row[config.correctedExcerpt - 1] || "").toString(),
     bookTitle,
     excerptText,
     wordCount: countWordsFromText(excerptText),
@@ -1353,6 +1363,8 @@ function applyPendingBookData(records, { preserveSelection = false } = {}) {
 }
 
 async function loadRuntimeConfig() {
+  if (elements.adminSignIn) elements.adminSignIn.disabled = true;
+  if (elements.adminAuthStatus) elements.adminAuthStatus.textContent = "Loading sign-in settings…";
   try {
     const response = await fetch("/api/bootstrap", {
       headers: {
@@ -1370,6 +1382,10 @@ async function loadRuntimeConfig() {
     window.WEAVER_CONFIG = runtimeConfig;
   } catch (error) {
     setStatus(`Bootstrap config load failed: ${error.message}`);
+  } finally {
+    setAdminAuthUi(runtimeConfig.googleOAuthClientId
+      ? "Sign in to save decisions and manage videos."
+      : "Sign-in settings are unavailable. Reload Weaver to try again.");
   }
 }
 
@@ -3957,6 +3973,7 @@ function buildReviewSavePayload(update) {
   return {
     sourceRow: update.sourceRow,
     recordId: update.recordId,
+    expectedSource: update.expectedSource,
     author: update.author,
     bookTitle: update.bookTitle,
     poemTitle: update.title,
@@ -3989,6 +4006,7 @@ function buildBatchReviewSavePayload(update) {
   const payload = {
     sourceRow: update.sourceRow,
     recordId: update.recordId,
+    expectedSource: update.expectedSource,
     author: update.author,
     bookTitle: update.bookTitle,
     poemTitle: update.title,
@@ -4032,6 +4050,9 @@ async function requestBatchSave(updates) {
 
   if (!response.ok || !data.ok) {
     throw new Error(data.error || "Batch save failed.");
+  }
+  if (data.savedCount !== updates.length) {
+    throw new Error("The server did not confirm every requested record. Some decisions may be saved; refresh and reconcile before submitting again.");
   }
 
   return data;
@@ -6211,6 +6232,11 @@ function buildExcerptCard(excerpt, uniqueKey) {
   card.className = "excerpt-card";
   card.dataset.sourceRow = excerpt.sourceRow;
   card.dataset.recordId = excerpt.recordId || "";
+  card.dataset.reviewSource = JSON.stringify({
+    author: excerpt.author || "", title: excerpt.title || "",
+    bookTitle: excerpt.bookTitle || "", excerptText: excerpt.excerptText || "",
+    reviewDecision: excerpt.excerptReviewDecision || ""
+  });
   card.dataset.queueDuplicateRows = JSON.stringify(excerpt.queueDuplicateRows || []);
 
   const validation =
@@ -6294,7 +6320,7 @@ function buildExcerptCard(excerpt, uniqueKey) {
       <label><input type="radio" name="approval-${uniqueKey}" value="accept_skip_graphic" ${currentDecision === "accept_skip_graphic" ? "checked" : ""}> Accept excerpt, skip graphic</label>
       <label><input type="radio" name="approval-${uniqueKey}" value="reject" ${currentDecision === "reject" ? "checked" : ""}> Reject</label>
       <label><input type="radio" name="approval-${uniqueKey}" value="needs_correction" ${currentDecision === "needs_correction" ? "checked" : ""}> Needs correction</label>
-      <label><input type="radio" name="approval-${uniqueKey}" value="" ${currentDecision === "" ? "checked" : ""}> No decision</label>
+      <label><input type="radio" name="approval-${uniqueKey}" value="" ${currentDecision === "" ? "checked" : ""}> ${currentModule === "corrections" ? "Return to review" : "No decision"}</label>
     </div>
     <div class="correction-block ${currentDecision === "needs_correction" ? "correction-block--active" : ""}">
       <details class="correction-source">
@@ -7048,7 +7074,9 @@ function collectUpdates() {
 }
 
 function collectCorrectionUpdates() {
-  return collectUpdatesFromContainer(elements.correctionList);
+  return collectUpdatesFromContainer(elements.correctionList).map(update => update.reviewDecision
+    ? update
+    : { ...update, reviewDecision: "return_to_review", useForQi: false, useForInt: false });
 }
 
 function getAutoCorrectionProposal(excerpt) {
@@ -7176,6 +7204,7 @@ function collectUpdatesFromContainer(container) {
     const update = {
       sourceRow,
       recordId: card.dataset.recordId || "",
+      expectedSource: JSON.parse(card.dataset.reviewSource || "null"),
       reviewDecision,
       correctionNote: card.querySelector(".correction-note")?.value || "",
       correctedAuthor: card.querySelector(".corrected-author")?.value || "",
