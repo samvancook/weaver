@@ -81,6 +81,17 @@ test('review updates retain the current source intake lane and collector rather 
   assert.equal(saved.email,'collector@buttonpoetry.com');assert.equal(saved.submittedBy,'collector@buttonpoetry.com');
 });
 
+test('review enrichment reads through the actual poem-key column before saving source metadata',async()=>{
+  const h=harness();h.rows.get(2)[64]='KEY-1';
+  const fetchRows=h.context.fetchSheetValuesServer;
+  h.context.fetchSheetValuesServer=async range=>{
+    const rows=await fetchRows(range);
+    return range.endsWith(':BK2')?rows.map(row=>row.slice(0,63)):rows;
+  };
+  await h.context.saveReviewsToSheets([update()]);
+  assert.equal(h.calls.find(c=>c[0]==='ledger')[1][0].poemKey,'KEY-1');
+});
+
 test('a same-ID content change rejects the loaded decision rather than approving unseen text',async()=>{
   const h=harness();const expectedSource={author:'Poet',title:'Poem',bookTitle:'Book',excerptText:'Old displayed text'};
   await assert.rejects(h.context.saveReviewsToSheets([{...update(),expectedSource}]),/displayed review source changed/);
