@@ -146,3 +146,12 @@ After a claim has already finished, prepare a normal tested revert commit on
 current main and release it through a new claim. Do not mislabel an older image
 as having the current source manifest. Release rollback does not authorize
 resending content, clearing holds or deleting receiver history.
+
+The November 24 event-task acceptance test found repeated HTTP503s caused by
+Cloud Run terminating the 512 MiB instance at 516–524 MiB used. The maintained
+release profile is now 1 GiB memory and container concurrency 2, retaining the
+existing CPU, service identity and autoscaling limits. Immutable-image releases
+must set and verify these same values on the no-traffic canary and serving
+revision. This is measured headroom plus bounded per-instance request load,
+not proof against every future memory leak. Include concurrent read acceptance
+and inspect actual container errors before calling this symptom resolved.
