@@ -7989,7 +7989,7 @@ async function enrichAcceptedExcerptUpdate(update) {
   if (!sourceRow || sourceRow < SHEET_SOURCE_CONFIG.startRow) {
     return normalized;
   }
-  const range = `'${sourceSheetName.replace(/'/g, "''")}'!A${sourceRow}:BK${sourceRow}`;
+  const range = `'${sourceSheetName.replace(/'/g, "''")}'!A${sourceRow}:BM${sourceRow}`;
   const values = await fetchSheetValuesServer(range);
   const row = Array.isArray(values) ? values[0] : null;
   if (!row) {

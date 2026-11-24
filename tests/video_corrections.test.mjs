@@ -5,7 +5,7 @@ import vm from 'node:vm';
 const server=fs.readFileSync(new URL('../server.mjs',import.meta.url),'utf8');
 const app=fs.readFileSync(new URL('../public/app.js',import.meta.url),'utf8');
 const config=vm.runInNewContext('('+server.match(/const SHEET_SOURCE_CONFIG = (\{[\s\S]*?^\});/m)[1]+')');
-config.sourceRange='A2:BM';
+const browserConfig=vm.runInNewContext('('+app.match(/const SHEET_SOURCE_CONFIG = (\{[\s\S]*?^\});/m)[1]+')');
 function fn(source,name){const m=source.match(new RegExp(`^(?:async )?function ${name}\\([\\s\\S]*?^}\\n`,'m'));assert.ok(m,name);return m[0];}
 function row(id,{video=true,event='Event / A & friends',book='',excluded=false,decision='NEEDS_CORRECTION'}={}){
   const r=Array(65).fill('');r[2]=video?'Add a quote from a video':'Add a quote from a book';
@@ -15,7 +15,7 @@ function row(id,{video=true,event='Event / A & friends',book='',excluded=false,d
   return r;
 }
 function harness(browser,rows){
-  const ranges=[];const c={SHEET_SOURCE_CONFIG:config,REVIEW_VIDEO_EVENT_KEY:'__video_event__:',
+  const ranges=[];const c={SHEET_SOURCE_CONFIG:browser?browserConfig:config,REVIEW_VIDEO_EVENT_KEY:'__video_event__:',
     sourceSheetName:'Source',appVersion:'test',runtimeConfig:{sourceSheetName:'Source',appVersion:'test'},
     cleanSheetWhitespace:v=>String(v||'').trim().replace(/\s+/g,' '),normalizeBookKey:v=>String(v||'').trim().toLowerCase(),
     choosePreferredBookTitle:(a,b)=>a||b,resolveGraphicsAuthor:v=>v,isSheetYes:v=>v==='Y',parseSheetInteger:v=>Number(v)||0,

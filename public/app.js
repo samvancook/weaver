@@ -243,7 +243,7 @@ const INTAKE_MODE_LABELS = {
 };
 const SHEET_SOURCE_CONFIG = {
   startRow: 2,
-  sourceRange: "A2:BK",
+  sourceRange: "A2:BM",
   columnMap: {
     recordId: 25,
     author: 26,
@@ -271,7 +271,8 @@ const SHEET_SOURCE_CONFIG = {
     correctedTitle: 58,
     correctedBookTitle: 59,
     correctedExcerpt: 60,
-    validationPrimarySourceFormat: 61
+    validationPrimarySourceFormat: 61,
+    poemKey: 65
   }
 };
 const GRAPHICS_SHEET_CONFIG = {
