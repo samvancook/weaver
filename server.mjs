@@ -2462,6 +2462,89 @@ async function getPriorityVideoSetAvailability(reviewerEmail = "") {
   })};
 }
 
+function summarizeVideoEventWork(library, excerptProgress, pending, baseUrl, checkedAt) {
+  if (!library?.ok || !Array.isArray(library.sets) || !Array.isArray(library.items)
+      || !excerptProgress?.ok || !Array.isArray(excerptProgress.videos)
+      || !pending?.ok || !Array.isArray(pending.records)) {
+    throw new Error("Current video work sources are unavailable; counts are not verified.");
+  }
+  const base = new URL(baseUrl).origin;
+  const progress = new Map(excerptProgress.videos.map(row => [row.sourceVideoFileId, row]));
+  const groups = library.items.map(item => ({item, aliases:new Set([
+    item.sourceFileId, ...(item.versionSourceFileIds || []),
+    ...(videoFamilyForFile(item.sourceFileId,item.prioritySetId)?.fileIds || [])
+  ].filter(Boolean)), pending:[]}));
+  const owners = new Map();
+  for (const group of groups) for (const id of group.aliases) {
+    const matches=owners.get(id)||[];matches.push(group);owners.set(id,matches);
+  }
+  let unassignedPendingExcerptCount=0;
+  const seen = new Set();
+  for (const row of pending.records.filter(row=>row.intakeMode==='video')) {
+    const key=row.recordId||`row:${row.sourceRow}`;
+    if(seen.has(key))continue;seen.add(key);
+    const id=row.sourceVideoFileId||extractGoogleDriveFileId(row.sourceVideoUrl);
+    const matches=owners.get(id)||[];
+    if(matches.length!==1){unassignedPendingExcerptCount++;continue;}
+    matches[0].pending.push(row);
+  }
+  const approvalUrl = ids => {
+    const url=new URL('/',base);url.searchParams.set('task','approve-video-excerpts');
+    url.searchParams.set('videoFiles',[...new Set(ids)].sort().join(','));return url.href;
+  };
+  const tasks=[];
+  const events=library.sets.map(set=>{
+    const items=groups.filter(group=>group.item.prioritySetId===set.id);
+    const curation=items.filter(group=>group.item.needsPriorityReview===true);
+    const withoutReviews=curation.filter(group=>Number(group.item.reviewProgress?.reviewerCount||0)<VIDEO_AUTO_POLICY.minReviewers);
+    const missingExcerpts=curation.filter(group=>!Number(group.item.reviewProgress?.excerptCount));
+    const hasApproval=group=>[...group.aliases].some(id=>Number(progress.get(id)?.approvedCount)>0);
+    const required=items.filter(group=>group.pending.length&&!hasApproval(group));
+    const optional=items.filter(group=>group.pending.length&&hasApproval(group));
+    const sourceFiles=required.flatMap(group=>group.pending.map(row=>row.sourceVideoFileId||extractGoogleDriveFileId(row.sourceVideoUrl)));
+    const reviewUrl=new URL('/',base);reviewUrl.searchParams.set('videoSet',set.id);
+    const approvalLinks=[];
+    const uniqueFiles=[...new Set(sourceFiles)].sort();
+    for(let i=0;i<uniqueFiles.length;i+=50)approvalLinks.push(approvalUrl(uniqueFiles.slice(i,i+50)));
+    const event={eventId:set.id,eventName:set.label,videoCount:items.length,
+      collectedExcerptCount:items.reduce((n,g)=>n+Number(g.item.reviewProgress?.excerptCount||0),0),
+      videosNeedingCuration:curation.length,videosNeedingReviews:withoutReviews.length,
+      reviewSlotsNeeded:withoutReviews.reduce((n,g)=>n+Math.max(0,VIDEO_AUTO_POLICY.minReviewers-Number(g.item.reviewProgress?.reviewerCount||0)),0),
+      videosMissingExcerpts:missingExcerpts.length,videosWithApprovedExcerpts:items.filter(hasApproval).length,
+      pendingExcerptCount:items.reduce((n,g)=>n+g.pending.length,0),
+      videosNeedingExcerptApproval:required.length,
+      requiredApprovalCandidateCount:required.reduce((n,g)=>n+g.pending.length,0),
+      additionalPendingExcerptCount:optional.reduce((n,g)=>n+g.pending.length,0),
+      publicationRestrictedVideoCount:items.filter(g=>g.item.publicationRestricted).length,
+      pipelineStages:items.reduce((counts,g)=>{
+        const stage=g.item.pipeline?.stage||'not_in_release_pipeline';counts[stage]=(counts[stage]||0)+1;return counts;
+      },{}),
+      curationComplete:items.length>0&&set.curationComplete===true,curationUrl:reviewUrl.href,excerptApprovalUrls:approvalLinks};
+    if(curation.length)tasks.push({taskId:set.id+':curation',eventId:set.id,eventName:set.label,
+      kind:'video_curation',videoCount:curation.length,reviewSlotsNeeded:event.reviewSlotsNeeded,
+      videosMissingExcerpts:missingExcerpts.length,workUrls:[reviewUrl.href]});
+    if(required.length)tasks.push({taskId:set.id+':excerpt-approval',eventId:set.id,eventName:set.label,
+      kind:'excerpt_approval',videoCount:required.length,candidateExcerptCount:event.requiredApprovalCandidateCount,
+      workUrls:approvalLinks});
+    return event;
+  });
+  tasks.sort((a,b)=>b.videoCount-a.videoCount||a.taskId.localeCompare(b.taskId));
+  return {ok:true,schemaVersion:'1',checkedAt,readOnly:true,policy:VIDEO_AUTO_POLICY,
+    countSemantics:{videos:'Included performance groups, not physical format variants',
+      collectedExcerpts:'Saved source excerpt IDs attached to current grouped reviews',
+      pendingExcerpts:'Exact pending source records in the release-eligible review queue',
+      requiredApprovals:'At least one approved excerpt is still needed; additional candidates on covered videos are optional'},
+    events,tasks,largestTask:tasks[0]||null,unassignedPendingExcerptCount,
+    notice:'Links grant no write permission. Existing save controls and release/publication gates still apply.'};
+}
+
+async function getVideoEventWork() {
+  const [library,progress,pending]=await Promise.all([
+    loadVideoReviewLibrary(),getVideoExcerptApprovalProgressFromSheets(),getPendingRecordsFromSheets()
+  ]);
+  return {...summarizeVideoEventWork(library,progress,pending,'https://weaver.buttonpoetry.com',new Date().toISOString()),revision:appVersion};
+}
+
 async function loadPriorityVideoProgress() {
   const sets = Array.from(PRIORITY_VIDEO_SETS.values());
   const [reviewResult, fileResults] = await Promise.all([
@@ -9188,6 +9271,12 @@ const server = http.createServer(async (req, res) => {
     } catch (error) {
       return sendJson(res, 500, { ok: false, error: error.message });
     }
+  }
+
+  if (url.pathname === "/api/intake/video-work" && req.method === "GET") {
+    res.setHeader('Cache-Control','no-store');
+    try { return sendJson(res,200,await getVideoEventWork()); }
+    catch(error){return sendJson(res,503,{ok:false,error:error.message});}
   }
 
   if (url.pathname === "/api/intake/video-library" && req.method === "GET") {

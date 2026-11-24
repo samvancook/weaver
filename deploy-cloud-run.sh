@@ -14,6 +14,8 @@ gcloud run deploy "${SERVICE}" \
   --source . \
   --no-traffic \
   --revision-suffix "${RELEASE_SUFFIX}" \
+  --memory 1Gi \
+  --concurrency 2 \
   --region "${REGION}" \
   --project "${PROJECT_ID}" \
   --account "${DEPLOY_ACCOUNT}"
