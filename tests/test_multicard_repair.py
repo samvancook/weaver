@@ -66,7 +66,8 @@ class MultiCardRepairTest(unittest.TestCase):
             "assetUrl": self.assets[0]["assetUrl"], "assetFileId": self.assets[0]["assetFileId"],
             "pigProjectId": "whole-project", "editableProjectFileId": "whole-project-json",
         }
-        with patch("weaver_runtime_sync.upsert_graphics_request"), \
+        with patch("weaver_runtime_sync.get_graphics_handoff", return_value=None), \
+             patch("weaver_runtime_sync.upsert_graphics_request"), \
              patch("weaver_runtime_sync.replace_graphics_request_items"), \
              patch("weaver_runtime_sync.insert_graphics_completion"), \
              patch("weaver_runtime_sync.upsert_graphics_handoff_request", return_value={}), \
