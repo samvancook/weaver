@@ -4496,12 +4496,12 @@ function buildExcerptRuntimeRecord(payload = {}, { sourceRow = 0, createdAt = ""
   };
 }
 
-async function shadowExcerptRecordsToRuntime(records) {
+async function shadowExcerptRecordsToRuntime(records, { intakeOnly = false } = {}) {
   if (excerptStorageMode === "sheet" || !records.length) {
     return { ok: true, skipped: true, count: 0 };
   }
   try {
-    return await syncWeaverRuntimeDb("upsert_excerpt_records", { records });
+    return await syncWeaverRuntimeDb("upsert_excerpt_records", { records, intakeOnly });
   } catch (error) {
     if (excerptStorageMode === "firestore") {
       throw error;
@@ -4519,7 +4519,7 @@ async function appendExcerptGatheringRow(payload = {}) {
     if (existingRow) {
       const runtimeDb = await shadowExcerptRecordsToRuntime([
         buildExcerptRuntimeRecord({ ...payload, recordId: sourceRecordId }, { sourceRow: existingRow })
-      ]);
+      ], { intakeOnly: true });
       return { ok: true, version: `${appVersion}-service-account`, rowNumber: existingRow,
         recordId: sourceRecordId, intakeMode: mode, alreadySaved: true, runtimeDb };
     }
@@ -4590,7 +4590,7 @@ async function appendExcerptGatheringRow(payload = {}) {
       if (existingRow) {
         const runtimeDb = await shadowExcerptRecordsToRuntime([
           buildExcerptRuntimeRecord(normalizedPayload, { sourceRow: existingRow })
-        ]);
+        ], { intakeOnly: true });
         return { ok: true, version: `${appVersion}-service-account`, rowNumber: existingRow,
           recordId: sourceRecordId, intakeMode: mode, alreadySaved: true, runtimeDb };
       }
@@ -4672,7 +4672,7 @@ async function appendExcerptGatheringRow(payload = {}) {
 
   const runtimeDb = await shadowExcerptRecordsToRuntime([
     buildExcerptRuntimeRecord(normalizedPayload, { sourceRow: rowNumber })
-  ]);
+  ], { intakeOnly: mode === "book" });
 
   return {
     ok: true,
