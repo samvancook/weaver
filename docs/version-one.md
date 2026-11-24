@@ -45,3 +45,26 @@ implicit peer rejection and verify caption-only graphic flags. Local regression
 coverage is implementation evidence; deployed save and receiver readback remain
 separate acceptance steps. Update the shared current-state register with actual
 release and acceptance receipts rather than marking this checklist from a plan.
+
+## Current acceptance boundaries
+
+PR113's deployed exact-source save was exercised through the normal signed-in
+UI. Three existing authorized caption-only approvals were read back from the
+source ledger; their duplicate peer remained pending. The ordinary worker
+acknowledged each once. Exact receiver receipt verification is still open with
+the PP owner, so this is not end-to-end delivery acceptance.
+
+The next repair covers stale-target validation, written-value readback,
+caption-only server enforcement, separate ledger-failure reporting, correction
+return/override reads and sign-in startup. Its focused regression tests exercise
+successful and failed source writes, current exclusions, conflicting decisions,
+legacy IDs and a correction returning to review without approval or delivery.
+A test result is not a production acceptance receipt. Keep the exact release
+and live workflow evidence in the shared current-state register.
+
+Four current pending sources used legacy row-based IDs in the November 24
+read-only audit. The guarded save supports them with an exact loaded-content
+snapshot; no mass ID or poem-key rewrite is part of this release. Spring 2027
+BBFR/WG keyed choices and previews pass. The other three season books remain
+metadata-only upstream dependencies with Catalog ownership. Do not relabel
+those manuscripts missing or reopen their completed source searches.

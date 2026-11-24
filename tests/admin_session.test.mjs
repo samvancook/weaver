@@ -145,3 +145,17 @@ test('the explicit sign-in button never reloads queues or submits a decision', a
   await click(); assert.equal(signs, 1);
   assert.doesNotMatch(handler, /loadVideoCurationCandidates\(|loadPriorityVideoProgress\(|adminFetch\(/);
 });
+
+test('sign-in waits for bootstrap instead of reporting missing configuration during normal startup',async()=>{
+  const bootstrap = app.match(/^async function loadRuntimeConfig\([\s\S]*?^}\n/m)[0];
+  let finish;const elements={adminSignIn:{},adminAuthStatus:{}};
+  const context={elements,runtimeConfig:{},window:{},setStatus:()=>{},
+    fetch:()=>new Promise(resolve=>{finish=resolve;}),
+    setAdminAuthUi:message=>{elements.adminSignIn.disabled=false;elements.adminAuthStatus.textContent=message;}};
+  const {loadRuntimeConfig}=runInNewContext(bootstrap+'\n({loadRuntimeConfig})',context);
+  const pending=loadRuntimeConfig();assert.equal(elements.adminSignIn.disabled,true);
+  assert.match(elements.adminAuthStatus.textContent,/Loading sign-in settings/);
+  finish({ok:true,json:async()=>({googleOAuthClientId:'existing-client'})});await pending;
+  assert.equal(elements.adminSignIn.disabled,false);assert.match(elements.adminAuthStatus.textContent,/Sign in to save/);
+  assert.match(readFileSync(new URL('../public/index.html',import.meta.url),'utf8'),/id="admin-sign-in"[^>]*disabled/);
+});
